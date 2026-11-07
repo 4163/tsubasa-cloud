@@ -180,13 +180,13 @@ flowchart TD
 - [x] Account for manifest and database snapshot files in quota metrics.
 
 ### Phase 4: Transfer pipelines and external changes detector
-- [ ] Build resumable streaming upload endpoint (`POST /api/files/upload`) with 14.25 GB client-side rejection.
-- [ ] Build authenticated streaming download proxy (`GET /api/files/:id/download`).
-- [ ] Implement soft-trashing (`POST /api/files/:id/trash`).
-- [ ] Implement restore and permanent purge (`DELETE /api/trash/empty`).
-- [ ] Implement external modification detector comparing `changes.list` against SQLite index.
-- [ ] Implement over-ceiling resolution handlers: "Accept into Tsubasa" and "Move to root".
-- [ ] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
+- [x] Build resumable streaming upload endpoint (`POST /api/files/upload`) with 14.25 GB client-side rejection.
+- [x] Build authenticated streaming download proxy (`GET /api/files/:id/download`).
+- [x] Implement soft-trashing (`POST /api/files/:id/trash`).
+- [x] Implement restore and permanent purge (`DELETE /api/trash/empty`).
+- [x] Implement external modification detector comparing `changes.list` against SQLite index.
+- [x] Implement over-ceiling resolution handlers: "Accept into Tsubasa" and "Move to root".
+- [x] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
 
 ### Phase 5: UI evaluation and consolidated React + StyleX UI
 - [ ] **Phase 5.1: REA-driven design teardown**

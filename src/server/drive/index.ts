@@ -8,6 +8,9 @@ export * from './client.js';
 export * from './sync.js';
 export * from './delta.js';
 export * from './mirror.js';
+export * from './transfer.js';
+export * from './detector.js';
+export * from './rebalance.js';
 
 export async function syncAllAccounts(): Promise<{
   hydrated: string[];

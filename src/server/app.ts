@@ -11,6 +11,18 @@ import {
   runColdReconciliation,
   runIncrementalSync,
   syncAllAccounts,
+  initiateResumableUpload,
+  executeStreamingUpload,
+  getStreamingDownload,
+  trashFile,
+  restoreFile,
+  purgeFile,
+  emptyTrash,
+  scanAccountDiscrepancies,
+  acceptExternalFile,
+  ejectFileToDriveRoot,
+  rebalanceFile,
+  executeAutoRebalance,
 } from './drive/index.js';
 import {
   getPooledStorageOverview,
@@ -203,7 +215,210 @@ const app = new Hono()
         files: fileRecords,
       });
     }
-  );
+  )
+  .post(
+    '/api/files/upload/session',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.virtualPath !== 'string' || typeof body?.sizeBytes !== 'number') {
+        return c.json({ error: 'virtualPath (string) and sizeBytes (number) are required' }, 400);
+      }
+      return {
+        virtualPath: body.virtualPath,
+        sizeBytes: body.sizeBytes,
+        mimeType: typeof body.mimeType === 'string' ? body.mimeType : undefined,
+        hash: typeof body.hash === 'string' ? body.hash : undefined,
+      };
+    }),
+    async (c) => {
+      const payload = c.req.valid('json');
+      try {
+        const session = await initiateResumableUpload(payload);
+        return c.json(session);
+      } catch (err) {
+        if (err instanceof FileExceedsCeilingError) {
+          return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
+        }
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post('/api/files/upload', async (c) => {
+    const virtualPath = c.req.query('virtualPath') || c.req.header('x-virtual-path');
+    const sizeHeader = c.req.query('sizeBytes') || c.req.header('x-file-size') || c.req.header('content-length');
+    const mimeType = c.req.query('mimeType') || c.req.header('content-type') || 'application/octet-stream';
+    const hash = c.req.query('hash') || c.req.header('x-file-hash');
+
+    if (!virtualPath || !sizeHeader) {
+      return c.json({ error: 'virtualPath and sizeBytes (or Content-Length) required' }, 400);
+    }
+
+    const sizeBytes = Number(sizeHeader);
+    if (isNaN(sizeBytes) || sizeBytes < 0) {
+      return c.json({ error: 'sizeBytes must be a valid positive number' }, 400);
+    }
+
+    if (!c.req.raw.body) {
+      return c.json({ error: 'Request body stream is missing' }, 400);
+    }
+
+    try {
+      const record = await executeStreamingUpload(
+        { virtualPath, sizeBytes, mimeType, hash: hash || undefined },
+        c.req.raw.body
+      );
+      return c.json(record);
+    } catch (err) {
+      if (err instanceof FileExceedsCeilingError) {
+        return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
+      }
+      if (err instanceof InsufficientStorageError) {
+        return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .get('/api/files/:id/download', async (c) => {
+    const fileId = c.req.param('id');
+    try {
+      const { stream, file } = await getStreamingDownload(fileId);
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          'Content-Type': file.mimeType || 'application/octet-stream',
+          'Content-Length': String(file.sizeBytes),
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
+          'Cache-Control': 'no-cache',
+        },
+      });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
+    }
+  })
+  .post('/api/files/:id/trash', async (c) => {
+    const fileId = c.req.param('id');
+    try {
+      const updated = await trashFile(fileId);
+      return c.json(updated);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post('/api/files/:id/restore', async (c) => {
+    const fileId = c.req.param('id');
+    try {
+      const updated = await restoreFile(fileId);
+      return c.json(updated);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .delete('/api/files/:id/permanent', async (c) => {
+    const fileId = c.req.param('id');
+    try {
+      const purged = await purgeFile(fileId);
+      return c.json(purged);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .delete('/api/trash/empty', async (c) => {
+    try {
+      const report = await emptyTrash();
+      return c.json(report);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .get('/api/trash', async (c) => {
+    const trashedFiles = await db.select().from(files).where(eq(files.isTrashed, true));
+    return c.json({ files: trashedFiles });
+  })
+  .get('/api/sync/external-changes/:accountId', async (c) => {
+    const accountId = c.req.param('accountId');
+    try {
+      const report = await scanAccountDiscrepancies(accountId);
+      return c.json(report);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post(
+    '/api/sync/resolve/accept',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.accountId !== 'string' || typeof body?.driveFileId !== 'string') {
+        return c.json({ error: 'accountId and driveFileId required' }, 400);
+      }
+      return {
+        accountId: body.accountId,
+        driveFileId: body.driveFileId,
+        targetVirtualPath: typeof body.targetVirtualPath === 'string' ? body.targetVirtualPath : undefined,
+      };
+    }),
+    async (c) => {
+      const { accountId, driveFileId, targetVirtualPath } = c.req.valid('json');
+      try {
+        const record = await acceptExternalFile(accountId, driveFileId, targetVirtualPath);
+        return c.json(record);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/resolve/move-to-root',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.accountId !== 'string' || typeof body?.driveFileId !== 'string') {
+        return c.json({ error: 'accountId and driveFileId required' }, 400);
+      }
+      return { accountId: body.accountId, driveFileId: body.driveFileId };
+    }),
+    async (c) => {
+      const { accountId, driveFileId } = c.req.valid('json');
+      try {
+        await ejectFileToDriveRoot(accountId, driveFileId);
+        return c.json({ success: true, accountId, driveFileId });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/rebalance/file',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.fileId !== 'string' || typeof body?.targetAccountId !== 'string') {
+        return c.json({ error: 'fileId and targetAccountId required' }, 400);
+      }
+      return { fileId: body.fileId, targetAccountId: body.targetAccountId };
+    }),
+    async (c) => {
+      const { fileId, targetAccountId } = c.req.valid('json');
+      try {
+        const result = await rebalanceFile(fileId, targetAccountId);
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post('/api/sync/rebalance/auto/:accountId', async (c) => {
+    const accountId = c.req.param('accountId');
+    try {
+      const results = await executeAutoRebalance(accountId);
+      return c.json({ results });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
 
 export type AppType = typeof app;
 export default app;
