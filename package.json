@@ -7,9 +7,10 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "dev": "tsx watch src/server/index.ts",
+    "typecheck": "tsc --noEmit",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
-    "build": "npm run build:web && npm run build:server",
+    "build": "npm run typecheck && npm run build:web && npm run build:server",
     "preview": "vite preview",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
@@ -20,6 +21,7 @@
     "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.40.0",
+    "googleapis": "^189.0.0",
     "hono": "^4.7.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

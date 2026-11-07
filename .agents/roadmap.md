@@ -49,6 +49,7 @@ graph TD
 | **Backend API** | Hono (`@hono/node-server`) | Web-standard `Fetch`/`Request`/`ReadableStream` APIs, zero dependencies, built-in end-to-end RPC typing. |
 | **Local database** | SQLite (via `better-sqlite3` and Drizzle ORM) | High-speed local index cache, sub-millisecond lookups, ACID transactions, zero cloud fees. |
 | **Remote metadata** | Google Drive `appProperties` | Durable, self-describing file attributes stored on Google servers for cold-start recovery. |
+| **Google auth model** | Desktop app OAuth client (`installed`) | Uses loopback redirect without requiring manual redirect URI configuration in Google Cloud Console. Single client authorizes multiple pooled accounts. |
 | **Packaging** | Electron (Phase 7) | Wraps the local Hono server and Vite frontend into a desktop application. |
 
 ---
@@ -157,12 +158,16 @@ flowchart TD
   - `transfer_logs`: Account ID, transfer type, byte count, timestamp for 24-hour rolling calculations.
 
 ### Phase 2: Account engine and Drive synchronization
-- [ ] Implement `.oauths/` scanner to load credential files dynamically.
-- [ ] Build Google Auth client pool with automatic token refresh handling.
-- [ ] Implement account hydration using `drive.about.get(fields="user,storageQuota")`.
-- [ ] Implement root folder discovery and creation (`Tsubasa Storage/` per account).
-- [ ] Build cold-start reconciliation scanner using `appProperties` queries.
-- [ ] Implement incremental synchronization using `drive.changes.list` with page tokens.
+- [x] Implement `.oauths/` scanner to load credential files dynamically.
+- [x] Build Google Auth client pool with automatic token refresh handling.
+- [x] Implement account hydration using `drive.about.get(fields="user,storageQuota")`.
+- [x] Implement root folder discovery and creation (`Tsubasa Storage/` per account).
+- [x] Build cold-start reconciliation scanner using `appProperties` queries.
+- [x] Implement incremental synchronization using `drive.changes.list` with page tokens.
+- [~] Document Desktop App OAuth setup guide in UI setup helper and README:
+  - Create client ID with Application Type: **Desktop app** (not Web app).
+  - Eliminates `redirect_uri_mismatch` errors on loopback/localhost ports without requiring pre-registered URIs in Google Cloud Console.
+  - A single Desktop OAuth Client ID authorizes multiple personal Google accounts.
 
 ### Phase 3: Storage pool and folder-cohesion placement
 - [ ] Build dynamic headroom calculator enforcing the 750 MB buffer.

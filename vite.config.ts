@@ -6,7 +6,9 @@ import path from 'node:path';
 export default defineConfig({
   plugins: [
     stylexPlugin({
-      useCSSLayers: true,
+      stylex: {
+        useCSSLayers: true,
+      },
     }),
     react(),
   ],
@@ -17,6 +19,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    fs: {
+      strict: false,
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:3000',

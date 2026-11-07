@@ -18,6 +18,7 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/server/**/*", "src/shared/**/*"]
+  "include": ["src/server/**/*", "src/shared/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
 
