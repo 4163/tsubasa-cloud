@@ -25,9 +25,9 @@ Do not read source files, config files, or directory trees.
 
 Read guidelines (everything in Low) plus a surface-level pass over the codebase. No deep dives.
 
-- Walk the root directory tree and note the layout.
-- Read package manifests, dependency manifests, or config files (if present).
-- Skim entry points and main scripts, but do not open individual helper modules or trace execution flow.
+- Walk the root directory tree and note the layout (`src/client/`, `src/server/`).
+- Read package and build configs (`package.json`, `tsconfig.json`, `vite.config.ts`, `drizzle.config.ts`).
+- Skim client and server entry points (`src/client/main.tsx`, `src/server/index.ts`, `src/server/app.ts`), but do not open storage engines or trace RPC handlers.
 
 Do not use subagents.
 
@@ -36,9 +36,9 @@ Do not use subagents.
 Everyday orientation. Rules plus layout plus who owns what.
 
 - Build on the lower tiers. Docs holds the guidelines, skim holds the layout, configs, and entry points.
-- Read top-level scripts and configuration files only as far as skim has not covered.
-- Note the conventions in place: naming, folder layout, error handling, style. New work fits the codebase, not the other way around.
-- Stop at module doors. Do not open individual helper modules, utility scripts, or internal handlers to learn them. Do not trace call chains or data flow. Depth beyond this is task-scoped.
+- Read top-level client and server definitions only as far as skim has not covered.
+- Note the conventions in place: local-first SQLite reads, zero-copy streaming, compile-time StyleX styling, TanStack Virtual lists, and 750 MB buffer headroom. New work fits the codebase, not the other way around.
+- Stop at module doors. Do not open individual placement algorithms (`placement.ts`), delta sync routines (`delta.ts`), or database init scripts (`init.ts`). Do not trace call chains or data flow. Depth beyond this is task-scoped.
 
 ## Subagents
 

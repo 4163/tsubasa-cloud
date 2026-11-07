@@ -22,14 +22,17 @@ Use this skill to run a strict compliance check of code changes against the repo
 
 2. **Review against `.agents/AGENTS.md`:**
    Read and cross-reference the changes specifically against the guidelines in `.agents/AGENTS.md`. Pay special attention to:
-   - **Code guidelines:** Are we using flat control flow and early returns over deep nesting? Are names descriptive and self-documenting? Are comments minimal and reserved for *why* and non-obvious invariants rather than narrating code? Are hot paths caching aggressively? Are dynamic evaluations avoided where pre-computed values or O(1) lookups could be used? Are we avoiding premature abstractions (YAGNI)?
-   - **Preserving behavioral contracts:** Did multiple revision passes alter the intended function behavior, output schema, or return types? Refactors must not alter existing functionality unless there is an explicit win. If shared helpers, configurations, or interfaces changed, do all downstream consumers remain unbroken?
+   - **Code guidelines and performance directives:** Are we using flat control flow and early returns? Are reads hitting indexed local SQLite tables (< 2ms) without calling Google Drive? Do streaming uploads and downloads avoid buffering complete files on disk or exceeding 50 MB memory? Are virtual operations applied instantly to SQLite with lazy async Drive sync? Does sync use `changes.list` with page tokens rather than tree walks?
+   - **Shared architecture and boundaries:** Does each responsibility have exactly one writer? Do server models and storage placement modules stay free of DOM or client imports? Does the client communicate strictly via type-safe Hono RPC (`src/client/api.ts`) without reaching into backend internals?
+   - **Frontend and StyleX styling:** Are styles written using StyleX rather than inline styles or runtime CSS-in-JS? Are design tokens referenced from `tokens.stylex.ts`? Are WCAG AAA contrast ratios (minimum 7:1) preserved across dark and light themes? Are file and folder lists rendered using TanStack Virtual to keep DOM node counts constant?
+   - **Storage placement and quota integrity:** Does placement logic strictly enforce the 750 MB safety buffer ceiling (14.25 GB max on 15 GB accounts) and the 14.25 GB single-file limit? Does placement respect path affinity and folder cohesion? Are uploads recorded in the 24-hour rolling transfer window (`transfer_logs`)?
+   - **Preserving contracts and metadata schemas:** Did the changes alter SQLite schemas (`schema.ts`), Google Drive `appProperties` keys (`tsubasa_managed`, `tsubasa_virtual_path`), or RPC route contracts without updating all callers, sync handlers, and owning documentation?
    - **Redundant code and shared helpers:** Did the diff inline repeated code for identical operations across callsites instead of using or extracting an intuitive shared helper? Did it miss an existing helper that already does the job?
    - **Stale code and references:** Are there unused imports or variables, dead functions, orphaned files, outdated comments, or stale paths that point to moved or renamed modules? Does the diff leave behind code that is no longer reachable? Use grep for old names, check imports, and verify every moved file has its callers updated.
 
    For every finding, mark severity:
-   - `[Blocking]`: Direct rule breaks, broken behavioral contracts or return types, altered function intent, regression risks, or broken downstream callers.
-   - `[Warning]`: Architectural drift, premature abstractions, duplicated logic across callsites, or hot-path allocations.
+   - `[Blocking]`: Direct rule breaks, breached quota or buffer ceilings, remote Drive calls in read paths, broken RPC or database contracts, or regression risks.
+   - `[Warning]`: Architectural drift, premature abstractions, inline styles instead of StyleX, duplicated logic, or hot-path allocations.
    - `[Nit]`: Dead code, unused imports or variables, stale comments, or minor hygiene issues.
 
 3. **Synthesize the verdict:**
@@ -57,4 +60,3 @@ Use this skill to run a strict compliance check of code changes against the repo
    (Pass / Pass with warnings / Fail)
    (Provide recommendations on how the user should remediate the violations, if any.)
    ```
-
