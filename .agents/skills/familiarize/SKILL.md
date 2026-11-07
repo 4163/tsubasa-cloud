@@ -15,6 +15,7 @@ Three tiers control how deep you go. The user specifies the tier, or you infer i
 Read agent guidelines and project documentation only. No codebase exploration.
 
 - `.agents/AGENTS.md`
+- `.agents/roadmap.md`
 - `.agents/skills/unslop/SKILL.md`
 - `README.md` (if present)
 
