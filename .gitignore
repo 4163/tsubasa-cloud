@@ -1,0 +1,15 @@
+# Environment and credential files
+.env
+.env.*
+*.env
+
+# OAuth credentials and tokens
+.oauths/*
+!.oauths/.gitkeep
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
