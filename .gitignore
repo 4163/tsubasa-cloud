@@ -7,6 +7,18 @@
 .oauths/*
 !.oauths/.gitkeep
 
+# Dependencies and builds
+node_modules/
+dist/
+.build/
+
+# Local SQLite databases and storage
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Python artifacts
 __pycache__/
 *.py[cod]

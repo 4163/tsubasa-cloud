@@ -146,11 +146,11 @@ flowchart TD
 ```
 
 ### Phase 1: Project scaffolding and foundations
-- [ ] Initialize repository structure with TypeScript, Vite, and Node.js.
-- [ ] Configure StyleX with Babel/Vite integration (`@stylexjs/rollup-plugin`).
-- [ ] Set up Hono backend server using `@hono/node-server`.
-- [ ] Configure SQLite with WAL mode, optimized cache pragmas, and Drizzle ORM.
-- [ ] Define database schemas:
+- [x] Initialize repository structure with TypeScript, Vite, and Node.js.
+- [x] Configure StyleX with Babel/Vite integration (`@stylexjs/rollup-plugin`).
+- [x] Set up Hono backend server using `@hono/node-server`.
+- [x] Configure SQLite with WAL mode, optimized cache pragmas, and Drizzle ORM.
+- [x] Define database schemas:
   - `accounts`: ID, email, display name, avatar URL, quota limits, current usage, sync state.
   - `files`: Virtual path, name, size, mime type, hash, owning account ID, Drive file ID, trash state.
   - `folders`: Virtual path, name, parent folder ID, created timestamp.
