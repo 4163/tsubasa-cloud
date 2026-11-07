@@ -263,7 +263,7 @@ export function App() {
         setPool(poolData.accounts);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to query Tsubasa backend');
+      setError(err instanceof Error ? err.message : 'Failed to query Tsubasa~ backend');
     }
   }
 
@@ -330,7 +330,7 @@ export function App() {
     <div {...stylex.props(styles.container)}>
       <header {...stylex.props(styles.header)}>
         <div {...stylex.props(styles.titleGroup)}>
-          <h1 {...stylex.props(styles.title)}>Tsubasa Virtual Storage</h1>
+          <h1 {...stylex.props(styles.title)}>Tsubasa~ Virtual Storage</h1>
           <div {...stylex.props(styles.subtitle)}>Local-first pooled Google Drive storage engine</div>
         </div>
         <div {...stylex.props(styles.headerActions)}>
