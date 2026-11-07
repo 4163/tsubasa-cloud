@@ -12,6 +12,14 @@ import {
   runIncrementalSync,
   syncAllAccounts,
 } from './drive/index.js';
+import {
+  getPooledStorageOverview,
+  getAccountTransferStats,
+  selectPlacementForFile,
+  planBatchPlacement,
+  FileExceedsCeilingError,
+  InsufficientStorageError,
+} from './storage/index.js';
 
 const app = new Hono()
   .use('*', logger())
@@ -28,42 +36,73 @@ const app = new Hono()
     });
   })
   .get('/api/storage/overview', async (c) => {
-    const allAccounts = await db.select().from(accounts);
-
-    // Safety buffer is 750MB per account
-    const safetyBufferBytes = 750 * 1024 * 1024;
-
-    let totalLimit = 0;
-    let totalUsed = 0;
-    let totalHeadroom = 0;
-
-    const accountSummaries = allAccounts.map((acc) => {
-      totalLimit += acc.quotaLimitBytes;
-      totalUsed += acc.quotaUsedBytes;
-      const usableLimit = Math.max(0, acc.quotaLimitBytes - safetyBufferBytes);
-      const headroom = Math.max(0, usableLimit - acc.quotaUsedBytes);
-      totalHeadroom += headroom;
-      return {
-        id: acc.id,
-        email: acc.email,
-        displayName: acc.displayName,
-        avatarUrl: acc.avatarUrl,
-        quotaLimitBytes: acc.quotaLimitBytes,
-        quotaUsedBytes: acc.quotaUsedBytes,
-        usableLimitBytes: usableLimit,
-        headroomBytes: headroom,
-        syncState: acc.syncState,
-      };
-    });
-
-    return c.json({
-      totalAccounts: allAccounts.length,
-      totalLimitBytes: totalLimit,
-      totalUsedBytes: totalUsed,
-      totalHeadroomBytes: totalHeadroom,
-      accounts: accountSummaries,
-    });
+    const overview = await getPooledStorageOverview();
+    return c.json(overview);
   })
+  .get('/api/storage/transfer-stats/:id', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const stats = await getAccountTransferStats(accountId);
+      return c.json(stats);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post(
+    '/api/storage/placement/file',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.virtualPath !== 'string' || typeof body?.sizeBytes !== 'number') {
+        return c.json({ error: 'Invalid payload: virtualPath (string) and sizeBytes (number) required' }, 400);
+      }
+      return { virtualPath: body.virtualPath, sizeBytes: body.sizeBytes };
+    }),
+    async (c) => {
+      const item = c.req.valid('json');
+      try {
+        const decision = await selectPlacementForFile(item);
+        return c.json(decision);
+      } catch (err) {
+        if (err instanceof FileExceedsCeilingError) {
+          return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
+        }
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/storage/placement/batch',
+    validator('json', (value, c) => {
+      const body = value as { items?: unknown };
+      if (!Array.isArray(body?.items)) {
+        return c.json({ error: 'Invalid payload: items (array) required' }, 400);
+      }
+      for (const item of body.items) {
+        if (typeof item?.virtualPath !== 'string' || typeof item?.sizeBytes !== 'number') {
+          return c.json({ error: 'Each item requires virtualPath (string) and sizeBytes (number)' }, 400);
+        }
+      }
+      return { items: body.items as Array<{ virtualPath: string; sizeBytes: number }> };
+    }),
+    async (c) => {
+      const { items } = c.req.valid('json');
+      try {
+        const plan = await planBatchPlacement(items);
+        return c.json(plan);
+      } catch (err) {
+        if (err instanceof FileExceedsCeilingError) {
+          return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
+        }
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
   .get('/api/accounts/pool', (c) => {
     authPool.scan();
     const records = authPool.getAll();

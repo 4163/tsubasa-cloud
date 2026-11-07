@@ -173,11 +173,11 @@ flowchart TD
   - A single Desktop OAuth Client ID authorizes multiple personal Google accounts.
 
 ### Phase 3: Storage pool and folder-cohesion placement
-- [ ] Build dynamic headroom calculator enforcing the 750 MB buffer.
-- [ ] Implement Folder-Cohesion Best-Fit algorithm with bottom-up directory sizing.
-- [ ] Implement physical folder mirroring inside each account's `Tsubasa Storage/`.
-- [ ] Build 24-hour rolling transfer window aggregator for Google's 750 GB limit.
-- [ ] Account for manifest and database snapshot files in quota metrics.
+- [x] Build dynamic headroom calculator enforcing the 750 MB buffer.
+- [x] Implement Folder-Cohesion Best-Fit algorithm with bottom-up directory sizing.
+- [x] Implement physical folder mirroring inside each account's `Tsubasa Storage/`.
+- [x] Build 24-hour rolling transfer window aggregator for Google's 750 GB limit.
+- [x] Account for manifest and database snapshot files in quota metrics.
 
 ### Phase 4: Transfer pipelines and external changes detector
 - [ ] Build resumable streaming upload endpoint (`POST /api/files/upload`) with 14.25 GB client-side rejection.

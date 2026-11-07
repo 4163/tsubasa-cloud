@@ -7,6 +7,7 @@ export * from './auth.js';
 export * from './client.js';
 export * from './sync.js';
 export * from './delta.js';
+export * from './mirror.js';
 
 export async function syncAllAccounts(): Promise<{
   hydrated: string[];
