@@ -189,9 +189,9 @@ flowchart TD
 - [x] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
 
 ### Phase 5: UI evaluation and consolidated React + StyleX UI
-- [~] **Phase 5.1: REA-driven design teardown (Google Drive)**
-  - Connect to Chrome over CDP (`http://127.0.0.1:9222`) via REA (`list_browser_targets`, `inspect_web_page`, `capture_web_screenshot`).
-  - Extract layout metrics, row padding, typography scales, and selection states from Google Drive.
+- [~] **Phase 5.1: REA-driven design teardown (Google Drive and MEGA)**
+  - Extract layout metrics, row padding, typography scales, and selection states from Google Drive (`docs/teardowns/google-drive.md`).
+  - Extract shell layout, sidebar storage meters, compact 32px row metrics, and context menus from MEGA (`docs/teardowns/mega.md`).
   - Formulate StyleX design system (color tokens, AAA contrast, spacing scales, dark and light modes).
 - [ ] **Phase 5.2: Application shell and views**
   - Build main layout shell (sidebar, breadcrumbs, search bar).
