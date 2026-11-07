@@ -137,6 +137,12 @@ export const layout = stylex.defineVars({
   contextMenuWidth: '280px',
   contextMenuItemHeight: '36px',
   flyoutWidth: '320px',
+  // Mobile layout dimensions
+  mobileHeaderHeight: '159px',
+  mobileHeaderTopHeight: '56px',
+  mobileRowHeight: '64px',
+  mobileTouchTarget: '56px',
+  bottomSheetRadius: '16px',
 });
 
 /**

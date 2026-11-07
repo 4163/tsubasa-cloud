@@ -4,7 +4,7 @@
 - **Target URL / App:** `https://mega.nz/fm/kEgAnYIY`
 - **Inspection date:** 2026-11-08
 - **Audit tool:** REA / Chrome DevTools Protocol (CDP loopback on `127.0.0.1:9222`)
-- **Viewports tested:** Desktop (1920x953 observed viewport, 1440x900 and 1024x768 reference scales)
+- **Viewports tested:** Desktop (1920x953 observed viewport, 1440x900 and 1024x768 reference scales), Mobile (see `docs/teardowns/mega-mobile.md`)
 
 ## 1. Shell layout and spatial matrix
 - **Main layout grid (`#pmlayout`):**
