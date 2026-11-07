@@ -85,7 +85,9 @@ To keep files organized and easily browsable directly inside `drive.google.com`,
 
 ```mermaid
 flowchart TD
-    Upload["Upload File or Folder"] --> HasParent{"Does parent folder exist<br/>on an account with room?"}
+    Upload["Upload File or Folder"] --> SizeCheck{"Is File > 14.25 GB?"}
+    SizeCheck -- Yes --> Reject["Hard Reject: Exceeds 14.25 GB single-account ceiling"]
+    SizeCheck -- No --> HasParent{"Does parent folder exist<br/>on an account with room?"}
     HasParent -- Yes --> PlaceAffinity["Place on existing parent account<br/>(Preserve folder cohesion)"]
     HasParent -- No --> BatchCheck{"Is it a multi-file folder upload?"}
     BatchCheck -- Yes --> BottomUp["Calculate branch size bottom-up.<br/>Find account where (Headroom - BranchSize) is minimal.<br/>Split at subfolder level only if branch > 14.25 GB."]
@@ -95,12 +97,10 @@ flowchart TD
     PlaceAffinity --> Mirror
 ```
 
-1. **Folder affinity (Existing path priority):**
-   If a parent directory (like `/Projects/2026/`) already holds files on Account A and Account A has enough headroom, the file is placed on Account A.
-2. **Bottom-up branch sizing (Directory uploads):**
-   When uploading a folder hierarchy, Tsubasa computes the total size of the deepest subfolders first. The placement engine fits whole subfolders into the account with the best fit. A directory is split at subfolder boundaries only if its total size exceeds an account's headroom.
-3. **Physical folder mirroring:**
-   Inside each account's `Tsubasa Storage/`, Tsubasa recreates the directory path so browsing via Google Drive's web UI remains structured and legible.
+1. **Upload limit (Hard reject):** Any single file exceeding 14.25 GB is rejected immediately at the frontend with an informative size limit dialog.
+2. **Folder affinity (Existing path priority):** If a parent directory (like `/Projects/2026/`) already holds files on Account A and Account A has enough headroom, the file is placed on Account A.
+3. **Bottom-up branch sizing (Directory uploads):** When uploading a folder hierarchy, Tsubasa computes the total size of the deepest subfolders first. The placement engine fits whole subfolders into the account with the best fit. A directory is split at subfolder boundaries only if its total size exceeds an account's headroom.
+4. **Physical folder mirroring:** Inside each account's `Tsubasa Storage/`, Tsubasa recreates the directory path so browsing via Google Drive's web UI remains structured and legible.
 
 ### 4.3 Transfer limit monitoring
 * Google enforces a strict upload limit of 750 GB per rolling 24-hour window per account.
@@ -110,12 +110,15 @@ flowchart TD
 * **Soft delete:** Deleting a file marks it as trashed in SQLite and issues an update to Google Drive (`trashed: true`). The file remains recoverable in the Google Drive trash.
 * **Empty trash:** Quota is permanently reclaimed only when the user explicitly triggers "Empty Trash" through a confirmed action.
 
-### 4.5 External modification detection and reconciliation
+### 4.5 External modification detection and over-ceiling handling
 Users may occasionally edit, move, or delete files directly inside `drive.google.com`.
 
 * **Detection:** Periodic or on-demand delta sync via `drive.changes.list` flags discrepancies between Google Drive and the local SQLite index.
-* **UI notification:** A non-intrusive status pill appears in the top navigation when external changes are found.
-* **Resolution actions:**
+* **Over-ceiling files ($> 14.25\text{ GB}$ detected in `Tsubasa Storage/`):**
+  When a file between 14.25 GB and 15 GB is found in `Tsubasa Storage/`, the UI presents two sequential options:
+  1. **Accept into Tsubasa (Over-ceiling mode):** Indexes the file into Tsubasa. The account headroom immediately drops to 0 GB (locked to read-only for new writes). The account card displays a high-priority alert: *"Buffer breached (e.g. 14.6 / 15.0 GB). Incoming emails may fail."*
+  2. **Move to root (Eject outside Tsubasa):** Moves the file from `Tsubasa Storage/` out to `My Drive` root via `files.update` (takes 0 extra bytes). Tsubasa removes it from its SQLite index and treats the space as external non-Tsubasa usage.
+* **Standard external change actions:**
   1. **Accept changes:** Updates SQLite paths, file sizes, and checksums to match the new Drive state.
   2. **Rebuild index:** Scans all account folders to reconstruct the entire virtual tree from scratch.
   3. **Auto-rebalance:** If files added directly in `drive.google.com` push an account beyond its 14.25 GB ceiling, a rebalance action moves Tsubasa-managed files to an emptier account using Google's cloud-to-cloud server-side copy.
@@ -177,11 +180,12 @@ flowchart TD
 - [ ] Account for manifest and database snapshot files in quota metrics.
 
 ### Phase 4: Transfer pipelines and external changes detector
-- [ ] Build resumable streaming upload endpoint (`POST /api/files/upload`).
+- [ ] Build resumable streaming upload endpoint (`POST /api/files/upload`) with 14.25 GB client-side rejection.
 - [ ] Build authenticated streaming download proxy (`GET /api/files/:id/download`).
 - [ ] Implement soft-trashing (`POST /api/files/:id/trash`).
 - [ ] Implement restore and permanent purge (`DELETE /api/trash/empty`).
 - [ ] Implement external modification detector comparing `changes.list` against SQLite index.
+- [ ] Implement over-ceiling resolution handlers: "Accept into Tsubasa" and "Move to root".
 - [ ] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
 
 ### Phase 5: UI evaluation and consolidated React + StyleX UI
@@ -194,7 +198,8 @@ flowchart TD
   - Build pool status header (aggregated storage bar, account quota badges, 24-hour transfer dials).
   - Build virtualized file explorer table using TanStack Virtual.
   - Build drag-and-drop upload drawer with allocation preview and transfer progress bars.
-  - Build external modification notification drawer with "Accept Changes" and "Rebalance" actions.
+  - Build external modification notification drawer with "Accept into Tsubasa", "Move to root", and "Rebalance" actions.
+  - Build buffer breach warning banners for locked over-ceiling accounts.
   - Build trash management modal with restore and purge actions.
 
 ### Phase 6: Durability verification and performance tuning
