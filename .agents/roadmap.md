@@ -189,11 +189,13 @@ flowchart TD
 - [x] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
 
 ### Phase 5: UI evaluation and consolidated React + StyleX UI
-- [~] **Phase 5.1: REA-driven design teardown (Google Drive and MEGA)**
+- [~] **Phase 5.1: REA-driven design teardown (Google Drive, MEGA, and Dropbox)**
   - Extract layout metrics, row padding, typography scales, and selection states from Google Drive (`docs/teardowns/google-drive.md`).
   - Extract shell layout, sidebar storage meters, compact 32px row metrics, and context menus from MEGA desktop (`docs/teardowns/mega.md`).
   - Extract mobile shell layout, 64px touch rows, bottom sheet menus, and navigation drawer from MEGA mobile (`docs/teardowns/mega-mobile.md`).
-  - Formulate StyleX design system (color tokens, AAA contrast, spacing scales, dark and light modes in `tokens.google-drive.stylex.ts` and `tokens.mega.stylex.ts`).
+  - Extract shell layout, 48px row contracts, Dig 2 tokens, and 24px popover radii from Dropbox (`docs/teardowns/dropbox.md`).
+  - Extract mobile symmetric grid, off-canvas 300px drawer, and column collapse contracts from Dropbox mobile (`docs/teardowns/dropbox-mobile.md`).
+  - Formulate StyleX design system (color tokens, AAA contrast, spacing scales, dark and light modes in `tokens.google-drive.stylex.ts`, `tokens.mega.stylex.ts`, and `tokens.dropbox.stylex.ts`).
 - [ ] **Phase 5.2: Application shell and views**
   - Build main layout shell (sidebar, breadcrumbs, search bar).
   - Build pool status header (aggregated storage bar, account quota badges, 24-hour transfer dials).
