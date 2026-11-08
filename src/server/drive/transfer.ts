@@ -303,11 +303,23 @@ export async function purgeFile(fileId: string): Promise<FileRecord> {
     throw new Error(`File ${fileId} not found`);
   }
 
-  const drive = getDriveClient(file.accountId);
-  await drive.files.delete({
-    fileId: file.driveFileId,
-    supportsAllDrives: false,
-  });
+  try {
+    const drive = getDriveClient(file.accountId);
+    await drive.files.delete({
+      fileId: file.driveFileId,
+      supportsAllDrives: false,
+    });
+  } catch (err: unknown) {
+    // If the file is already gone from Drive (404 Not Found), ignore and continue with local purge
+    const isNotFound =
+      (err && typeof err === 'object' && 'status' in err && (err as { status: number }).status === 404) ||
+      (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 404) ||
+      (err instanceof Error && err.message.toLowerCase().includes('not found'));
+
+    if (!isNotFound) {
+      console.warn(`Drive delete warning for ${file.driveFileId}:`, err instanceof Error ? err.message : String(err));
+    }
+  }
 
   await db.delete(files).where(eq(files.id, fileId));
 
@@ -332,11 +344,23 @@ export async function emptyTrash(): Promise<{ filesPurged: number; bytesReclaime
 
   for (const f of trashedFiles) {
     try {
-      const drive = getDriveClient(f.accountId);
-      await drive.files.delete({
-        fileId: f.driveFileId,
-        supportsAllDrives: false,
-      });
+      try {
+        const drive = getDriveClient(f.accountId);
+        await drive.files.delete({
+          fileId: f.driveFileId,
+          supportsAllDrives: false,
+        });
+      } catch (driveErr: unknown) {
+        // If the file is already gone from Google Drive (404 Not Found), ignore remote failure and proceed with local deletion
+        const isNotFound =
+          (driveErr && typeof driveErr === 'object' && 'status' in driveErr && (driveErr as { status: number }).status === 404) ||
+          (driveErr && typeof driveErr === 'object' && 'code' in driveErr && (driveErr as { code: number }).code === 404) ||
+          (driveErr instanceof Error && driveErr.message.toLowerCase().includes('not found'));
+
+        if (!isNotFound) {
+          console.warn(`Drive delete warning for ${f.driveFileId}:`, driveErr instanceof Error ? driveErr.message : String(driveErr));
+        }
+      }
 
       await db.delete(files).where(eq(files.id, f.id));
 
@@ -350,8 +374,8 @@ export async function emptyTrash(): Promise<{ filesPurged: number; bytesReclaime
 
       filesPurged++;
       bytesReclaimed += f.sizeBytes;
-    } catch {
-      // Continue purging remaining items if one fails
+    } catch (err) {
+      console.error(`Failed to purge local file ${f.id}:`, err);
     }
   }
 
