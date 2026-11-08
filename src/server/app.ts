@@ -147,7 +147,8 @@ const app = new Hono()
         }
         if (result.authorized && result.accountId) {
           try {
-            await hydrateAccount(result.accountId);
+            const hydRes = await hydrateAccount(result.accountId);
+            result.accountId = hydRes.accountId;
           } catch (err) {
             console.warn(`Hydration deferred for ${result.accountId}:`, err);
           }
@@ -185,12 +186,12 @@ const app = new Hono()
     try {
       const url = new URL(c.req.url);
       const redirectUri = `${url.origin}/api/auth/callback`;
-      await authPool.handleCallback(accountId, code, redirectUri);
+      const { accountId: targetAccountId } = await authPool.handleCallback(accountId, code, redirectUri);
 
-      await hydrateAccount(accountId);
+      const hydRes = await hydrateAccount(targetAccountId);
 
       const clientOrigin = process.env.CLIENT_URL || (url.port === '3000' ? 'http://localhost:5173' : url.origin);
-      return c.redirect(`${clientOrigin}/?auth=success&account=` + encodeURIComponent(accountId));
+      return c.redirect(`${clientOrigin}/?auth=success&account=` + encodeURIComponent(hydRes.accountId));
     } catch (err) {
       return c.text(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`, 500);
     }

@@ -281,6 +281,16 @@ export function App() {
   }, [loadClusterData, loadFiles, currentPath]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('auth') === 'success') {
+      const account = params.get('account') || 'Google account';
+      showToast(`Account "${account}" successfully authorized.`);
+      window.history.replaceState({}, '', window.location.pathname);
+      loadClusterData();
+    }
+  }, [loadClusterData, showToast]);
+
+  useEffect(() => {
     function handleFocus() {
       loadClusterData();
     }

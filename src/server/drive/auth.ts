@@ -3,6 +3,43 @@ import path from 'node:path';
 import { google } from 'googleapis';
 import type { OAuth2Client, Credentials } from 'google-auth-library';
 import dotenv from 'dotenv';
+import { renameAccountInDb } from '../db/index.js';
+
+export function safeRenameFile(srcPath: string, destPath: string): void {
+  const resolvedSrc = path.resolve(srcPath);
+  const resolvedDest = path.resolve(destPath);
+
+  if (resolvedSrc === resolvedDest || !fs.existsSync(resolvedSrc)) {
+    return;
+  }
+
+  if (resolvedSrc.toLowerCase() === resolvedDest.toLowerCase()) {
+    const tempPath = `${resolvedSrc}.${Date.now()}.tmp`;
+    fs.renameSync(resolvedSrc, tempPath);
+    fs.renameSync(tempPath, resolvedDest);
+    return;
+  }
+
+  if (fs.existsSync(resolvedDest)) {
+    try {
+      fs.unlinkSync(resolvedDest);
+    } catch {}
+  }
+  fs.renameSync(resolvedSrc, resolvedDest);
+}
+
+export function extractEmailFromIdToken(idToken?: string | null): string | null {
+  if (!idToken) return null;
+  try {
+    const parts = idToken.split('.');
+    if (parts.length < 2) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (typeof payload.email === 'string' && payload.email.includes('@')) {
+      return payload.email.toLowerCase().trim();
+    }
+  } catch {}
+  return null;
+}
 
 export interface AccountCredentials {
   accountId: string;
@@ -58,6 +95,31 @@ class AuthPool {
       const parsed = this.parseCredentialFile(filePath);
       if (!parsed) {
         continue;
+      }
+
+      if (parsed.tokens?.id_token) {
+        const email = extractEmailFromIdToken(parsed.tokens.id_token);
+        if (email && email.toLowerCase() !== parsed.accountId.toLowerCase()) {
+          const oldId = parsed.accountId;
+          const ext = path.extname(parsed.sourceFile).toLowerCase() || '.json';
+          const newSourceFile = path.join(this.oauthDir, `${email}${ext}`);
+          const oldTokenFile = path.join(this.oauthDir, `${oldId}.tokens.json`);
+          const newTokenFile = path.join(this.oauthDir, `${email}.tokens.json`);
+
+          safeRenameFile(parsed.sourceFile, newSourceFile);
+          if (fs.existsSync(oldTokenFile)) {
+            safeRenameFile(oldTokenFile, newTokenFile);
+          }
+
+          parsed.accountId = email;
+          parsed.sourceFile = newSourceFile;
+
+          try {
+            renameAccountInDb(oldId, email);
+          } catch (err) {
+            console.warn(`Failed to update database account ID from ${oldId} to ${email}:`, err);
+          }
+        }
       }
 
       const existing = this.pool.get(parsed.accountId);
@@ -183,12 +245,56 @@ class AuthPool {
       record.config.tokens = merged;
       record.authorized = true;
 
-      const tokenFilePath = path.join(this.oauthDir, `${cred.accountId}.tokens.json`);
+      const currentAccountId = record.config.accountId;
+      const tokenFilePath = path.join(this.oauthDir, `${currentAccountId}.tokens.json`);
       fs.writeFileSync(tokenFilePath, JSON.stringify(merged, null, 2), 'utf8');
     });
 
     this.pool.set(cred.accountId, record);
     return record;
+  }
+
+  public renameAccount(oldAccountId: string, newAccountId: string): string {
+    if (!oldAccountId || !newAccountId || oldAccountId.toLowerCase() === newAccountId.toLowerCase()) {
+      return oldAccountId;
+    }
+
+    const record = this.pool.get(oldAccountId);
+    if (!record) {
+      return oldAccountId;
+    }
+
+    const oldSourceFile = record.config.sourceFile;
+    const ext = path.extname(oldSourceFile).toLowerCase() || '.json';
+    const newSourceFile = path.join(this.oauthDir, `${newAccountId}${ext}`);
+
+    const oldTokenFile = path.join(this.oauthDir, `${oldAccountId}.tokens.json`);
+    const newTokenFile = path.join(this.oauthDir, `${newAccountId}.tokens.json`);
+
+    try {
+      if (fs.existsSync(oldSourceFile) && path.resolve(oldSourceFile) !== path.resolve(newSourceFile)) {
+        safeRenameFile(oldSourceFile, newSourceFile);
+        record.config.sourceFile = newSourceFile;
+      }
+
+      if (fs.existsSync(oldTokenFile) && path.resolve(oldTokenFile) !== path.resolve(newTokenFile)) {
+        safeRenameFile(oldTokenFile, newTokenFile);
+      }
+    } catch (err) {
+      console.warn(`Failed to rename oauth files from ${oldAccountId} to ${newAccountId}:`, err);
+    }
+
+    record.config.accountId = newAccountId;
+    this.pool.delete(oldAccountId);
+    this.pool.set(newAccountId, record);
+
+    try {
+      renameAccountInDb(oldAccountId, newAccountId);
+    } catch (err) {
+      console.warn(`Failed to update database account ID from ${oldAccountId} to ${newAccountId}:`, err);
+    }
+
+    return newAccountId;
   }
 
   public getRecord(accountId: string): AccountAuthRecord | undefined {
@@ -221,7 +327,11 @@ class AuthPool {
     });
   }
 
-  public async handleCallback(accountId: string, code: string, redirectUri?: string): Promise<Credentials> {
+  public async handleCallback(
+    accountId: string,
+    code: string,
+    redirectUri?: string
+  ): Promise<{ tokens: Credentials; accountId: string }> {
     const record = this.pool.get(accountId);
     if (!record) {
       throw new Error(`Account ${accountId} not registered`);
@@ -241,10 +351,16 @@ class AuthPool {
     record.config.tokens = merged;
     record.authorized = true;
 
-    const tokenFilePath = path.join(this.oauthDir, `${accountId}.tokens.json`);
+    let targetAccountId = accountId;
+    const email = extractEmailFromIdToken(tokens.id_token);
+    if (email && email.toLowerCase() !== accountId.toLowerCase()) {
+      targetAccountId = this.renameAccount(accountId, email.toLowerCase());
+    }
+
+    const tokenFilePath = path.join(this.oauthDir, `${targetAccountId}.tokens.json`);
     fs.writeFileSync(tokenFilePath, JSON.stringify(merged, null, 2), 'utf8');
 
-    return merged;
+    return { tokens: merged, accountId: targetAccountId };
   }
 
   public async importCredentials(
@@ -367,10 +483,11 @@ class AuthPool {
 
     this.scan();
 
-    const record = this.pool.get(baseName);
+    const record = this.pool.get(baseName) || this.getAll().find((r) => r.config.sourceFile === targetFilePath);
+    const finalAccountId = record ? record.config.accountId : baseName;
     return {
       success: true,
-      accountId: baseName,
+      accountId: finalAccountId,
       authorized: record?.authorized ?? false,
     };
   }

@@ -41,6 +41,14 @@ export async function hydrateAccount(accountId: string): Promise<AccountHydratio
     throw new Error(`Failed to retrieve user profile for account ${accountId}`);
   }
 
+  const email = user.emailAddress.toLowerCase().trim();
+  let canonicalAccountId = accountId;
+
+  if (accountId.toLowerCase() !== email) {
+    authPool.renameAccount(accountId, email);
+    canonicalAccountId = email;
+  }
+
   const rootFolderId = await ensureRootFolder(drive);
 
   const quotaLimit = storage?.limit ? Number(storage.limit) : 16106127360; // 15 GB fallback
@@ -49,7 +57,7 @@ export async function hydrateAccount(accountId: string): Promise<AccountHydratio
   await db
     .insert(accounts)
     .values({
-      id: accountId,
+      id: canonicalAccountId,
       email: user.emailAddress,
       displayName: user.displayName || user.emailAddress.split('@')[0],
       avatarUrl: user.photoLink || null,
@@ -72,7 +80,7 @@ export async function hydrateAccount(accountId: string): Promise<AccountHydratio
     });
 
   return {
-    accountId,
+    accountId: canonicalAccountId,
     email: user.emailAddress,
     displayName: user.displayName || user.emailAddress.split('@')[0],
     avatarUrl: user.photoLink || null,
