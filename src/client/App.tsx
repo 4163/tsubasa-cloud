@@ -10,6 +10,7 @@ import { DitherDivider } from './components/DitherDivider.js';
 import { UploadDrawer } from './components/UploadDrawer.js';
 import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
 import { NewFolderModal } from './components/NewFolderModal.js';
+import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
 
 interface HealthData {
   status: string;
@@ -644,6 +645,7 @@ export function App() {
 
   const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => selectedIds.has(f.id));
   const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+  const trashedTotalBytes = trashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
 
   return (
     <div
@@ -702,37 +704,6 @@ export function App() {
             >
               Resolve external modifications
             </button>
-          </div>
-        )}
-
-        {confirmEmptyTrash && currentNav === 'trash' && (
-          <div {...stylex.props(styles.alertBanner)}>
-            <span>
-              Permanently purge all {trashedFiles.length} file{trashedFiles.length > 1 ? 's' : ''}? Storage will be permanently reclaimed from Google Drive.
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button
-                type="button"
-                {...stylex.props(styles.bannerActionBtn)}
-                onClick={handleEmptyTrashExecute}
-              >
-                Confirm purge
-              </button>
-              <button
-                type="button"
-                {...stylex.props(styles.bannerActionBtn)}
-                style={{
-                  backgroundColor: 'transparent',
-                  borderWidth: '1px',
-                  borderStyle: 'solid',
-                  borderColor: colors.border,
-                  color: colors.primaryText,
-                }}
-                onClick={() => setConfirmEmptyTrash(false)}
-              >
-                Cancel
-              </button>
-            </div>
           </div>
         )}
 
@@ -813,6 +784,14 @@ export function App() {
         onClose={() => setIsNewFolderOpen(false)}
         currentPath={currentPath}
         onCreateFolder={handleCreateFolder}
+      />
+
+      <ConfirmPurgeModal
+        isOpen={confirmEmptyTrash && currentNav === 'trash'}
+        onClose={() => setConfirmEmptyTrash(false)}
+        onConfirm={handleEmptyTrashExecute}
+        itemCount={trashedFiles.length}
+        totalBytes={trashedTotalBytes}
       />
 
       {toastMessage && (

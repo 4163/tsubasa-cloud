@@ -28,6 +28,10 @@ export const colors = stylex.defineVars({
   // Brand & interactive states
   primary: '#111d18',
   primaryHover: '#233830',
+  brandAccent: '#1f7a6c',
+  brandAccentHover: '#175f54',
+  brandAccentText: '#ffffff',
+  brandAccentSurface: '#e1efe9',
   accentGold: '#deb76c',
   selectionBg: '#dcebe2',
   selectionBorder: '#deb76c',
@@ -38,14 +42,20 @@ export const colors = stylex.defineVars({
   border: '#8ea194',
   borderSubtle: '#c2d1c7',
   outline: '#8ea194',
+  progressTrack: '#b8cbc0',
+  poolGold: '#d98e04',
 
   // Status semantics (Strict WCAG AAA contrast against surface #f7faf5)
   success: '#116329',
   successSurface: '#e6f4ea',
   warning: '#7a4400',
   warningSurface: '#fef3c7',
-  danger: '#82071e',
-  dangerSurface: '#fce8e6',
+  danger: '#9e4c3a',
+  dangerSurface: '#fbf2ee',
+  dangerBorder: '#e8beb3',
+  dangerTextOnSurface: '#7a3222',
+  dangerHover: '#873b2a',
+  dangerText: '#ffffff',
 });
 
 /**
@@ -69,6 +79,10 @@ export const darkColors = stylex.createTheme(colors, {
 
   primary: '#e5f2eb',
   primaryHover: '#ffffff',
+  brandAccent: '#35c4a8',
+  brandAccentHover: '#55dcc0',
+  brandAccentText: '#0b1412',
+  brandAccentSurface: '#12332c',
   accentGold: '#d4a13c',
   selectionBg: '#1b3b32',
   selectionBorder: '#d4a13c',
@@ -78,13 +92,19 @@ export const darkColors = stylex.createTheme(colors, {
   border: '#2d453b',
   borderSubtle: '#1e302a',
   outline: '#2d453b',
+  progressTrack: '#38584c',
+  poolGold: '#fbbf24',
 
   success: '#2dd4bf',
   successSurface: '#0d2a24',
   warning: '#facc15',
   warningSurface: '#2d2407',
-  danger: '#ff9492',
-  dangerSurface: '#341113',
+  danger: '#e58882',
+  dangerSurface: '#261615',
+  dangerBorder: '#542826',
+  dangerTextOnSurface: '#f1a39f',
+  dangerHover: '#f09892',
+  dangerText: '#0b1412',
 });
 
 /**

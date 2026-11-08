@@ -87,8 +87,8 @@ const styles = stylex.create({
     paddingLeft: spacing.space5,
     paddingRight: spacing.space5,
     borderRadius: radius.button,
-    backgroundColor: colors.primary,
-    color: colors.surface,
+    backgroundColor: colors.brandAccent,
+    color: colors.brandAccentText,
     borderWidth: '0px',
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
@@ -99,7 +99,7 @@ const styles = stylex.create({
     gap: spacing.space2,
     transition: motion.transitionFast,
     ':hover': {
-      backgroundColor: colors.primaryHover,
+      backgroundColor: colors.brandAccentHover,
     },
     ':active': {
       transform: 'scale(0.98)',
@@ -126,7 +126,8 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
-      borderColor: colors.primaryText,
+      borderColor: colors.brandAccent,
+      color: colors.brandAccent,
     },
     ':active': {
       backgroundColor: colors.selectionBg,
@@ -150,7 +151,7 @@ const styles = stylex.create({
     paddingRight: spacing.space4,
     borderRadius: radius.button,
     backgroundColor: colors.danger,
-    color: '#ffffff',
+    color: colors.dangerText,
     borderWidth: '0px',
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
@@ -161,7 +162,7 @@ const styles = stylex.create({
     gap: spacing.space2,
     transition: motion.transitionFast,
     ':hover': {
-      opacity: 0.9,
+      backgroundColor: colors.dangerHover,
     },
     ':disabled': {
       opacity: 0.5,

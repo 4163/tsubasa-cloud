@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconTrash, IconRotateCcw, IconFile, IconCheck } from './Icons';
 import type { FileRecord } from '../../server/db/schema.js';
+import { ConfirmPurgeModal } from './ConfirmPurgeModal.js';
 
 interface TrashModalProps {
   isOpen: boolean;
@@ -124,51 +125,7 @@ const styles = stylex.create({
       cursor: 'not-allowed',
     },
   },
-  confirmBanner: {
-    padding: spacing.space4,
-    backgroundColor: colors.dangerSurface,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.danger,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space3,
-    fontSize: '12px',
-    fontWeight: '600',
-    color: colors.danger,
-    flexShrink: 0,
-  },
-  confirmBtnRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-  },
-  confirmActionBtn: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.danger,
-    color: '#ffffff',
-    borderWidth: '0px',
-    fontSize: '11px',
-    fontWeight: '700',
-    cursor: 'pointer',
-  },
-  confirmCancelBtn: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: 'transparent',
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    fontSize: '11px',
-    cursor: 'pointer',
-  },
+
   listScroll: {
     flex: 1,
     overflowY: 'auto',
@@ -426,30 +383,13 @@ export function TrashModal({ isOpen, onClose, onActionComplete }: TrashModalProp
           </button>
         </div>
 
-        {confirmEmpty && (
-          <div {...stylex.props(styles.confirmBanner)}>
-            <span>
-              Permanently purge all {trashedFiles.length} file{trashedFiles.length > 1 ? 's' : ''}? Storage space will be permanently reclaimed from Google Drive.
-            </span>
-            <div {...stylex.props(styles.confirmBtnRow)}>
-              <button
-                type="button"
-                {...stylex.props(styles.confirmActionBtn)}
-                onClick={handleEmptyTrash}
-                disabled={activeActionId === 'empty'}
-              >
-                {activeActionId === 'empty' ? 'Purging...' : 'Confirm purge'}
-              </button>
-              <button
-                type="button"
-                {...stylex.props(styles.confirmCancelBtn)}
-                onClick={() => setConfirmEmpty(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+        <ConfirmPurgeModal
+          isOpen={confirmEmpty}
+          onClose={() => setConfirmEmpty(false)}
+          onConfirm={handleEmptyTrash}
+          itemCount={trashedFiles.length}
+          totalBytes={totalBytes}
+        />
 
         <div {...stylex.props(styles.summaryBar)}>
           <span {...stylex.props(styles.summaryText)}>

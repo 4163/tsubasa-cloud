@@ -129,11 +129,11 @@ const styles = stylex.create({
     fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeBadge,
     fontWeight: typography.fontWeightBadge,
-    backgroundColor: colors.selectionBg,
-    color: colors.primaryText,
+    backgroundColor: colors.brandAccentSurface,
+    color: colors.brandAccent,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.border,
+    borderColor: colors.borderSubtle,
     paddingTop: '2px',
     paddingBottom: '2px',
     paddingLeft: spacing.space2,
@@ -242,7 +242,7 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
-      borderColor: colors.border,
+      borderColor: colors.brandAccent,
     },
     ':active': {
       backgroundColor: colors.selectionBg,
@@ -258,14 +258,15 @@ const styles = stylex.create({
     height: '30px',
     borderRadius: radius.pill,
     borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
     backgroundColor: 'transparent',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
     color: colors.primaryText,
+    transition: motion.transitionFast,
   },
   addAccountTextCol: {
     display: 'flex',
@@ -393,22 +394,42 @@ const styles = stylex.create({
     width: '100%',
     height: '4px',
     borderRadius: radius.pill,
-    backgroundColor: colors.borderSubtle,
+    backgroundColor: colors.progressTrack,
     overflow: 'hidden',
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
     transition: 'width 0.3s ease',
   },
+  poolProgressBarFill: {
+    height: '100%',
+    backgroundColor: colors.poolGold,
+    borderRadius: radius.pill,
+    transition: 'width 0.3s ease',
+  },
+  progressBarWarning: {
+    backgroundColor: colors.warning,
+  },
   progressBarBreach: {
     backgroundColor: colors.danger,
+  },
+  externalDriveRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
   },
   externalDriveText: {
     fontSize: '10px',
     color: colors.dimText,
     fontVariantNumeric: 'tabular-nums',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+    flex: 1,
   },
   accountActionsRow: {
     display: 'flex',
@@ -427,11 +448,14 @@ const styles = stylex.create({
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     fontSize: typography.fontSizeBadge,
+    lineHeight: typography.lineHeightBadge,
     color: colors.secondaryText,
     cursor: 'pointer',
+    flexShrink: 0,
     ':hover': {
       backgroundColor: colors.surface,
-      color: colors.primaryText,
+      borderColor: colors.brandAccent,
+      color: colors.brandAccent,
     },
   },
   authPill: {
@@ -537,7 +561,7 @@ const styles = stylex.create({
   footerTitle: {
     fontSize: typography.fontSizeBadge,
     fontWeight: typography.fontWeightSection,
-    color: colors.dimText,
+    color: colors.secondaryText,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
   },
@@ -594,12 +618,12 @@ const styles = stylex.create({
     width: '100%',
     height: '4px',
     borderRadius: radius.pill,
-    backgroundColor: colors.borderSubtle,
+    backgroundColor: colors.progressTrack,
     overflow: 'hidden',
   },
   transferProgressBarFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
     transition: 'width 0.3s ease',
   },
@@ -612,7 +636,8 @@ const styles = stylex.create({
   transferTimerRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: '4px',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
     fontSize: '10px',
     color: colors.dimText,
     fontVariantNumeric: 'tabular-nums',
@@ -623,6 +648,8 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    minWidth: 0,
+    flex: 1,
   },
   transferTimerActive: {
     color: colors.secondaryText,
@@ -659,12 +686,25 @@ function formatBytesCompact(bytes: number): string {
   return `${val >= 10 || i === 0 ? Math.round(val) : val.toFixed(1)} ${sizes[i]}`;
 }
 
+export function hasActiveTransferStats(stats?: AccountTransferStats, now: number = Date.now()): boolean {
+  if (!stats) return false;
+  const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
+  const uploaded = stats.uploadedBytes24h ?? 0;
+  const remaining = stats.remainingUploadBytes24h ?? DAILY_LIMIT;
+  const isRateLimited = stats.isUploadRateLimited || remaining <= 0;
+  const oldestTs = stats.oldestTransferTimestamp ?? null;
+  const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const nextResetMs = oldestTs ? Math.max(0, oldestTs + ROLLING_WINDOW_MS - now) : 0;
+  return uploaded > 0 && (isRateLimited || nextResetMs > 0);
+}
+
 interface AccountTransferGaugeProps {
   stats?: AccountTransferStats;
   onTimerExpired?: () => void;
+  action?: React.ReactNode;
 }
 
-export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferGaugeProps) {
+export function AccountTransferGauge({ stats, onTimerExpired, action }: AccountTransferGaugeProps) {
   const [now, setNow] = useState<number>(Date.now());
   const timerExpiredRef = useRef<boolean>(false);
 
@@ -702,7 +742,7 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
   const fullResetMs = latestTs ? Math.max(0, latestTs + ROLLING_WINDOW_MS - now) : 0;
 
   // The 24h transfer section only appears if an account is actively counting down
-  if (uploaded <= 0 || (!isRateLimited && nextResetMs <= 0)) {
+  if (!hasActiveTransferStats(stats, now)) {
     return null;
   }
 
@@ -725,7 +765,6 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
         <div
           {...stylex.props(
             styles.transferProgressBarFill,
-            pct >= 70 && styles.transferProgressBarWarning,
             isRateLimited && styles.transferProgressBarBreach
           )}
           style={{ width: `${isRateLimited ? 100 : pct}%` }}
@@ -746,6 +785,7 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
             750 GB available • Window idle
           </span>
         )}
+        {action}
       </div>
     </div>
   );
@@ -1004,11 +1044,23 @@ export function Sidebar({
             const nonTsubasaGb = formatGb(nonTsubasaBytes);
             const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024; // > 10 MB
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
+            const hasTransferGauge = hasActiveTransferStats(acc.transferStats);
             const usedPct = isBreached
               ? 100
               : accountCapacityBytes > 0
                 ? Math.min(100, Math.max(0, Math.round((tsubasaUsedBytes / accountCapacityBytes) * 100)))
                 : 0;
+
+            const changesButton = onOpenExternalChanges ? (
+              <button
+                type="button"
+                {...stylex.props(styles.miniSyncBtn)}
+                onClick={() => onOpenExternalChanges(acc.id)}
+                title="Check external modifications"
+              >
+                Changes
+              </button>
+            ) : null;
 
             return (
               <div key={acc.id} {...stylex.props(styles.accountCard)}>
@@ -1081,14 +1133,20 @@ export function Sidebar({
 
                       <div {...stylex.props(styles.progressBarContainer)}>
                         <div
-                          {...stylex.props(styles.progressBarFill, isBreached && styles.progressBarBreach)}
+                          {...stylex.props(
+                            styles.progressBarFill,
+                            isBreached && styles.progressBarBreach
+                          )}
                           style={{ width: `${usedPct}%` }}
                         />
                       </div>
 
                       {hasNonTsubasaData && (
-                        <div {...stylex.props(styles.externalDriveText)}>
-                          ({nonTsubasaGb} GB already used in Drive)
+                        <div {...stylex.props(styles.externalDriveRow)}>
+                          <span {...stylex.props(styles.externalDriveText)}>
+                            ({nonTsubasaGb} GB already used in Drive)
+                          </span>
+                          {!hasTransferGauge && changesButton}
                         </div>
                       )}
                     </div>
@@ -1096,18 +1154,12 @@ export function Sidebar({
                     <AccountTransferGauge
                       stats={acc.transferStats}
                       onTimerExpired={onRefreshStorage}
+                      action={changesButton}
                     />
 
-                    {onOpenExternalChanges && (
+                    {!hasTransferGauge && !hasNonTsubasaData && changesButton && (
                       <div {...stylex.props(styles.accountActionsRow)}>
-                        <button
-                          type="button"
-                          {...stylex.props(styles.miniSyncBtn)}
-                          onClick={() => onOpenExternalChanges(acc.id)}
-                          title="Check external modifications"
-                        >
-                          Changes
-                        </button>
+                        {changesButton}
                       </div>
                     )}
 
@@ -1126,7 +1178,13 @@ export function Sidebar({
         <div {...stylex.props(styles.footer)}>
           <div {...stylex.props(styles.footerTitle)}>Pooled storage</div>
           <div {...stylex.props(styles.progressBarContainer)}>
-            <div {...stylex.props(styles.progressBarFill)} style={{ width: `${poolPercentage}%` }} />
+            <div
+              {...stylex.props(
+                styles.poolProgressBarFill,
+                poolPercentage >= 100 && styles.progressBarBreach
+              )}
+              style={{ width: `${poolPercentage}%` }}
+            />
           </div>
           <div {...stylex.props(styles.footerStats)}>
             {tsubasaUsedGb} GB used of {poolCapacityGb} GB ({poolPercentage}%)
