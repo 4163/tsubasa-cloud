@@ -26,6 +26,7 @@ interface AccountSummary {
   quotaUsedBytes: number;
   usableLimitBytes: number;
   headroomBytes: number;
+  tsubasaUsedBytes?: number;
   syncState: string;
 }
 
@@ -34,6 +35,7 @@ interface StorageOverview {
   totalLimitBytes: number;
   totalUsedBytes: number;
   totalHeadroomBytes: number;
+  totalTsubasaUsedBytes?: number;
   systemStorage?: {
     systemFilesCount: number;
     systemBytesTotal: number;
@@ -575,6 +577,7 @@ export function App() {
       quotaUsedBytes: summary?.quotaUsedBytes ?? 0,
       usableLimitBytes: summary?.usableLimitBytes ?? 15356127360,
       headroomBytes: summary?.headroomBytes ?? 15356127360,
+      tsubasaUsedBytes: summary?.tsubasaUsedBytes ?? 0,
       syncState: summary?.syncState || 'idle',
       authorized: d.authorized,
     };
@@ -597,7 +600,7 @@ export function App() {
 
       <Sidebar
         accounts={accountItems}
-        tsubasaUsedBytes={storage?.systemStorage?.systemBytesTotal ?? 0}
+        tsubasaUsedBytes={storage?.totalTsubasaUsedBytes ?? storage?.systemStorage?.systemBytesTotal ?? 0}
         poolHeadroomBytes={storage?.totalHeadroomBytes ?? 0}
         totalLimitBytes={storage?.totalLimitBytes ?? 0}
         currentNav={currentNav}

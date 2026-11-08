@@ -33,6 +33,7 @@ export interface AccountStorageSummary {
   quotaUsedBytes: number;
   usableLimitBytes: number;
   headroomBytes: number;
+  tsubasaUsedBytes: number;
   syncState: string;
   transferStats: AccountTransferStats;
 }
@@ -47,6 +48,7 @@ export interface PooledStorageOverview {
   totalLimitBytes: number;
   totalUsedBytes: number;
   totalHeadroomBytes: number;
+  totalTsubasaUsedBytes: number;
   systemStorage: SystemStorageBreakdown;
   accounts: AccountStorageSummary[];
 }
@@ -146,6 +148,23 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
   const allAccounts = await db.select().from(accounts);
   const systemStorage = await getSystemStorageBreakdown();
 
+  const activeFiles = await db
+    .select({
+      accountId: files.accountId,
+      totalBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)`,
+    })
+    .from(files)
+    .where(eq(files.isTrashed, false))
+    .groupBy(files.accountId);
+
+  const tsubasaUsedByAccount = new Map<string, number>();
+  let totalTsubasaUsed = 0;
+  for (const row of activeFiles) {
+    const bytes = Number(row.totalBytes || 0);
+    tsubasaUsedByAccount.set(row.accountId, bytes);
+    totalTsubasaUsed += bytes;
+  }
+
   let totalLimit = 0;
   let totalUsed = 0;
   let totalHeadroom = 0;
@@ -161,6 +180,7 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
     totalHeadroom += headroom;
 
     const transferStats = await getAccountTransferStats(acc.id, nowMs);
+    const tsubasaUsed = tsubasaUsedByAccount.get(acc.id) || 0;
 
     accountSummaries.push({
       id: acc.id,
@@ -171,6 +191,7 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
       quotaUsedBytes: acc.quotaUsedBytes,
       usableLimitBytes: usableLimit,
       headroomBytes: headroom,
+      tsubasaUsedBytes: tsubasaUsed,
       syncState: acc.syncState,
       transferStats,
     });
@@ -181,6 +202,7 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
     totalLimitBytes: totalLimit,
     totalUsedBytes: totalUsed,
     totalHeadroomBytes: totalHeadroom,
+    totalTsubasaUsedBytes: totalTsubasaUsed,
     systemStorage,
     accounts: accountSummaries,
   };

@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconFolder, IconTrash } from './Icons';
+import { AccountAvatar } from './AccountAvatar.js';
 
 export interface AccountItem {
   id: string;
@@ -12,6 +13,7 @@ export interface AccountItem {
   quotaUsedBytes: number;
   usableLimitBytes: number;
   headroomBytes: number;
+  tsubasaUsedBytes?: number;
   syncState: string;
   authorized: boolean;
 }
@@ -217,19 +219,6 @@ const styles = stylex.create({
     gap: spacing.space2,
     minWidth: 0,
   },
-  avatarPill: {
-    width: '24px',
-    height: '24px',
-    borderRadius: radius.pill,
-    backgroundColor: colors.primary,
-    color: colors.surface,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '11px',
-    fontWeight: '600',
-    flexShrink: 0,
-  },
   accountTextGroup: {
     display: 'flex',
     flexDirection: 'column',
@@ -282,6 +271,11 @@ const styles = stylex.create({
   },
   progressBarBreach: {
     backgroundColor: colors.danger,
+  },
+  externalDriveText: {
+    fontSize: '10px',
+    color: colors.dimText,
+    fontVariantNumeric: 'tabular-nums',
   },
   accountActionsRow: {
     display: 'flex',
@@ -491,24 +485,33 @@ export function Sidebar({
         <div {...stylex.props(styles.sectionHeading)}>Connected accounts ({accounts.length})</div>
 
         <div {...stylex.props(styles.accountsList)}>
-          {accounts.map((acc) => {
-            const usedGb = formatGb(acc.quotaUsedBytes);
-            const usableGb = formatGb(acc.usableLimitBytes);
+          {accounts.map((acc, index) => {
+            const tsubasaUsedBytes = acc.tsubasaUsedBytes ?? 0;
+            const accountCapacityBytes = tsubasaUsedBytes + acc.headroomBytes;
+            const tsubasaUsedGb = formatGb(tsubasaUsedBytes);
+            const capacityGb = formatGb(accountCapacityBytes);
             const headroomGb = formatGb(acc.headroomBytes);
+            const driveUsedGb = formatGb(acc.quotaUsedBytes);
+            const nonTsubasaBytes = Math.max(0, acc.quotaUsedBytes - tsubasaUsedBytes);
+            const nonTsubasaGb = formatGb(nonTsubasaBytes);
+            const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024; // > 10 MB
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
-            const pct = isBreached
+            const usedPct = isBreached
               ? 100
-              : acc.usableLimitBytes > 0
-                ? Math.min(100, Math.round((acc.headroomBytes / acc.usableLimitBytes) * 100))
+              : accountCapacityBytes > 0
+                ? Math.min(100, Math.max(0, Math.round((tsubasaUsedBytes / accountCapacityBytes) * 100)))
                 : 0;
 
             return (
               <div key={acc.id} {...stylex.props(styles.accountCard)}>
                 <div {...stylex.props(styles.accountTop)}>
                   <div {...stylex.props(styles.accountNameGroup)}>
-                    <div {...stylex.props(styles.avatarPill)}>
-                      {acc.displayName ? acc.displayName[0].toUpperCase() : acc.id[0].toUpperCase()}
-                    </div>
+                    <AccountAvatar
+                      avatarUrl={acc.avatarUrl}
+                      displayName={acc.displayName}
+                      email={acc.email}
+                      index={index}
+                    />
                     <div {...stylex.props(styles.accountTextGroup)}>
                       <span {...stylex.props(styles.accountName)}>
                         {acc.displayName || acc.id}
@@ -533,13 +536,16 @@ export function Sidebar({
                 <div {...stylex.props(styles.progressBarContainer)}>
                   <div
                     {...stylex.props(styles.progressBarFill, isBreached && styles.progressBarBreach)}
-                    style={{ width: `${pct}%` }}
+                    style={{ width: `${usedPct}%` }}
                   />
                 </div>
 
                 <div {...stylex.props(styles.accountActionsRow)}>
-                  <span {...stylex.props(styles.quotaMeterText)}>
-                    {headroomGb} GB account headroom ({usedGb} GB is used by Drive)
+                  <span
+                    {...stylex.props(styles.quotaMeterText)}
+                    title={`${headroomGb} GB free headroom remaining (${driveUsedGb} GB total Drive usage)`}
+                  >
+                    {tsubasaUsedGb} / {capacityGb} GB ({usedPct}%)
                   </span>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -567,9 +573,15 @@ export function Sidebar({
                   </div>
                 </div>
 
+                {hasNonTsubasaData && (
+                  <div {...stylex.props(styles.externalDriveText)}>
+                    ({nonTsubasaGb} GB already used in Drive)
+                  </div>
+                )}
+
                 {isBreached && (
                   <div {...stylex.props(styles.breachNotice)}>
-                    750 MB buffer breached ({usedGb} GB). Writes locked.
+                    750 MB buffer breached ({driveUsedGb} GB). Writes locked.
                   </div>
                 )}
               </div>
