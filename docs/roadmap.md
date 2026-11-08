@@ -167,7 +167,7 @@ flowchart TD
 - [x] Implement root folder discovery and creation (`Tsubasa Storage/` per account).
 - [x] Build cold-start reconciliation scanner using `appProperties` queries.
 - [x] Implement incremental synchronization using `drive.changes.list` with page tokens.
-- [~] Document Desktop App OAuth setup guide in UI setup helper and README:
+- [~] Document Desktop App OAuth setup guide in UI setup README:
   - Create client ID with Application Type: **Desktop app** (not Web app).
   - Eliminates `redirect_uri_mismatch` errors on loopback/localhost ports without requiring pre-registered URIs in Google Cloud Console.
   - A single Desktop OAuth Client ID authorizes multiple personal Google accounts.

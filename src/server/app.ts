@@ -126,6 +126,38 @@ const app = new Hono()
     }));
     return c.json({ accounts: list });
   })
+  .post(
+    '/api/accounts/oauth/import',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.filename !== 'string' || typeof body?.content !== 'string') {
+        return c.json({ error: 'filename (string) and content (string) are required' }, 400);
+      }
+      return {
+        filename: body.filename,
+        content: body.content,
+      };
+    }),
+    async (c) => {
+      const { filename, content } = c.req.valid('json');
+      try {
+        const result = await authPool.importCredentials(filename, content);
+        if (!result.success) {
+          return c.json({ error: result.error || 'Failed to import credentials' }, 400);
+        }
+        if (result.authorized && result.accountId) {
+          try {
+            await hydrateAccount(result.accountId);
+          } catch (err) {
+            console.warn(`Hydration deferred for ${result.accountId}:`, err);
+          }
+        }
+        return c.json(result, 201);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
   .get(
     '/api/accounts/auth-url/:id',
     validator('query', (value): { redirect_uri?: string } => {

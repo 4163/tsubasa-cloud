@@ -205,6 +205,7 @@ export function App() {
   const [currentNav, setCurrentNav] = useState<'files' | 'trash'>('files');
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isImporting, setIsImporting] = useState<boolean>(false);
   const [isMobileOpen, setIsMobileOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
@@ -280,6 +281,14 @@ export function App() {
   }, [loadClusterData, loadFiles, currentPath]);
 
   useEffect(() => {
+    function handleFocus() {
+      loadClusterData();
+    }
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [loadClusterData]);
+
+  useEffect(() => {
     if (currentNav === 'trash') {
       loadTrashFiles();
       setConfirmEmptyTrash(false);
@@ -328,19 +337,51 @@ export function App() {
   }
 
   async function handleAuthorizeAccount(accountId: string) {
+    showToast('Authorize link copied to clipboard. Paste it in your browser.');
+  }
+
+  async function handleImportOAuth(file: File) {
+    setIsImporting(true);
+    showToast(`Inspecting credentials from ${file.name}...`);
     try {
-      const res = await client.api.accounts['auth-url'][':id'].$get({
-        param: { id: accountId },
-        query: {},
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if ('url' in data && data.url) {
-          window.location.href = data.url;
+      const text = await file.text();
+
+      if (file.name.toLowerCase().endsWith('.json') || text.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed.web && !parsed.installed) {
+            setErrorNotice(
+              "The uploaded credential is a 'Web application'. Tsubasa requires credentials with Application Type: 'Desktop app' (see docs/roadmap.md lines 170-173)."
+            );
+            return;
+          }
+        } catch {
+          // If JSON parse fails here, server will handle it with validation error
         }
       }
+
+      const res = await client.api.accounts.oauth.import.$post({
+        json: {
+          filename: file.name,
+          content: text,
+        },
+      });
+
+      if (res.ok) {
+        const result = await res.json();
+        showToast(`Imported credentials for "${result.accountId}".`);
+        await loadClusterData();
+        if (!result.authorized) {
+          showToast(`Account "${result.accountId}" added. Click "Authorize" to complete Google sign-in.`);
+        }
+      } else {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        setErrorNotice(err.error || 'Failed to import OAuth credentials');
+      }
     } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : 'Auth URL generation failed');
+      setErrorNotice(`Import error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsImporting(false);
     }
   }
 
@@ -573,10 +614,10 @@ export function App() {
       email: summary?.email || d.accountId,
       displayName: summary?.displayName || d.accountId,
       avatarUrl: summary?.avatarUrl,
-      quotaLimitBytes: summary?.quotaLimitBytes ?? 16106127360,
+      quotaLimitBytes: summary?.quotaLimitBytes ?? (d.authorized ? 16106127360 : 0),
       quotaUsedBytes: summary?.quotaUsedBytes ?? 0,
-      usableLimitBytes: summary?.usableLimitBytes ?? 15356127360,
-      headroomBytes: summary?.headroomBytes ?? 15356127360,
+      usableLimitBytes: summary?.usableLimitBytes ?? (d.authorized ? 15356127360 : 0),
+      headroomBytes: summary?.headroomBytes ?? (d.authorized ? 15356127360 : 0),
       tsubasaUsedBytes: summary?.tsubasaUsedBytes ?? 0,
       syncState: summary?.syncState || 'idle',
       authorized: d.authorized,
@@ -611,6 +652,8 @@ export function App() {
           setExternalChangesAccountId(accId);
           setIsExternalChangesOpen(true);
         }}
+        onImportOAuth={handleImportOAuth}
+        isImporting={isImporting}
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
         onCloseMobile={() => setIsMobileOpen(false)}

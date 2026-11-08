@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolder, IconTrash } from './Icons';
+import { IconFolder, IconTrash, IconPlus } from './Icons';
 import { AccountAvatar } from './AccountAvatar.js';
 
 export interface AccountItem {
@@ -28,6 +28,8 @@ interface SidebarProps {
   onAuthorizeAccount: (id: string) => void;
   onSyncAccount: (id: string) => void;
   onOpenExternalChanges?: (id: string) => void;
+  onImportOAuth?: (file: File) => void;
+  isImporting?: boolean;
   isSyncing: boolean;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
@@ -189,6 +191,85 @@ const styles = stylex.create({
     marginTop: spacing.space4,
     marginBottom: spacing.space2,
   },
+  addAccountWrapper: {
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    marginBottom: spacing.space2,
+  },
+  addAccountButton: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space3,
+    paddingTop: '8px',
+    paddingBottom: '8px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.card,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    backgroundColor: 'transparent',
+    color: colors.primaryText,
+    cursor: 'pointer',
+    textAlign: 'left',
+    boxSizing: 'border-box',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+      borderColor: colors.border,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+      transition: motion.transitionTap,
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
+    },
+  },
+  addAccountIconCircle: {
+    width: '30px',
+    height: '30px',
+    borderRadius: radius.pill,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    backgroundColor: 'transparent',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    color: colors.primaryText,
+  },
+  addAccountTextCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    minWidth: 0,
+    flex: 1,
+  },
+  addAccountLabel: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBody,
+    fontWeight: '600',
+    color: colors.primaryText,
+    lineHeight: '1.2',
+  },
+  addAccountSub: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBadge,
+    color: colors.secondaryText,
+    lineHeight: '1.2',
+  },
+  emptyNotice: {
+    fontSize: '11px',
+    color: colors.dimText,
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    marginBottom: spacing.space2,
+    fontStyle: 'italic',
+  },
   accountsList: {
     display: 'flex',
     flexDirection: 'column',
@@ -305,14 +386,83 @@ const styles = stylex.create({
     color: colors.success,
     fontWeight: '600',
   },
-  pendingPill: {
+  authLinkContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    marginTop: spacing.space1,
+    marginBottom: spacing.space1,
+  },
+  authLinkLabelRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  authLinkLabel: {
+    fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBadge,
-    color: colors.warning,
+    fontWeight: '600',
+    color: colors.dimText,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  authLinkHelp: {
+    fontSize: '10px',
+    color: colors.dimText,
+  },
+  authLinkBox: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
+    paddingTop: '4px',
+    paddingBottom: '4px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    backgroundColor: colors.surface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.compact,
     cursor: 'pointer',
-    textDecoration: 'underline',
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    padding: '0',
+    textAlign: 'left',
+    width: '100%',
+    boxSizing: 'border-box',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+      borderColor: colors.border,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+      transition: motion.transitionTap,
+    },
+  },
+  authLinkBoxCopied: {
+    borderColor: colors.success,
+    backgroundColor: colors.successSurface,
+  },
+  authLinkText: {
+    fontFamily: typography.fontFamilyMono,
+    fontSize: '10px',
+    color: colors.secondaryText,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+    flex: 1,
+  },
+  authLinkCopyTag: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: '10px',
+    fontWeight: '600',
+    color: colors.dimText,
+    flexShrink: 0,
+    paddingLeft: '4px',
+    paddingRight: '4px',
+  },
+  authLinkCopyTagSuccess: {
+    color: colors.success,
   },
   breachNotice: {
     fontSize: '10px',
@@ -351,7 +501,7 @@ const styles = stylex.create({
   },
 });
 
-export function maskEmail(email: string): string {
+function maskEmail(email: string): string {
   if (!email || !email.includes('@')) return email;
   const [user, domain] = email.split('@');
   if (!user || user.length <= 4) return email;
@@ -435,11 +585,79 @@ export function Sidebar({
   onAuthorizeAccount,
   onSyncAccount,
   onOpenExternalChanges,
+  onImportOAuth,
+  isImporting = false,
   isSyncing,
   isMobileOpen = false,
   onCloseMobile,
 }: SidebarProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [authUrls, setAuthUrls] = useState<Record<string, string>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    for (const acc of accounts) {
+      if (!acc.authorized && !authUrls[acc.id]) {
+        fetch(`/api/accounts/auth-url/${encodeURIComponent(acc.id)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.url) {
+              setAuthUrls((prev) => ({ ...prev, [acc.id]: data.url }));
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [accounts, authUrls]);
+
+  const handleCopyAuthUrl = async (accountId: string) => {
+    let url = authUrls[accountId];
+    if (!url) {
+      try {
+        const res = await fetch(`/api/accounts/auth-url/${encodeURIComponent(accountId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          url = data.url;
+          setAuthUrls((prev) => ({ ...prev, [accountId]: data.url }));
+        }
+      } catch {}
+    }
+
+    if (url) {
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopiedId(accountId);
+      setTimeout(() => {
+        setCopiedId((prev) => (prev === accountId ? null : prev));
+      }, 3000);
+      onAuthorizeAccount?.(accountId);
+    }
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onImportOAuth) {
+      onImportOAuth(file);
+    }
+    e.target.value = '';
+  };
+
   const formatGb = (bytes: number) => (bytes / (1024 * 1024 * 1024)).toFixed(2);
+
+  const authorizedAccounts = accounts.filter((a) => a.authorized);
+  const authorizedCount = authorizedAccounts.length;
 
   const poolCapacityBytes = tsubasaUsedBytes + poolHeadroomBytes;
   const tsubasaUsedGb = formatGb(tsubasaUsedBytes);
@@ -482,7 +700,46 @@ export function Sidebar({
           </button>
         </nav>
 
-        <div {...stylex.props(styles.sectionHeading)}>Connected accounts ({accounts.length})</div>
+        <div {...stylex.props(styles.sectionHeading)}>
+          Connected accounts ({authorizedCount})
+        </div>
+
+        {onImportOAuth && (
+          <div {...stylex.props(styles.addAccountWrapper)}>
+            <button
+              type="button"
+              {...stylex.props(styles.addAccountButton)}
+              onClick={handleImportClick}
+              disabled={isImporting}
+              aria-label="Add account"
+            >
+              <div {...stylex.props(styles.addAccountIconCircle)}>
+                <IconPlus size={14} strokeWidth={2.5} />
+              </div>
+              <div {...stylex.props(styles.addAccountTextCol)}>
+                <span {...stylex.props(styles.addAccountLabel)}>
+                  {isImporting ? 'Inspecting credential...' : 'Add account'}
+                </span>
+                <span {...stylex.props(styles.addAccountSub)}>
+                  Import OAuth credentials
+                </span>
+              </div>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+          </div>
+        )}
+
+        {accounts.length === 0 && (
+          <div {...stylex.props(styles.emptyNotice)}>
+            No accounts connected yet. Add an account to begin pooling storage.
+          </div>
+        )}
 
         <div {...stylex.props(styles.accountsList)}>
           {accounts.map((acc, index) => {
@@ -520,69 +777,93 @@ export function Sidebar({
                     </div>
                   </div>
 
-                  {acc.authorized ? (
+                  {acc.authorized && (
                     <span {...stylex.props(styles.authPill)}>Active</span>
-                  ) : (
-                    <button
-                      type="button"
-                      {...stylex.props(styles.pendingPill)}
-                      onClick={() => onAuthorizeAccount(acc.id)}
-                    >
-                      Authorize
-                    </button>
                   )}
                 </div>
 
-                <div {...stylex.props(styles.progressBarContainer)}>
-                  <div
-                    {...stylex.props(styles.progressBarFill, isBreached && styles.progressBarBreach)}
-                    style={{ width: `${usedPct}%` }}
-                  />
-                </div>
-
-                <div {...stylex.props(styles.accountActionsRow)}>
-                  <span
-                    {...stylex.props(styles.quotaMeterText)}
-                    title={`${headroomGb} GB free headroom remaining (${driveUsedGb} GB total Drive usage)`}
-                  >
-                    {tsubasaUsedGb} / {capacityGb} GB ({usedPct}%)
-                  </span>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    {acc.authorized && onOpenExternalChanges && (
-                      <button
-                        type="button"
-                        {...stylex.props(styles.miniSyncBtn)}
-                        onClick={() => onOpenExternalChanges(acc.id)}
-                        title="Check external modifications"
+                {!acc.authorized && (
+                  <div {...stylex.props(styles.authLinkContainer)}>
+                    <div {...stylex.props(styles.authLinkLabelRow)}>
+                      <span {...stylex.props(styles.authLinkLabel)}>Authorize link</span>
+                      <span {...stylex.props(styles.authLinkHelp)}>Click to copy</span>
+                    </div>
+                    <button
+                      type="button"
+                      {...stylex.props(
+                        styles.authLinkBox,
+                        copiedId === acc.id && styles.authLinkBoxCopied
+                      )}
+                      onClick={() => handleCopyAuthUrl(acc.id)}
+                      aria-label="Copy authorize link"
+                    >
+                      <span {...stylex.props(styles.authLinkText)}>
+                        {authUrls[acc.id] || 'Generating authorize link...'}
+                      </span>
+                      <span
+                        {...stylex.props(
+                          styles.authLinkCopyTag,
+                          copiedId === acc.id && styles.authLinkCopyTagSuccess
+                        )}
                       >
-                        Changes
-                      </button>
-                    )}
-
-                    {acc.authorized && (
-                      <button
-                        type="button"
-                        {...stylex.props(styles.miniSyncBtn)}
-                        onClick={() => onSyncAccount(acc.id)}
-                        disabled={isSyncing}
-                      >
-                        Sync
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {hasNonTsubasaData && (
-                  <div {...stylex.props(styles.externalDriveText)}>
-                    ({nonTsubasaGb} GB already used in Drive)
+                        {copiedId === acc.id ? 'Copied' : 'Copy'}
+                      </span>
+                    </button>
                   </div>
                 )}
 
-                {isBreached && (
-                  <div {...stylex.props(styles.breachNotice)}>
-                    750 MB buffer breached ({driveUsedGb} GB). Writes locked.
-                  </div>
+                {acc.authorized && (
+                  <>
+                    <div {...stylex.props(styles.progressBarContainer)}>
+                      <div
+                        {...stylex.props(styles.progressBarFill, isBreached && styles.progressBarBreach)}
+                        style={{ width: `${usedPct}%` }}
+                      />
+                    </div>
+
+                    <div {...stylex.props(styles.accountActionsRow)}>
+                      <span
+                        {...stylex.props(styles.quotaMeterText)}
+                        title={`${headroomGb} GB free headroom remaining (${driveUsedGb} GB total Drive usage)`}
+                      >
+                        {tsubasaUsedGb} / {capacityGb} GB ({usedPct}%)
+                      </span>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {onOpenExternalChanges && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniSyncBtn)}
+                            onClick={() => onOpenExternalChanges(acc.id)}
+                            title="Check external modifications"
+                          >
+                            Changes
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          {...stylex.props(styles.miniSyncBtn)}
+                          onClick={() => onSyncAccount(acc.id)}
+                          disabled={isSyncing}
+                        >
+                          Sync
+                        </button>
+                      </div>
+                    </div>
+
+                    {hasNonTsubasaData && (
+                      <div {...stylex.props(styles.externalDriveText)}>
+                        ({nonTsubasaGb} GB already used in Drive)
+                      </div>
+                    )}
+
+                    {isBreached && (
+                      <div {...stylex.props(styles.breachNotice)}>
+                        750 MB buffer breached ({driveUsedGb} GB). Writes locked.
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             );
@@ -598,7 +879,7 @@ export function Sidebar({
             {tsubasaUsedGb} GB used of {poolCapacityGb} GB ({poolPercentage}%)
           </div>
           <div {...stylex.props(styles.footerHeadroom)}>
-            {poolHeadroomGb} GB free across {accounts.length} {accounts.length === 1 ? 'account' : 'accounts'} (each account has a safety buffer of 750 MB)
+            {poolHeadroomGb} GB free across {authorizedCount} {authorizedCount === 1 ? 'account' : 'accounts'} (each account has a safety buffer of 750 MB)
           </div>
         </div>
       </aside>
