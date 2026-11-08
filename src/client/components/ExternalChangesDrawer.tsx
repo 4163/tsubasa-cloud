@@ -430,6 +430,33 @@ export function ExternalChangesDrawer({
     }
   };
 
+  const handleRemoveMissing = async (item: { driveFileId: string; accountId: string }) => {
+    setActiveActionId(item.driveFileId);
+    setStatusNotice(null);
+    try {
+      const res = await fetch('/api/sync/resolve/remove-missing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: item.accountId,
+          driveFileId: item.driveFileId,
+        }),
+      });
+
+      if (res.ok) {
+        await scanAccount(selectedAccount);
+        await onResolved();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setStatusNotice(err.error || 'Failed to remove missing file');
+      }
+    } catch (err) {
+      setStatusNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActiveActionId(null);
+    }
+  };
+
   const handleAutoRebalance = async () => {
     if (!selectedAccount) return;
     setActiveActionId('rebalance');
@@ -617,6 +644,42 @@ export function ExternalChangesDrawer({
                         disabled={activeActionId === item.driveFileId}
                       >
                         Accept update
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Missing or externally moved files */}
+          {report?.missingRemote && report.missingRemote.length > 0 && (
+            <div>
+              <h3 {...stylex.props(styles.sectionTitle)}>
+                <IconAlertTriangle size={16} color={colors.warning} />
+                Missing or externally moved files
+              </h3>
+              <p {...stylex.props(styles.cardDesc)}>
+                These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                {report.missingRemote.map((item) => (
+                  <div key={item.driveFileId} {...stylex.props(styles.card)}>
+                    <div {...stylex.props(styles.fileHeaderRow)}>
+                      <div {...stylex.props(styles.fileTitleGroup)}>
+                        <IconFile size={16} />
+                        <span {...stylex.props(styles.fileName)}>{item.virtualPath}</span>
+                      </div>
+                    </div>
+
+                    <div {...stylex.props(styles.actionsRow)}>
+                      <button
+                        type="button"
+                        {...stylex.props(styles.btnDanger)}
+                        onClick={() => handleRemoveMissing(item)}
+                        disabled={activeActionId === item.driveFileId}
+                      >
+                        Remove from Tsubasa
                       </button>
                     </div>
                   </div>

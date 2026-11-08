@@ -139,3 +139,48 @@ export async function ensureRootFolder(drive: drive_v3.Drive): Promise<string> {
   return createRes.data.id;
 }
 
+/**
+ * Resolves all folder IDs descendant from rootFolderId (including rootFolderId itself).
+ * Used to verify whether files reside inside the Tsubasa storage pool.
+ */
+export async function getDescendantFolderIds(
+  drive: drive_v3.Drive,
+  rootFolderId: string
+): Promise<Set<string>> {
+  const folderSet = new Set<string>([rootFolderId]);
+  let pageToken: string | undefined = undefined;
+  const folderList: Array<{ id: string; parents: string[] }> = [];
+
+  do {
+    const res: any = await drive.files.list({
+      q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+      fields: 'nextPageToken, files(id, parents)',
+      pageSize: 1000,
+      pageToken,
+      spaces: 'drive',
+      supportsAllDrives: false,
+    });
+
+    for (const folder of res.data.files || []) {
+      if (folder.id) {
+        folderList.push({ id: folder.id, parents: folder.parents || [] });
+      }
+    }
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  let addedNew = true;
+  while (addedNew) {
+    addedNew = false;
+    for (const folder of folderList) {
+      if (!folderSet.has(folder.id) && folder.parents.some((p) => folderSet.has(p))) {
+        folderSet.add(folder.id);
+        addedNew = true;
+      }
+    }
+  }
+
+  return folderSet;
+}
+
+

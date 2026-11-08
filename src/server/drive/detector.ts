@@ -2,7 +2,7 @@ import path from 'node:path';
 import { db } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { getDriveClient } from './client.js';
+import { getDriveClient, getDescendantFolderIds } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 
@@ -42,6 +42,8 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
   }
 
   const drive = getDriveClient(accountId);
+  const validFolderIds = await getDescendantFolderIds(drive, account.rootFolderId);
+
   const knownFiles = await db.query.files.findMany({
     where: and(eq(files.accountId, accountId), eq(files.isTrashed, false)),
   });
@@ -56,67 +58,74 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
   const modified: ExternalFileDiscrepancy[] = [];
   const overCeiling: ExternalFileDiscrepancy[] = [];
 
-  let pageToken: string | undefined = undefined;
+  const folderIdList = Array.from(validFolderIds);
+  const CHUNK_SIZE = 20;
 
-  do {
-    const listRes: any = await drive.files.list({
-      q: `'${account.rootFolderId}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, appProperties)',
-      pageSize: 1000,
-      pageToken,
-      spaces: 'drive',
-      supportsAllDrives: false,
-    });
+  for (let i = 0; i < folderIdList.length; i += CHUNK_SIZE) {
+    const chunk = folderIdList.slice(i, i + CHUNK_SIZE);
+    const parentQuery = chunk.map((id) => `'${id}' in parents`).join(' or ');
+    let pageToken: string | undefined = undefined;
 
-    for (const remote of listRes.data.files || []) {
-      if (!remote.id || !remote.name) continue;
-      foundRemoteIds.add(remote.id);
+    do {
+      const listRes: any = await drive.files.list({
+        q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, appProperties)',
+        pageSize: 1000,
+        pageToken,
+        spaces: 'drive',
+        supportsAllDrives: false,
+      });
 
-      const sizeBytes = Number(remote.size || 0);
-      const virtualPath = normalizeVirtualPath(
-        remote.appProperties?.tsubasa_virtual_path || `/${remote.name}`
-      );
-      const isOverCeiling = sizeBytes > MAX_SINGLE_FILE_BYTES;
+      for (const remote of listRes.data.files || []) {
+        if (!remote.id || !remote.name) continue;
+        foundRemoteIds.add(remote.id);
 
-      if (isOverCeiling) {
-        overCeiling.push({
-          driveFileId: remote.id,
-          name: remote.name,
-          virtualPath,
-          sizeBytes,
-          mimeType: remote.mimeType || 'application/octet-stream',
-          accountId,
-          discrepancyType: 'over_ceiling',
-        });
-        continue;
+        const sizeBytes = Number(remote.size || 0);
+        const virtualPath = normalizeVirtualPath(
+          remote.appProperties?.tsubasa_virtual_path || `/${remote.name}`
+        );
+        const isOverCeiling = sizeBytes > MAX_SINGLE_FILE_BYTES;
+
+        if (isOverCeiling) {
+          overCeiling.push({
+            driveFileId: remote.id,
+            name: remote.name,
+            virtualPath,
+            sizeBytes,
+            mimeType: remote.mimeType || 'application/octet-stream',
+            accountId,
+            discrepancyType: 'over_ceiling',
+          });
+          continue;
+        }
+
+        const existing = knownMapByDriveId.get(remote.id);
+        if (!existing) {
+          unindexed.push({
+            driveFileId: remote.id,
+            name: remote.name,
+            virtualPath,
+            sizeBytes,
+            mimeType: remote.mimeType || 'application/octet-stream',
+            accountId,
+            discrepancyType: 'unindexed',
+          });
+        } else if (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) {
+          modified.push({
+            driveFileId: remote.id,
+            name: remote.name,
+            virtualPath,
+            sizeBytes,
+            mimeType: remote.mimeType || 'application/octet-stream',
+            accountId,
+            discrepancyType: 'modified',
+          });
+        }
       }
 
-      const existing = knownMapByDriveId.get(remote.id);
-      if (!existing) {
-        unindexed.push({
-          driveFileId: remote.id,
-          name: remote.name,
-          virtualPath,
-          sizeBytes,
-          mimeType: remote.mimeType || 'application/octet-stream',
-          accountId,
-          discrepancyType: 'unindexed',
-        });
-      } else if (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) {
-        modified.push({
-          driveFileId: remote.id,
-          name: remote.name,
-          virtualPath,
-          sizeBytes,
-          mimeType: remote.mimeType || 'application/octet-stream',
-          accountId,
-          discrepancyType: 'modified',
-        });
-      }
-    }
-
-    pageToken = listRes.data.nextPageToken || undefined;
-  } while (pageToken);
+      pageToken = listRes.data.nextPageToken || undefined;
+    } while (pageToken);
+  }
 
   const missingRemote: MissingFileDiscrepancy[] = [];
   for (const kf of knownFiles) {
@@ -227,4 +236,27 @@ export async function ejectFileToDriveRoot(accountId: string, driveFileId: strin
 
   await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
 }
+
+export async function removeMissingFile(accountId: string, driveFileId: string): Promise<void> {
+  const drive = getDriveClient(accountId);
+
+  try {
+    await drive.files.update({
+      fileId: driveFileId,
+      requestBody: {
+        appProperties: {
+          tsubasa_managed: null,
+          tsubasa_virtual_path: null,
+          tsubasa_virtual_id: null,
+        } as any,
+      },
+      supportsAllDrives: false,
+    });
+  } catch {
+    // Non-fatal if the file was deleted from Drive entirely
+  }
+
+  await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
+}
+
 

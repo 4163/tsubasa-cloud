@@ -21,6 +21,7 @@ import {
   scanAccountDiscrepancies,
   acceptExternalFile,
   ejectFileToDriveRoot,
+  removeMissingFile,
   rebalanceFile,
   executeAutoRebalance,
 } from './drive/index.js';
@@ -482,6 +483,25 @@ const app = new Hono()
       const { accountId, driveFileId } = c.req.valid('json');
       try {
         await ejectFileToDriveRoot(accountId, driveFileId);
+        return c.json({ success: true, accountId, driveFileId });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/resolve/remove-missing',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.accountId !== 'string' || typeof body?.driveFileId !== 'string') {
+        return c.json({ error: 'accountId and driveFileId required' }, 400);
+      }
+      return { accountId: body.accountId, driveFileId: body.driveFileId };
+    }),
+    async (c) => {
+      const { accountId, driveFileId } = c.req.valid('json');
+      try {
+        await removeMissingFile(accountId, driveFileId);
         return c.json({ success: true, accountId, driveFileId });
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);

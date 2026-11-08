@@ -1,7 +1,7 @@
-import { getDriveClient } from './client.js';
+import { getDriveClient, getDescendantFolderIds } from './client.js';
 import { db, sqlite } from '../db/index.js';
-import { accounts } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { accounts, files } from '../db/schema.js';
+import { eq, and } from 'drizzle-orm';
 import path from 'node:path';
 
 export interface ColdSyncReport {
@@ -101,6 +101,7 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       throw new Error(`Account ${accountId} does not have a registered root folder`);
     }
 
+    const validFolderIds = await getDescendantFolderIds(drive, accountRecord.rootFolderId);
     const discoveredFiles: DiscoveredFile[] = [];
     const discoveredFolderPaths = new Set<string>();
 
@@ -109,7 +110,7 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
     do {
       const res: any = await drive.files.list({
         q: "appProperties has { key='tsubasa_managed' and value='true' }",
-        fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, appProperties)',
+        fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, parents, appProperties)',
         pageSize: 1000,
         pageToken,
         spaces: 'drive',
@@ -118,6 +119,24 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
 
       for (const item of res.data.files || []) {
         if (!item.id || !item.name) continue;
+
+        const isInside = Boolean(item.parents?.some((p: string) => validFolderIds.has(p)));
+        if (!isInside) {
+          drive.files
+            .update({
+              fileId: item.id,
+              requestBody: {
+                appProperties: {
+                  tsubasa_managed: null,
+                  tsubasa_virtual_path: null,
+                  tsubasa_virtual_id: null,
+                } as any,
+              },
+              supportsAllDrives: false,
+            })
+            .catch(() => {});
+          continue;
+        }
 
         const virtualPath = item.appProperties?.tsubasa_virtual_path || `/${item.name}`;
         const fileId = item.appProperties?.tsubasa_virtual_id || item.id;
@@ -143,6 +162,12 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       pageToken = res.data.nextPageToken || undefined;
     } while (pageToken);
 
+    const localAccountFiles = await db.query.files.findMany({
+      where: and(eq(files.accountId, accountId), eq(files.isTrashed, false)),
+    });
+
+    const discoveredDriveIds = new Set(discoveredFiles.map((f) => f.driveFileId));
+
     const applySync = sqlite.transaction(() => {
       for (const folderPath of discoveredFolderPaths) {
         insertFolderRecord(folderPath);
@@ -150,6 +175,12 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
 
       for (const f of discoveredFiles) {
         upsertFileRecord(f);
+      }
+
+      for (const lf of localAccountFiles) {
+        if (!discoveredDriveIds.has(lf.driveFileId)) {
+          deleteFileStmt.run(lf.driveFileId, accountId);
+        }
       }
     });
 
