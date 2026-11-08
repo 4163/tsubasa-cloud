@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { validator } from 'hono/validator';
 import { db, sqlite } from './db/index.js';
 import { accounts, files, folders } from './db/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, like, or } from 'drizzle-orm';
 import {
   authPool,
   hydrateAccount,
@@ -216,6 +216,73 @@ const app = new Hono()
       });
     }
   )
+  .post(
+    '/api/folders',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.virtualPath !== 'string' || typeof body?.name !== 'string') {
+        return c.json({ error: 'virtualPath (string) and name (string) are required' }, 400);
+      }
+      return {
+        virtualPath: body.virtualPath,
+        name: body.name,
+      };
+    }),
+    async (c) => {
+      const { virtualPath, name } = c.req.valid('json');
+      const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
+      try {
+        await db
+          .insert(folders)
+          .values({
+            id: normalizedPath,
+            virtualPath: normalizedPath,
+            name,
+          })
+          .onConflictDoNothing();
+
+        return c.json({ id: normalizedPath, virtualPath: normalizedPath, name }, 201);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .delete('/api/folders', async (c) => {
+    const virtualPath = c.req.query('virtualPath') || c.req.query('path') || c.req.query('id');
+    if (!virtualPath) {
+      return c.json({ error: 'virtualPath query parameter required' }, 400);
+    }
+    const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
+    try {
+      // Soft-trash descendant files
+      await db
+        .update(files)
+        .set({ isTrashed: true, trashedAt: new Date() })
+        .where(
+          or(
+            like(files.virtualPath, `${normalizedPath}/%`),
+            eq(files.folderId, normalizedPath),
+            eq(files.folderId, virtualPath)
+          )
+        );
+
+      // Delete folder and nested folders
+      await db
+        .delete(folders)
+        .where(
+          or(
+            eq(folders.virtualPath, normalizedPath),
+            like(folders.virtualPath, `${normalizedPath}/%`),
+            eq(folders.id, normalizedPath),
+            eq(folders.id, virtualPath)
+          )
+        );
+
+      return c.json({ success: true, virtualPath: normalizedPath });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
   .post(
     '/api/files/upload/session',
     validator('json', (value, c) => {

@@ -82,25 +82,39 @@ export async function hydrateAccount(accountId: string): Promise<AccountHydratio
   };
 }
 
+export const ROOT_FOLDER_NAME = '_Tsubasa~ Cloud';
+export const LEGACY_ROOT_FOLDER_NAME = 'Tsubasa Storage';
+
 export async function ensureRootFolder(drive: drive_v3.Drive): Promise<string> {
-  const query = "mimeType = 'application/vnd.google-apps.folder' and name = 'Tsubasa Storage' and 'root' in parents and trashed = false";
+  const query = `mimeType = 'application/vnd.google-apps.folder' and (name = '${ROOT_FOLDER_NAME}' or name = '${LEGACY_ROOT_FOLDER_NAME}') and 'root' in parents and trashed = false`;
   const searchRes = await drive.files.list({
     q: query,
     spaces: 'drive',
     fields: 'files(id, name)',
-    pageSize: 1,
+    pageSize: 2,
   });
 
   if (searchRes.data.files && searchRes.data.files.length > 0) {
-    const existing = searchRes.data.files[0];
+    const existing =
+      searchRes.data.files.find((f) => f.name === ROOT_FOLDER_NAME) || searchRes.data.files[0];
     if (existing.id) {
+      if (existing.name === LEGACY_ROOT_FOLDER_NAME) {
+        try {
+          await drive.files.update({
+            fileId: existing.id,
+            requestBody: { name: ROOT_FOLDER_NAME },
+          });
+        } catch {
+          // Non-fatal if rename cannot be applied immediately
+        }
+      }
       return existing.id;
     }
   }
 
   const createRes = await drive.files.create({
     requestBody: {
-      name: 'Tsubasa Storage',
+      name: ROOT_FOLDER_NAME,
       mimeType: 'application/vnd.google-apps.folder',
       parents: ['root'],
       appProperties: {
@@ -111,7 +125,7 @@ export async function ensureRootFolder(drive: drive_v3.Drive): Promise<string> {
   });
 
   if (!createRes.data.id) {
-    throw new Error('Failed to create Tsubasa Storage root folder in Google Drive');
+    throw new Error(`Failed to create ${ROOT_FOLDER_NAME} root folder in Google Drive`);
   }
 
   return createRes.data.id;
