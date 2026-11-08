@@ -1,7 +1,7 @@
 import React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon } from './Icons';
+import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub } from './Icons';
 
 export type ThemeChoice = 'auto' | 'light' | 'dark';
 
@@ -110,6 +110,7 @@ const styles = stylex.create({
   themeSelector: {
     display: 'inline-flex',
     alignItems: 'center',
+    height: '28px',
     backgroundColor: colors.surfaceAlt,
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -127,8 +128,7 @@ const styles = stylex.create({
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBadge,
     fontWeight: '500',
-    paddingTop: '3px',
-    paddingBottom: '3px',
+    height: '22px',
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
     cursor: 'pointer',
@@ -159,6 +159,44 @@ const styles = stylex.create({
   iconSvg: {
     width: '13px',
     height: '13px',
+  },
+  githubLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.button,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    color: colors.secondaryText,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '500',
+    textDecoration: 'none',
+    boxSizing: 'border-box',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.surface,
+      color: colors.primaryText,
+      borderColor: colors.border,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+      transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${colors.focusRing}`,
+      outlineOffset: '2px',
+    },
+  },
+  githubText: {
+    '@media (max-width: 600px)': {
+      display: 'none',
+    },
   },
 });
 
@@ -237,6 +275,18 @@ export function Header({
             Dark
           </button>
         </div>
+
+        <a
+          href="https://github.com/4163/tsubasa-cloud"
+          target="_blank"
+          rel="noopener noreferrer"
+          {...stylex.props(styles.githubLink)}
+          aria-label="GitHub repository"
+          title="GitHub repository"
+        >
+          <IconGitHub size={14} />
+          <span {...stylex.props(styles.githubText)}>GitHub</span>
+        </a>
       </div>
     </header>
   );
