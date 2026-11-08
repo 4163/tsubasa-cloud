@@ -189,7 +189,7 @@ flowchart TD
 - [x] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
 
 ### Phase 5: UI evaluation and consolidated React + StyleX UI
-- [~] **Phase 5.1: REA-driven design teardown (Google Drive, MEGA, Dropbox, Hanekawa, and QuiviT Sage Mint)**
+- [x] **Phase 5.1: REA-driven design teardown (Google Drive, MEGA, Dropbox, Hanekawa, and QuiviT Sage Mint)**
   - Extract layout metrics, row padding, typography scales, and selection states from Google Drive (`docs/teardowns/google-drive.md`).
   - Extract shell layout, sidebar storage meters, compact 32px row metrics, and context menus from MEGA desktop (`docs/teardowns/mega.md`).
   - Extract mobile shell layout, 64px touch rows, bottom sheet menus, and navigation drawer from MEGA mobile (`docs/teardowns/mega-mobile.md`).
@@ -198,14 +198,14 @@ flowchart TD
   - Extract scale-adaptive sprite geometry, dither palettes, and bubble physics from Hanekawa (`docs/teardowns/hanekawa.md`).
   - Extract 20px table row metrics, panel docking ranges, and sage-mint tokens from QuiviT (`docs/teardowns/quivit-sage-mint.md`).
   - Formulate StyleX design systems (color tokens, AAA contrast, spacing scales, dark and light modes in `tokens.google-drive.stylex.ts`, `tokens.mega.stylex.ts`, `tokens.dropbox.stylex.ts`, `tokens.hanekawa.stylex.ts`, and `tokens.quivit-sage-mint.stylex.ts`).
-- [ ] **Phase 5.2: Application shell and views**
-  - Build main layout shell (sidebar, breadcrumbs, search bar).
-  - Build pool status header (aggregated storage bar, account quota badges, 24-hour transfer dials).
-  - Build virtualized file explorer table using TanStack Virtual.
-  - Build drag-and-drop upload drawer with allocation preview and transfer progress bars.
-  - Build external modification notification drawer with "Accept into Tsubasa", "Move to root", and "Rebalance" actions.
-  - Build buffer breach warning banners for locked over-ceiling accounts.
-  - Build trash management modal with restore and purge actions.
+- [~] **Phase 5.2: Application shell and views**
+  - [x] Build main layout shell (sidebar, breadcrumbs, search bar, zero-pop-in theme mode switcher).
+  - [x] Build pool status sidebar (isolated Tsubasa storage meter, per-account headroom cards, 24-hour transfer status).
+  - [x] Build virtualized file explorer table using TanStack Virtual (fixed 32px rows, folder navigation, inline actions).
+  - [x] Build buffer breach warning banners for locked over-ceiling accounts.
+  - [ ] Build drag-and-drop upload drawer with allocation preview and transfer progress bars.
+  - [ ] Build external modification notification drawer with "Accept into Tsubasa", "Move to root", and "Rebalance" actions.
+  - [ ] Build trash management modal with restore and purge actions.
 
 ### Phase 6: Durability verification and performance tuning
 - [ ] Benchmark local SQLite query latency under 100,000 file records.
