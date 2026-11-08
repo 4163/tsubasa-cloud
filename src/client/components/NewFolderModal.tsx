@@ -262,7 +262,7 @@ export function NewFolderModal({
 
         <form onSubmit={handleSubmit}>
           <div {...stylex.props(styles.body)}>
-            <div {...stylex.props(styles.pathHint)} title={`Inside ${currentPath}`}>
+            <div {...stylex.props(styles.pathHint)}>
               Location: {currentPath === '/' ? '/ (Root)' : currentPath}
             </div>
 

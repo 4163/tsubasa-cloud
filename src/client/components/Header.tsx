@@ -249,7 +249,7 @@ export function Header({
             type="button"
             {...stylex.props(styles.themeBtn, theme === 'auto' && styles.themeBtnActive)}
             onClick={() => onThemeChange('auto')}
-            title="Follow system theme"
+            aria-label="Follow system theme"
           >
             <IconMonitor {...stylex.props(styles.iconSvg)} />
             Auto
@@ -259,7 +259,7 @@ export function Header({
             type="button"
             {...stylex.props(styles.themeBtn, theme === 'light' && styles.themeBtnActive)}
             onClick={() => onThemeChange('light')}
-            title="Light mode"
+            aria-label="Light mode"
           >
             <IconSun {...stylex.props(styles.iconSvg)} />
             Light
@@ -269,7 +269,7 @@ export function Header({
             type="button"
             {...stylex.props(styles.themeBtn, theme === 'dark' && styles.themeBtnActive)}
             onClick={() => onThemeChange('dark')}
-            title="Dark mode"
+            aria-label="Dark mode"
           >
             <IconMoon {...stylex.props(styles.iconSvg)} />
             Dark
@@ -282,7 +282,6 @@ export function Header({
           rel="noopener noreferrer"
           {...stylex.props(styles.githubLink)}
           aria-label="GitHub repository"
-          title="GitHub repository"
         >
           <IconGitHub size={14} />
           <span {...stylex.props(styles.githubText)}>GitHub</span>

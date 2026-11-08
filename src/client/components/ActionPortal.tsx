@@ -335,7 +335,7 @@ export function ActionPortal({
                   type="button"
                   {...stylex.props(styles.secondaryBtn, styles.deleteSelectedBtn)}
                   onClick={onDeleteSelected}
-                  title="Delete selected item(s)"
+                  aria-label="Delete selected items"
                 >
                   <IconTrash size={14} />
                   Delete

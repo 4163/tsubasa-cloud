@@ -869,7 +869,7 @@ export function FileTable({
                         <button
                           type="button"
                           {...stylex.props(styles.rowBtn)}
-                          title="Open parent folder"
+                          aria-label="Open parent folder"
                           onClick={(e) => {
                             e.stopPropagation();
                             onNavigate(item.path);
@@ -931,7 +931,7 @@ export function FileTable({
                           <button
                             type="button"
                             {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                            title="Delete folder"
+                            aria-label="Delete folder"
                             onClick={(e) => {
                               e.stopPropagation();
                               onDeleteFolder(folder);
@@ -943,7 +943,7 @@ export function FileTable({
                         <button
                           type="button"
                           {...stylex.props(styles.rowBtn)}
-                          title="Open folder"
+                          aria-label="Open folder"
                           onClick={(e) => {
                             e.stopPropagation();
                             onNavigate(folder.virtualPath);
@@ -997,7 +997,7 @@ export function FileTable({
                       </div>
 
                       <div>
-                        <span {...stylex.props(styles.accountPill)} title={`Stored on account ${file.accountId}`}>
+                        <span {...stylex.props(styles.accountPill)}>
                           {file.accountId}
                         </span>
                       </div>
@@ -1015,7 +1015,7 @@ export function FileTable({
                           <button
                             type="button"
                             {...stylex.props(styles.rowBtn)}
-                            title="Restore to original location"
+                            aria-label="Restore to original location"
                             onClick={(e) => {
                               e.stopPropagation();
                               onRestore(file);
@@ -1029,7 +1029,7 @@ export function FileTable({
                           <button
                             type="button"
                             {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                            title="Delete permanently from Google Drive"
+                            aria-label="Delete permanently from Google Drive"
                             onClick={(e) => {
                               e.stopPropagation();
                               onPermanentDelete(file);
@@ -1080,7 +1080,7 @@ export function FileTable({
                     </div>
 
                     <div>
-                      <span {...stylex.props(styles.accountPill)} title={`Stored on account ${file.accountId}`}>
+                      <span {...stylex.props(styles.accountPill)}>
                         {file.accountId}
                       </span>
                     </div>
@@ -1097,7 +1097,7 @@ export function FileTable({
                       <button
                         type="button"
                         {...stylex.props(styles.rowBtn)}
-                        title="Download file"
+                        aria-label="Download file"
                         onClick={(e) => {
                           e.stopPropagation();
                           onDownload(file);
@@ -1109,7 +1109,7 @@ export function FileTable({
                       <button
                         type="button"
                         {...stylex.props(styles.rowBtn)}
-                        title="Move to trash"
+                        aria-label="Move to trash"
                         onClick={(e) => {
                           e.stopPropagation();
                           onTrash(file);

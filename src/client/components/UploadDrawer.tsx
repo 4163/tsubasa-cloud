@@ -602,7 +602,7 @@ export function UploadDrawer({
                   <div {...stylex.props(styles.fileInfoGroup)}>
                     <IconFile size={16} {...stylex.props(styles.fileIcon)} />
                     <div {...stylex.props(styles.fileTextGroup)}>
-                      <span {...stylex.props(styles.fileName)} title={file.name}>
+                      <span {...stylex.props(styles.fileName)}>
                         {file.name}
                       </span>
                       <span {...stylex.props(styles.fileMeta)}>{formatBytes(file.size)}</span>
@@ -622,7 +622,7 @@ export function UploadDrawer({
                       Failed
                     </span>
                   ) : preview?.targetAccountId ? (
-                    <span {...stylex.props(styles.badge)} title={`Allocated to account ${preview.targetAccountId}`}>
+                    <span {...stylex.props(styles.badge)}>
                       {preview.targetAccountId}
                     </span>
                   ) : planError ? (

@@ -481,10 +481,10 @@ export function TrashModal({ isOpen, onClose, onActionComplete }: TrashModalProp
               <div {...stylex.props(styles.itemInfo)}>
                 <IconFile size={16} {...stylex.props(styles.itemIcon)} />
                 <div {...stylex.props(styles.itemTexts)}>
-                  <span {...stylex.props(styles.itemName)} title={file.name}>
+                  <span {...stylex.props(styles.itemName)}>
                     {file.name}
                   </span>
-                  <span {...stylex.props(styles.itemPath)} title={file.virtualPath}>
+                  <span {...stylex.props(styles.itemPath)}>
                     {file.virtualPath}
                   </span>
                 </div>
@@ -498,7 +498,7 @@ export function TrashModal({ isOpen, onClose, onActionComplete }: TrashModalProp
                   <button
                     type="button"
                     {...stylex.props(styles.iconBtn)}
-                    title="Restore file"
+                    aria-label="Restore file"
                     onClick={() => handleRestore(file)}
                     disabled={activeActionId === file.id}
                   >
@@ -508,7 +508,7 @@ export function TrashModal({ isOpen, onClose, onActionComplete }: TrashModalProp
                   <button
                     type="button"
                     {...stylex.props(styles.iconBtn, styles.iconBtnDanger)}
-                    title="Delete permanently"
+                    aria-label="Delete permanently"
                     onClick={() => handlePurgeSingle(file)}
                     disabled={activeActionId === file.id}
                   >
