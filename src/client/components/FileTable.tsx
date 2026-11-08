@@ -2,7 +2,15 @@ import React, { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolderFilled, IconFile, IconDownload, IconTrash, IconChevronLeft, IconChevronRight } from './Icons';
+import {
+  IconFolderFilled,
+  IconFile,
+  IconDownload,
+  IconTrash,
+  IconChevronLeft,
+  IconChevronRight,
+  IconRotateCcw,
+} from './Icons';
 import type { FileRecord, Folder } from '../../server/db/schema.js';
 
 export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'trashedAt'> & {
@@ -23,15 +31,21 @@ interface FileTableProps {
   searchQuery?: string;
   selectedIds: Set<string>;
   onSelect: (id: string, isMulti: boolean) => void;
+  onClearSelection?: () => void;
   onNavigate: (path: string) => void;
   onDownload: (file: ClientFileRecord) => void;
   onTrash: (file: ClientFileRecord) => void;
+  onDeleteFolder?: (folder: ClientFolder) => void;
+  isTrashView?: boolean;
+  onRestore?: (file: ClientFileRecord) => void;
+  onPermanentDelete?: (file: ClientFileRecord) => void;
 }
 
 type TableItem =
   | { kind: 'parent'; path: string }
   | { kind: 'folder'; data: ClientFolder }
-  | { kind: 'file'; data: ClientFileRecord };
+  | { kind: 'file'; data: ClientFileRecord }
+  | { kind: 'trash'; data: ClientFileRecord };
 
 const styles = stylex.create({
   container: {
@@ -194,6 +208,12 @@ const styles = stylex.create({
       transition: motion.transitionTap,
     },
   },
+  rowBtnDanger: {
+    ':hover': {
+      color: colors.danger,
+      backgroundColor: colors.dangerSurface,
+    },
+  },
   actionIcon: {
     width: '14px',
     height: '14px',
@@ -255,9 +275,14 @@ export function FileTable({
   searchQuery = '',
   selectedIds,
   onSelect,
+  onClearSelection,
   onNavigate,
   onDownload,
   onTrash,
+  onDeleteFolder,
+  isTrashView = false,
+  onRestore,
+  onPermanentDelete,
 }: FileTableProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
 
@@ -270,7 +295,17 @@ export function FileTable({
   const isSearching = searchQuery.trim().length > 0;
   const searchLower = searchQuery.toLowerCase();
 
-  if (isSearching) {
+  if (isTrashView) {
+    const list = isSearching
+      ? files.filter(
+          (f) =>
+            f.name.toLowerCase().includes(searchLower) ||
+            (f.virtualPath && f.virtualPath.toLowerCase().includes(searchLower))
+        )
+      : files;
+
+    list.forEach((f) => items.push({ kind: 'trash', data: f }));
+  } else if (isSearching) {
     folders
       .filter((f) => f.name.toLowerCase().includes(searchLower))
       .forEach((f) => items.push({ kind: 'folder', data: f }));
@@ -311,18 +346,30 @@ export function FileTable({
         <div>Name</div>
         <div>Account</div>
         <div {...stylex.props(styles.colRight)}>Size</div>
-        <div {...stylex.props(styles.colRight)}>Modified</div>
+        <div {...stylex.props(styles.colRight)}>{isTrashView ? 'Date trashed' : 'Modified'}</div>
         <div {...stylex.props(styles.colRight)}>Actions</div>
       </div>
 
-      <div ref={parentRef} {...stylex.props(styles.scrollViewport)}>
+      <div
+        ref={parentRef}
+        {...stylex.props(styles.scrollViewport)}
+        onClick={() => {
+          onClearSelection?.();
+        }}
+      >
         {items.length === 0 ? (
           <div {...stylex.props(styles.emptyState)}>
             <h3 {...stylex.props(styles.emptyTitle)}>
-              {isSearching ? 'No search results' : 'Folder is empty'}
+              {isTrashView
+                ? 'Trash is empty'
+                : isSearching
+                ? 'No search results'
+                : 'Folder is empty'}
             </h3>
             <p {...stylex.props(styles.emptyDesc)}>
-              {isSearching
+              {isTrashView
+                ? 'Soft-deleted files across connected accounts will appear here.'
+                : isSearching
                 ? `No files or directories match "${searchQuery}".`
                 : 'Upload files or create subfolders to populate this directory.'}
             </p>
@@ -345,7 +392,10 @@ export function FileTable({
                       height: `${virtualRow.size}px`,
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
-                    onClick={() => onNavigate(item.path)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNavigate(item.path);
+                    }}
                   >
                     <div {...stylex.props(styles.nameCell)}>
                       <IconChevronLeft {...stylex.props(styles.itemIcon)} />
@@ -371,7 +421,10 @@ export function FileTable({
                       height: `${virtualRow.size}px`,
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
-                    onClick={(e) => onSelect(folder.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(folder.id, e.shiftKey || e.ctrlKey || e.metaKey);
+                    }}
                     onDoubleClick={() => onNavigate(folder.virtualPath)}
                   >
                     <div {...stylex.props(styles.nameCell)}>
@@ -388,6 +441,19 @@ export function FileTable({
                       {formatDate(folder.updatedAt)}
                     </div>
                     <div {...stylex.props(styles.actionsCell)}>
+                      {onDeleteFolder && (
+                        <button
+                          type="button"
+                          {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+                          title="Delete folder"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteFolder(folder);
+                          }}
+                        >
+                          <IconTrash {...stylex.props(styles.actionIcon)} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         {...stylex.props(styles.rowBtn)}
@@ -399,6 +465,80 @@ export function FileTable({
                       >
                         <IconChevronRight {...stylex.props(styles.actionIcon)} />
                       </button>
+                    </div>
+                  </div>
+                );
+              }
+
+              if (item.kind === 'trash') {
+                const file = item.data;
+                const isSelected = selectedIds.has(file.id);
+
+                return (
+                  <div
+                    key={`trash-${file.id}`}
+                    {...stylex.props(styles.row, isSelected && styles.rowSelected)}
+                    style={{
+                      height: `${virtualRow.size}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(file.id, e.shiftKey || e.ctrlKey || e.metaKey);
+                    }}
+                  >
+                    <div {...stylex.props(styles.nameCell)}>
+                      <IconFile {...stylex.props(styles.itemIcon)} />
+                      <span
+                        {...stylex.props(styles.itemLabel)}
+                        title={`Original location: ${file.virtualPath}`}
+                      >
+                        {file.name}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span {...stylex.props(styles.accountPill)} title={`Stored on account ${file.accountId}`}>
+                        {file.accountId}
+                      </span>
+                    </div>
+
+                    <div {...stylex.props(styles.colRight, styles.tabularCell)}>
+                      {formatBytes(file.sizeBytes)}
+                    </div>
+
+                    <div {...stylex.props(styles.colRight, styles.tabularCell)}>
+                      {formatDate(file.trashedAt || file.updatedAt)}
+                    </div>
+
+                    <div {...stylex.props(styles.actionsCell)}>
+                      {onRestore && (
+                        <button
+                          type="button"
+                          {...stylex.props(styles.rowBtn)}
+                          title="Restore to original location"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRestore(file);
+                          }}
+                        >
+                          <IconRotateCcw {...stylex.props(styles.actionIcon)} />
+                        </button>
+                      )}
+
+                      {onPermanentDelete && (
+                        <button
+                          type="button"
+                          {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+                          title="Delete permanently from Google Drive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPermanentDelete(file);
+                          }}
+                        >
+                          <IconTrash {...stylex.props(styles.actionIcon)} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -416,7 +556,10 @@ export function FileTable({
                     height: `${virtualRow.size}px`,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
-                  onClick={(e) => onSelect(file.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelect(file.id, e.shiftKey || e.ctrlKey || e.metaKey);
+                  }}
                   onDoubleClick={() => onDownload(file)}
                 >
                   <div {...stylex.props(styles.nameCell)}>

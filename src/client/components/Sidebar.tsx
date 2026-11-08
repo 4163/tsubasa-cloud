@@ -25,6 +25,7 @@ interface SidebarProps {
   onSelectNav: (nav: 'files' | 'trash') => void;
   onAuthorizeAccount: (id: string) => void;
   onSyncAccount: (id: string) => void;
+  onOpenExternalChanges?: (id: string) => void;
   isSyncing: boolean;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
@@ -411,6 +412,7 @@ export function Sidebar({
   onSelectNav,
   onAuthorizeAccount,
   onSyncAccount,
+  onOpenExternalChanges,
   isSyncing,
   isMobileOpen = false,
   onCloseMobile,
@@ -510,16 +512,29 @@ export function Sidebar({
                     {headroomGb} GB pool headroom ({usedGb} GB Drive)
                   </span>
 
-                  {acc.authorized && (
-                    <button
-                      type="button"
-                      {...stylex.props(styles.miniSyncBtn)}
-                      onClick={() => onSyncAccount(acc.id)}
-                      disabled={isSyncing}
-                    >
-                      Sync
-                    </button>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {acc.authorized && onOpenExternalChanges && (
+                      <button
+                        type="button"
+                        {...stylex.props(styles.miniSyncBtn)}
+                        onClick={() => onOpenExternalChanges(acc.id)}
+                        title="Check external modifications"
+                      >
+                        Changes
+                      </button>
+                    )}
+
+                    {acc.authorized && (
+                      <button
+                        type="button"
+                        {...stylex.props(styles.miniSyncBtn)}
+                        onClick={() => onSyncAccount(acc.id)}
+                        disabled={isSyncing}
+                      >
+                        Sync
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {isBreached && (

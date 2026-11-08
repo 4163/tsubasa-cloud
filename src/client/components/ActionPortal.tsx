@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconUpload, IconFolderPlus, IconRefreshCw } from './Icons';
+import { IconUpload, IconFolderPlus, IconRefreshCw, IconTrash } from './Icons';
 
 interface ActionPortalProps {
   currentPath: string;
@@ -10,6 +10,12 @@ interface ActionPortalProps {
   onCreateFolderPrompt: () => void;
   onSyncAll: () => void;
   isSyncing: boolean;
+  isTrashView?: boolean;
+  trashedCount?: number;
+  onEmptyTrash?: () => void;
+  selectedCount?: number;
+  onClearSelection?: () => void;
+  onDeleteSelected?: () => void;
 }
 
 const styles = stylex.create({
@@ -137,6 +143,60 @@ const styles = stylex.create({
     width: '14px',
     height: '14px',
   },
+  emptyTrashBtn: {
+    height: '32px',
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.button,
+    backgroundColor: colors.danger,
+    color: '#ffffff',
+    borderWidth: '0px',
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBody,
+    fontWeight: typography.fontWeightTitle,
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    transition: motion.transitionFast,
+    ':hover': {
+      opacity: 0.9,
+    },
+    ':disabled': {
+      opacity: 0.5,
+      cursor: 'not-allowed',
+    },
+  },
+  selectionGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    marginRight: spacing.space2,
+  },
+  selectionBadge: {
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightBadge,
+    color: colors.primaryText,
+    backgroundColor: colors.selectionBg,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.selectionBorder,
+    userSelect: 'none',
+  },
+  deleteSelectedBtn: {
+    color: colors.danger,
+    borderColor: colors.border,
+    ':hover': {
+      backgroundColor: colors.dangerSurface,
+      borderColor: colors.danger,
+      color: colors.danger,
+    },
+  },
 });
 
 export function ActionPortal({
@@ -146,6 +206,12 @@ export function ActionPortal({
   onCreateFolderPrompt,
   onSyncAll,
   isSyncing,
+  isTrashView = false,
+  trashedCount = 0,
+  onEmptyTrash,
+  selectedCount = 0,
+  onClearSelection,
+  onDeleteSelected,
 }: ActionPortalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -167,71 +233,127 @@ export function ActionPortal({
       <nav aria-label="Breadcrumb" {...stylex.props(styles.breadcrumbs)}>
         <button
           type="button"
-          {...stylex.props(styles.crumbBtn, segments.length === 0 && styles.crumbActive)}
+          {...stylex.props(styles.crumbBtn, !isTrashView && segments.length === 0 && styles.crumbActive)}
           onClick={() => handleBreadcrumbClick(-1)}
         >
           All files
         </button>
 
-        {segments.map((segment, idx) => {
-          const isLast = idx === segments.length - 1;
-          return (
-            <React.Fragment key={segment + idx}>
-              <span {...stylex.props(styles.crumbSeparator)}>›</span>
-              <button
-                type="button"
-                {...stylex.props(styles.crumbBtn, isLast && styles.crumbActive)}
-                onClick={() => !isLast && handleBreadcrumbClick(idx)}
-                aria-current={isLast ? 'page' : undefined}
-              >
-                {segment}
-              </button>
-            </React.Fragment>
-          );
-        })}
+        {isTrashView ? (
+          <>
+            <span {...stylex.props(styles.crumbSeparator)}>›</span>
+            <span
+              {...stylex.props(styles.crumbActive)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <IconTrash size={14} />
+              Trash ({trashedCount} item{trashedCount === 1 ? '' : 's'})
+            </span>
+          </>
+        ) : (
+          segments.map((segment, idx) => {
+            const isLast = idx === segments.length - 1;
+            return (
+              <React.Fragment key={segment + idx}>
+                <span {...stylex.props(styles.crumbSeparator)}>›</span>
+                <button
+                  type="button"
+                  {...stylex.props(styles.crumbBtn, isLast && styles.crumbActive)}
+                  onClick={() => !isLast && handleBreadcrumbClick(idx)}
+                  aria-current={isLast ? 'page' : undefined}
+                >
+                  {segment}
+                </button>
+              </React.Fragment>
+            );
+          })
+        )}
       </nav>
 
       <div {...stylex.props(styles.actionCluster)}>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          {...stylex.props(styles.hiddenInput)}
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              onUploadFiles(e.target.files);
-              e.target.value = '';
-            }
-          }}
-        />
+        {selectedCount > 0 && (
+          <div {...stylex.props(styles.selectionGroup)}>
+            <span {...stylex.props(styles.selectionBadge)}>
+              {selectedCount} selected
+            </span>
+            {onDeleteSelected && (
+              <button
+                type="button"
+                {...stylex.props(styles.secondaryBtn, styles.deleteSelectedBtn)}
+                onClick={onDeleteSelected}
+                title="Delete selected item(s)"
+              >
+                <IconTrash size={14} />
+                Delete
+              </button>
+            )}
+            {onClearSelection && (
+              <button
+                type="button"
+                {...stylex.props(styles.crumbBtn)}
+                onClick={onClearSelection}
+                title="Deselect all (Esc)"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
 
-        <button
-          type="button"
-          {...stylex.props(styles.primaryBtn)}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
-          Upload
-        </button>
+        {isTrashView ? (
+          <button
+            type="button"
+            {...stylex.props(styles.emptyTrashBtn)}
+            onClick={onEmptyTrash}
+            disabled={trashedCount === 0}
+          >
+            <IconTrash size={14} />
+            Empty trash
+          </button>
+        ) : (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              {...stylex.props(styles.hiddenInput)}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  onUploadFiles(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
 
-        <button
-          type="button"
-          {...stylex.props(styles.secondaryBtn)}
-          onClick={onCreateFolderPrompt}
-        >
-          <IconFolderPlus {...stylex.props(styles.btnIcon)} />
-          New folder
-        </button>
+            <button
+              type="button"
+              {...stylex.props(styles.primaryBtn)}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
+              Upload
+            </button>
 
-        <button
-          type="button"
-          {...stylex.props(styles.secondaryBtn)}
-          onClick={onSyncAll}
-          disabled={isSyncing}
-        >
-          <IconRefreshCw {...stylex.props(styles.btnIcon)} />
-          {isSyncing ? 'Syncing...' : 'Sync pool'}
-        </button>
+            <button
+              type="button"
+              {...stylex.props(styles.secondaryBtn)}
+              onClick={onCreateFolderPrompt}
+            >
+              <IconFolderPlus {...stylex.props(styles.btnIcon)} />
+              New folder
+            </button>
+
+            <button
+              type="button"
+              {...stylex.props(styles.secondaryBtn)}
+              onClick={onSyncAll}
+              disabled={isSyncing}
+            >
+              <IconRefreshCw {...stylex.props(styles.btnIcon)} />
+              {isSyncing ? 'Syncing...' : 'Sync pool'}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

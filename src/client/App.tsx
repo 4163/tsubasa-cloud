@@ -7,6 +7,10 @@ import { Sidebar, type AccountItem } from './components/Sidebar.js';
 import { ActionPortal } from './components/ActionPortal.js';
 import { FileTable, type ClientFileRecord, type ClientFolder } from './components/FileTable.js';
 import { DitherDivider } from './components/DitherDivider.js';
+import { UploadDrawer } from './components/UploadDrawer.js';
+import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
+import { NewFolderModal } from './components/NewFolderModal.js';
+import { IconUpload } from './components/Icons.js';
 
 interface HealthData {
   status: string;
@@ -79,6 +83,47 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     flexShrink: 0,
+    gap: '12px',
+  },
+  bannerActionBtn: {
+    height: '24px',
+    paddingLeft: '10px',
+    paddingRight: '10px',
+    borderRadius: '4px',
+    backgroundColor: colors.danger,
+    color: '#ffffff',
+    borderWidth: '0px',
+    fontSize: '11px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  dragOverlay: {
+    position: 'absolute',
+    inset: 0,
+    backgroundColor: 'rgba(222, 183, 108, 0.15)',
+    borderWidth: '2px',
+    borderStyle: 'dashed',
+    borderColor: colors.accentGold,
+    zIndex: 50,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none',
+    gap: '8px',
+  },
+  dragOverlayText: {
+    fontSize: '15px',
+    fontWeight: '600',
+    color: colors.primaryText,
+    backgroundColor: colors.surfaceElevated,
+    paddingTop: '6px',
+    paddingBottom: '6px',
+    paddingLeft: '14px',
+    paddingRight: '14px',
+    borderRadius: '6px',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.12)',
   },
   statusToast: {
     position: 'fixed',
@@ -178,6 +223,18 @@ export function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
+  // Drawers and modals state
+  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [isUploadDrawerOpen, setIsUploadDrawerOpen] = useState<boolean>(false);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
+
+  const [isExternalChangesOpen, setIsExternalChangesOpen] = useState<boolean>(false);
+  const [externalChangesAccountId, setExternalChangesAccountId] = useState<string | undefined>(undefined);
+
+  const [trashedFiles, setTrashedFiles] = useState<ClientFileRecord[]>([]);
+  const [confirmEmptyTrash, setConfirmEmptyTrash] = useState<boolean>(false);
+  const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
+
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -220,20 +277,45 @@ export function App() {
     }
   }, []);
 
+  const loadTrashFiles = useCallback(async () => {
+    try {
+      const res = await fetch('/api/trash');
+      if (res.ok) {
+        const data = await res.json();
+        setTrashedFiles(data.files || []);
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : 'Failed to query trash');
+    }
+  }, []);
+
   useEffect(() => {
     loadClusterData();
     loadFiles(currentPath);
   }, [loadClusterData, loadFiles, currentPath]);
 
+  useEffect(() => {
+    if (currentNav === 'trash') {
+      loadTrashFiles();
+      setConfirmEmptyTrash(false);
+    }
+  }, [currentNav, loadTrashFiles]);
+
   function handleSelect(id: string, isMulti: boolean) {
     setSelectedIds((prev) => {
-      const next = new Set(isMulti ? prev : []);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+      if (isMulti) {
+        const next = new Set(prev);
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+        return next;
       }
-      return next;
+      if (prev.has(id) && prev.size === 1) {
+        return new Set();
+      }
+      return new Set([id]);
     });
   }
 
@@ -295,55 +377,36 @@ export function App() {
     }
   }
 
-  async function handleUploadFiles(fileList: FileList) {
-    const total = fileList.length;
-    showToast(`Uploading ${total} file${total > 1 ? 's' : ''}...`);
-
-    for (let i = 0; i < total; i++) {
-      const file = fileList[i];
-      const virtualPath = (currentPath === '/' ? '' : currentPath) + '/' + file.name;
-
-      try {
-        const response = await fetch(`/api/files/upload?virtualPath=${encodeURIComponent(virtualPath)}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': file.type || 'application/octet-stream',
-          },
-          body: file,
-        });
-
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || `Upload failed with status ${response.status}`);
-        }
-      } catch (err) {
-        setErrorNotice(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
-        break;
-      }
+  function handleUploadFiles(fileList: FileList) {
+    const list = Array.from(fileList);
+    if (list.length > 0) {
+      setStagedFiles(list);
+      setIsUploadDrawerOpen(true);
     }
-
-    showToast('Upload finished. Refreshing cluster.');
-    await loadClusterData();
-    await loadFiles(currentPath);
   }
 
-  function handleCreateFolderPrompt() {
-    const folderName = window.prompt('Enter new folder name:');
-    if (!folderName || !folderName.trim()) return;
+  function handleOpenNewFolder() {
+    setIsNewFolderOpen(true);
+  }
 
-    const newPath = (currentPath === '/' ? '' : currentPath) + '/' + folderName.trim();
-    setFolders((prev) => [
-      ...prev,
-      {
-        id: `virtual-folder-${Date.now()}`,
-        virtualPath: newPath,
-        name: folderName.trim(),
-        parentFolderId: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    ]);
-    showToast(`Created virtual folder "${folderName.trim()}".`);
+  async function handleCreateFolder(folderName: string) {
+    const newPath = (currentPath === '/' ? '' : currentPath) + '/' + folderName;
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ virtualPath: newPath, name: folderName }),
+      });
+      if (res.ok) {
+        showToast(`Created folder "${folderName}".`);
+        await loadFiles(currentPath);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Failed to create folder');
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+    }
   }
 
   function handleDownload(file: ClientFileRecord) {
@@ -356,10 +419,146 @@ export function App() {
       if (res.ok) {
         showToast(`Moved "${file.name}" to trash.`);
         await loadFiles(currentPath);
+        await loadTrashFiles();
         await loadClusterData();
       }
     } catch (err) {
       setErrorNotice(`Trash error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleRestoreFile(file: ClientFileRecord) {
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/restore`, { method: 'POST' });
+      if (res.ok) {
+        showToast(`Restored "${file.name}".`);
+        await loadTrashFiles();
+        await loadFiles(currentPath);
+        await loadClusterData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Restore failed');
+      }
+    } catch (err) {
+      setErrorNotice(`Restore error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handlePermanentDelete(file: ClientFileRecord) {
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/permanent`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast(`Permanently deleted "${file.name}".`);
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(file.id);
+          return next;
+        });
+        await loadTrashFiles();
+        await loadClusterData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Delete failed');
+      }
+    } catch (err) {
+      setErrorNotice(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleDeleteFolder(folder: ClientFolder) {
+    try {
+      const res = await fetch(`/api/folders?virtualPath=${encodeURIComponent(folder.virtualPath)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        showToast(`Deleted folder "${folder.name}".`);
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(folder.id);
+          return next;
+        });
+        if (currentPath === folder.virtualPath || currentPath.startsWith(folder.virtualPath + '/')) {
+          const parts = folder.virtualPath.split('/').filter(Boolean);
+          const parent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
+          setCurrentPath(parent);
+          await loadFiles(parent);
+        } else {
+          await loadFiles(currentPath);
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Failed to delete folder');
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    const idsToDelete = new Set(selectedIds);
+    setSelectedIds(new Set());
+
+    const selectedFolders = folders.filter((f) => idsToDelete.has(f.id));
+    const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => idsToDelete.has(f.id));
+
+    if (currentNav === 'trash') {
+      for (const f of selectedFiles) {
+        await handlePermanentDelete(f);
+      }
+    } else {
+      for (const folder of selectedFolders) {
+        await handleDeleteFolder(folder);
+      }
+      for (const file of selectedFiles) {
+        await handleTrash(file);
+      }
+    }
+  }
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (
+        activeTag === 'input' ||
+        activeTag === 'textarea' ||
+        (document.activeElement as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          setSelectedIds(new Set());
+        }
+        return;
+      }
+
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size > 0) {
+        e.preventDefault();
+        handleDeleteSelected();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedIds, folders, files, trashedFiles, currentNav]);
+
+  async function handleEmptyTrashExecute() {
+    try {
+      const res = await fetch('/api/trash/empty', { method: 'DELETE' });
+      if (res.ok) {
+        setConfirmEmptyTrash(false);
+        showToast('Trash emptied. Storage permanently reclaimed.');
+        await loadTrashFiles();
+        await loadClusterData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Empty trash failed');
+      }
+    } catch (err) {
+      setErrorNotice(`Empty trash error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -401,6 +600,10 @@ export function App() {
         onSelectNav={(nav) => setCurrentNav(nav)}
         onAuthorizeAccount={handleAuthorizeAccount}
         onSyncAccount={handleSyncAccount}
+        onOpenExternalChanges={(accId) => {
+          setExternalChangesAccountId(accId);
+          setIsExternalChangesOpen(true);
+        }}
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
         onCloseMobile={() => setIsMobileOpen(false)}
@@ -408,7 +611,38 @@ export function App() {
 
       <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
 
-      <div {...stylex.props(styles.mainWorkspace)}>
+      <div
+        {...stylex.props(styles.mainWorkspace)}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragOver(true);
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          setIsDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setIsDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragOver(false);
+          if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+            setStagedFiles(Array.from(e.dataTransfer.files));
+            setIsUploadDrawerOpen(true);
+          }
+        }}
+      >
+        {isDragOver && (
+          <div {...stylex.props(styles.dragOverlay)}>
+            <IconUpload size={32} color={colors.accentGold} strokeWidth={2.5} />
+            <div {...stylex.props(styles.dragOverlayText)}>
+              Drop files here to stage for allocation and upload
+            </div>
+          </div>
+        )}
+
         <Header
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -422,30 +656,120 @@ export function App() {
             <span>
               Warning: {breachedAccounts.length} account has breached the 750 MB reserve ceiling (&gt;14.25 GB). Incoming Gmail may fail.
             </span>
+            <button
+              type="button"
+              {...stylex.props(styles.bannerActionBtn)}
+              onClick={() => {
+                setExternalChangesAccountId(breachedAccounts[0].id);
+                setIsExternalChangesOpen(true);
+              }}
+            >
+              Resolve external modifications
+            </button>
+          </div>
+        )}
+
+        {confirmEmptyTrash && currentNav === 'trash' && (
+          <div {...stylex.props(styles.alertBanner)}>
+            <span>
+              Permanently purge all {trashedFiles.length} file{trashedFiles.length > 1 ? 's' : ''}? Storage will be permanently reclaimed from Google Drive.
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                {...stylex.props(styles.bannerActionBtn)}
+                onClick={handleEmptyTrashExecute}
+              >
+                Confirm purge
+              </button>
+              <button
+                type="button"
+                {...stylex.props(styles.bannerActionBtn)}
+                style={{
+                  backgroundColor: 'transparent',
+                  borderWidth: '1px',
+                  borderStyle: 'solid',
+                  borderColor: colors.border,
+                  color: colors.primaryText,
+                }}
+                onClick={() => setConfirmEmptyTrash(false)}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
         <ActionPortal
           currentPath={currentPath}
-          onNavigatePath={handleNavigate}
+          onNavigatePath={(path) => {
+            setCurrentNav('files');
+            handleNavigate(path);
+          }}
           onUploadFiles={handleUploadFiles}
-          onCreateFolderPrompt={handleCreateFolderPrompt}
+          onCreateFolderPrompt={handleOpenNewFolder}
           onSyncAll={handleSyncAll}
           isSyncing={isSyncing}
+          isTrashView={currentNav === 'trash'}
+          trashedCount={trashedFiles.length}
+          onEmptyTrash={() => setConfirmEmptyTrash(true)}
+          selectedCount={selectedIds.size}
+          onClearSelection={() => setSelectedIds(new Set())}
+          onDeleteSelected={handleDeleteSelected}
         />
 
         <FileTable
-          files={files}
-          folders={folders}
+          files={currentNav === 'trash' ? trashedFiles : files}
+          folders={currentNav === 'trash' ? [] : folders}
           currentPath={currentPath}
           searchQuery={searchQuery}
           selectedIds={selectedIds}
           onSelect={handleSelect}
-          onNavigate={handleNavigate}
+          onClearSelection={() => setSelectedIds(new Set())}
+          onNavigate={(path) => {
+            if (currentNav === 'trash') setCurrentNav('files');
+            handleNavigate(path);
+          }}
           onDownload={handleDownload}
           onTrash={handleTrash}
+          onDeleteFolder={handleDeleteFolder}
+          isTrashView={currentNav === 'trash'}
+          onRestore={handleRestoreFile}
+          onPermanentDelete={handlePermanentDelete}
         />
       </div>
+
+      <UploadDrawer
+        isOpen={isUploadDrawerOpen}
+        onClose={() => setIsUploadDrawerOpen(false)}
+        stagedFiles={stagedFiles}
+        currentPath={currentPath}
+        onUploadComplete={async () => {
+          await loadClusterData();
+          await loadFiles(currentPath);
+          showToast('Upload finished. Cluster updated.');
+        }}
+        onClearFiles={() => setStagedFiles([])}
+      />
+
+      <ExternalChangesDrawer
+        isOpen={isExternalChangesOpen}
+        onClose={() => setIsExternalChangesOpen(false)}
+        accounts={accountItems.map((a) => ({ id: a.id, displayName: a.displayName, email: a.email }))}
+        initialAccountId={externalChangesAccountId}
+        onResolved={async () => {
+          await loadClusterData();
+          await loadFiles(currentPath);
+          showToast('Discrepancies updated.');
+        }}
+      />
+
+      <NewFolderModal
+        isOpen={isNewFolderOpen}
+        onClose={() => setIsNewFolderOpen(false)}
+        currentPath={currentPath}
+        onCreateFolder={handleCreateFolder}
+      />
 
       {toastMessage && (
         <div {...stylex.props(styles.statusToast)}>
