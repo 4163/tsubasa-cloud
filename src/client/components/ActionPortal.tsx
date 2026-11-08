@@ -14,6 +14,7 @@ interface ActionPortalProps {
   trashedCount?: number;
   onEmptyTrash?: () => void;
   selectedCount?: number;
+  selectedTotalBytes?: number;
   onClearSelection?: () => void;
   onDeleteSelected?: () => void;
 }
@@ -170,23 +171,32 @@ const styles = stylex.create({
   selectionGroup: {
     display: 'flex',
     alignItems: 'center',
-    gap: spacing.space2,
-    marginRight: spacing.space2,
+    gap: spacing.space3,
   },
   selectionBadge: {
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
+    height: '32px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    fontSize: typography.fontSizeBody,
+    fontFamily: typography.fontFamilyBody,
+    fontWeight: '500',
     color: colors.primaryText,
     backgroundColor: colors.selectionBg,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    paddingTop: spacing.space1,
-    paddingBottom: spacing.space1,
-    borderRadius: radius.compact,
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.button,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.selectionBorder,
     userSelect: 'none',
+    boxSizing: 'border-box',
+    whiteSpace: 'nowrap',
+  },
+  selectionBadgeSize: {
+    color: colors.secondaryText,
+    fontVariantNumeric: 'tabular-nums',
+    fontSize: typography.fontSizeMeta,
   },
   deleteSelectedBtn: {
     color: colors.danger,
@@ -197,7 +207,44 @@ const styles = stylex.create({
       color: colors.danger,
     },
   },
+  clearBtn: {
+    height: '32px',
+    backgroundColor: 'transparent',
+    borderWidth: '0px',
+    color: colors.secondaryText,
+    cursor: 'pointer',
+    fontSize: typography.fontSizeBody,
+    fontFamily: typography.fontFamilyBody,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.button,
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+      color: colors.primaryText,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+      transition: motion.transitionTap,
+    },
+  },
+  clusterDivider: {
+    width: '1px',
+    height: '20px',
+    backgroundColor: colors.borderSubtle,
+    marginLeft: spacing.space2,
+    marginRight: spacing.space2,
+    flexShrink: 0,
+  },
 });
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
 
 export function ActionPortal({
   currentPath,
@@ -210,6 +257,7 @@ export function ActionPortal({
   trashedCount = 0,
   onEmptyTrash,
   selectedCount = 0,
+  selectedTotalBytes = 0,
   onClearSelection,
   onDeleteSelected,
 }: ActionPortalProps) {
@@ -272,32 +320,40 @@ export function ActionPortal({
 
       <div {...stylex.props(styles.actionCluster)}>
         {selectedCount > 0 && (
-          <div {...stylex.props(styles.selectionGroup)}>
-            <span {...stylex.props(styles.selectionBadge)}>
-              {selectedCount} selected
-            </span>
-            {onDeleteSelected && (
-              <button
-                type="button"
-                {...stylex.props(styles.secondaryBtn, styles.deleteSelectedBtn)}
-                onClick={onDeleteSelected}
-                title="Delete selected item(s)"
-              >
-                <IconTrash size={14} />
-                Delete
-              </button>
-            )}
-            {onClearSelection && (
-              <button
-                type="button"
-                {...stylex.props(styles.crumbBtn)}
-                onClick={onClearSelection}
-                title="Deselect all (Esc)"
-              >
-                Clear
-              </button>
-            )}
-          </div>
+          <>
+            <div {...stylex.props(styles.selectionGroup)}>
+              <span {...stylex.props(styles.selectionBadge)}>
+                <span>{selectedCount} selected</span>
+                {selectedTotalBytes > 0 && (
+                  <span {...stylex.props(styles.selectionBadgeSize)}>
+                    · {formatBytes(selectedTotalBytes)}
+                  </span>
+                )}
+              </span>
+              {onDeleteSelected && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn, styles.deleteSelectedBtn)}
+                  onClick={onDeleteSelected}
+                  title="Delete selected item(s)"
+                >
+                  <IconTrash size={14} />
+                  Delete
+                </button>
+              )}
+              {onClearSelection && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.clearBtn)}
+                  onClick={onClearSelection}
+                  title="Deselect all (Esc)"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div {...stylex.props(styles.clusterDivider)} />
+          </>
         )}
 
         {isTrashView ? (

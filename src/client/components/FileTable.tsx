@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
@@ -11,6 +11,8 @@ import {
   IconChevronRight,
   IconRotateCcw,
   IconUpload,
+  IconCheck,
+  IconMinus,
 } from './Icons';
 import type { FileRecord, Folder } from '../../server/db/schema.js';
 
@@ -32,6 +34,7 @@ interface FileTableProps {
   searchQuery?: string;
   selectedIds: Set<string>;
   onSelect: (id: string, isMulti: boolean) => void;
+  onSelectMultiple?: (ids: string[], mode?: 'set' | 'add' | 'toggle') => void;
   onClearSelection?: () => void;
   onNavigate: (path: string) => void;
   onDownload: (file: ClientFileRecord) => void;
@@ -60,15 +63,18 @@ const styles = stylex.create({
     position: 'relative',
   },
   headerRow: {
-    height: layout.tableRowHeightCompact,
+    height: '36px',
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
+    borderLeftWidth: '3px',
+    borderLeftStyle: 'solid',
+    borderLeftColor: 'transparent',
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
-    gridTemplateColumns: 'minmax(260px, 3fr) 140px 110px 140px 90px',
+    gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
     alignItems: 'center',
-    paddingLeft: spacing.space4,
+    paddingLeft: spacing.space3,
     paddingRight: spacing.space4,
     fontSize: typography.fontSizeTableHeader,
     fontWeight: typography.fontWeightTableHeader,
@@ -88,28 +94,34 @@ const styles = stylex.create({
     overflowY: 'auto',
     position: 'relative',
     contain: 'strict',
+    userSelect: 'none',
   },
   virtualTrack: {
     width: '100%',
     position: 'relative',
     flexShrink: 0,
+    userSelect: 'none',
   },
   row: {
     position: 'absolute',
     top: 0,
     left: 0,
     width: '100%',
-    height: layout.tableRowHeightCompact,
+    height: '36px',
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
+    borderLeftWidth: '3px',
+    borderLeftStyle: 'solid',
+    borderLeftColor: 'transparent',
     display: 'grid',
-    gridTemplateColumns: 'minmax(260px, 3fr) 140px 110px 140px 90px',
+    gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
     alignItems: 'center',
-    paddingLeft: spacing.space4,
+    paddingLeft: spacing.space3,
     paddingRight: spacing.space4,
     boxSizing: 'border-box',
-    cursor: 'pointer',
+    cursor: 'default',
+    userSelect: 'none',
     fontSize: typography.fontSizeBody,
     color: colors.primaryText,
     fontFamily: typography.fontFamilyBody,
@@ -120,8 +132,8 @@ const styles = stylex.create({
     },
     '@media (pointer: coarse)': {
       height: layout.mobileRowHeight,
-      gridTemplateColumns: '40px 1fr 40px',
-      paddingLeft: spacing.space3,
+      gridTemplateColumns: '36px 32px 1fr 36px',
+      paddingLeft: spacing.space2,
       paddingRight: spacing.space3,
       ':hover': {
         backgroundColor: 'unset',
@@ -134,9 +146,72 @@ const styles = stylex.create({
   },
   rowSelected: {
     backgroundColor: colors.selectionBg,
-    borderLeftWidth: '3px',
-    borderLeftStyle: 'solid',
     borderLeftColor: colors.accentGold,
+  },
+  checkboxCell: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
+  },
+  checkbox: {
+    width: '16px',
+    height: '16px',
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    padding: '0px',
+    color: colors.primary,
+    transition: motion.transitionFast,
+    outline: 'none',
+    boxSizing: 'border-box',
+    flexShrink: 0,
+    ':hover': {
+      borderColor: colors.accentGold,
+      backgroundColor: colors.surfaceAlt,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.accentGold,
+      outlineOffset: '1px',
+    },
+  },
+  checkboxChecked: {
+    backgroundColor: colors.accentGold,
+    borderColor: colors.accentGold,
+    color: '#111d18',
+    ':hover': {
+      backgroundColor: colors.accentGold,
+      borderColor: colors.accentGold,
+      opacity: 0.9,
+    },
+  },
+  checkboxDisabled: {
+    opacity: 0.35,
+    cursor: 'not-allowed',
+    ':hover': {
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+  },
+  marqueeBox: {
+    position: 'absolute',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.accentGold,
+    backgroundColor: 'rgba(222, 183, 108, 0.14)',
+    borderRadius: radius.compact,
+    pointerEvents: 'none',
+    zIndex: 50,
+    boxSizing: 'border-box',
   },
   nameCell: {
     display: 'flex',
@@ -146,6 +221,7 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    userSelect: 'none',
   },
   itemIcon: {
     width: '16px',
@@ -161,6 +237,7 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     fontWeight: '400',
+    userSelect: 'none',
   },
   accountPill: {
     fontSize: typography.fontSizeBadge,
@@ -255,6 +332,7 @@ const styles = stylex.create({
     width: '100%',
     position: 'relative',
     boxSizing: 'border-box',
+    userSelect: 'none',
   },
   emptyDropZone: {
     flex: 1,
@@ -351,6 +429,7 @@ export function FileTable({
   searchQuery = '',
   selectedIds,
   onSelect,
+  onSelectMultiple,
   onClearSelection,
   onNavigate,
   onDownload,
@@ -364,6 +443,9 @@ export function FileTable({
   const parentRef = useRef<HTMLDivElement | null>(null);
   const dragCounter = useRef(0);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const justFinishedMarquee = useRef(false);
+  const lastSelectedIdRef = useRef<string | null>(null);
 
   const handleDragEnter = (e: React.DragEvent) => {
     if (isTrashView) return;
@@ -455,6 +537,202 @@ export function FileTable({
       .forEach((f) => items.push({ kind: 'file', data: f }));
   }
 
+  // Selectable items in current view
+  const selectableItems = items.filter(
+    (item): item is { kind: 'folder'; data: ClientFolder } | { kind: 'file'; data: ClientFileRecord } | { kind: 'trash'; data: ClientFileRecord } =>
+      item.kind !== 'parent'
+  );
+  const selectableIds = selectableItems.map((item) => item.data.id);
+  const selectedInViewCount = selectableIds.filter((id) => selectedIds.has(id)).length;
+  const isAllSelected = selectableIds.length > 0 && selectedInViewCount === selectableIds.length;
+  const isIndeterminate = selectedInViewCount > 0 && !isAllSelected;
+
+  const handleToggleSelectAll = () => {
+    if (selectableIds.length === 0) return;
+    if (isAllSelected) {
+      if (onSelectMultiple) {
+        onSelectMultiple([], 'set');
+      } else {
+        onClearSelection?.();
+      }
+    } else {
+      if (onSelectMultiple) {
+        onSelectMultiple(selectableIds, 'set');
+      } else {
+        for (const id of selectableIds) {
+          if (!selectedIds.has(id)) onSelect(id, true);
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (
+        activeTag === 'input' ||
+        activeTag === 'textarea' ||
+        (document.activeElement as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        if (selectableIds.length > 0) {
+          if (onSelectMultiple) {
+            onSelectMultiple(selectableIds, 'set');
+          } else {
+            for (const id of selectableIds) {
+              onSelect(id, true);
+            }
+          }
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectableIds, onSelectMultiple, onSelect]);
+
+  const handleItemClick = (id: string, e: React.MouseEvent) => {
+    if (justFinishedMarquee.current) return;
+
+    if (e.shiftKey && lastSelectedIdRef.current && onSelectMultiple) {
+      const idxA = selectableItems.findIndex((it) => it.data.id === lastSelectedIdRef.current);
+      const idxB = selectableItems.findIndex((it) => it.data.id === id);
+      if (idxA !== -1 && idxB !== -1) {
+        const start = Math.min(idxA, idxB);
+        const end = Math.max(idxA, idxB);
+        const rangeIds = selectableItems.slice(start, end + 1).map((it) => it.data.id);
+        onSelectMultiple(rangeIds, 'add');
+        return;
+      }
+    }
+
+    lastSelectedIdRef.current = id;
+    onSelect(id, e.shiftKey || e.ctrlKey || e.metaKey);
+  };
+
+  const handleCheckboxToggle = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    lastSelectedIdRef.current = id;
+    onSelect(id, true);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button') || target?.closest('input') || target?.closest('a')) {
+      return;
+    }
+
+    const viewport = parentRef.current;
+    if (!viewport) return;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const startScrollTop = viewport.scrollTop;
+    const startScrollLeft = viewport.scrollLeft;
+    const startContentX = startClientX - viewportRect.left + startScrollLeft;
+    const startContentY = startClientY - viewportRect.top + startScrollTop;
+
+    const isModifier = e.shiftKey || e.ctrlKey || e.metaKey;
+    const initialSelected = new Set(selectedIds);
+    let isDragging = false;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const dx = moveEvent.clientX - startClientX;
+      const dy = moveEvent.clientY - startClientY;
+
+      if (!isDragging) {
+        if (Math.hypot(dx, dy) > 5) {
+          isDragging = true;
+        } else {
+          return;
+        }
+      }
+
+      const curViewportRect = viewport.getBoundingClientRect();
+
+      // Auto-scrolling when dragging near or outside top/bottom edges
+      const topDist = moveEvent.clientY - curViewportRect.top;
+      const bottomDist = curViewportRect.bottom - moveEvent.clientY;
+      if (topDist < 30) {
+        viewport.scrollTop = Math.max(0, viewport.scrollTop - 10);
+      } else if (bottomDist < 30) {
+        viewport.scrollTop = Math.min(
+          viewport.scrollHeight - viewport.clientHeight,
+          viewport.scrollTop + 10
+        );
+      }
+
+      // Clamp mouse coordinates strictly within the container's visible bounds
+      const clampedClientX = Math.max(
+        curViewportRect.left,
+        Math.min(curViewportRect.right, moveEvent.clientX)
+      );
+      const clampedClientY = Math.max(
+        curViewportRect.top,
+        Math.min(curViewportRect.bottom, moveEvent.clientY)
+      );
+
+      const currentContentX = clampedClientX - curViewportRect.left + viewport.scrollLeft;
+      const currentContentY = clampedClientY - curViewportRect.top + viewport.scrollTop;
+
+      // Bound content coordinates to scrollable content dimensions
+      const maxContentX = viewport.scrollWidth;
+      const maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
+
+      const boundedCurrentX = Math.max(0, Math.min(maxContentX, currentContentX));
+      const boundedCurrentY = Math.max(0, Math.min(maxContentY, currentContentY));
+      const boundedStartX = Math.max(0, Math.min(maxContentX, startContentX));
+      const boundedStartY = Math.max(0, Math.min(maxContentY, startContentY));
+
+      const left = Math.min(boundedStartX, boundedCurrentX);
+      const top = Math.min(boundedStartY, boundedCurrentY);
+      const width = Math.abs(boundedCurrentX - boundedStartX);
+      const height = Math.abs(boundedCurrentY - boundedStartY);
+
+      setMarqueeRect({ left, top, width, height });
+
+      const rowHeight = 36;
+      const newSelected = isModifier ? new Set(initialSelected) : new Set<string>();
+
+      items.forEach((item, index) => {
+        if (item.kind === 'parent') return;
+        const rowTop = index * rowHeight;
+        const rowBottom = rowTop + rowHeight;
+
+        if (rowBottom >= top && rowTop <= top + height) {
+          newSelected.add(item.data.id);
+        }
+      });
+
+      if (onSelectMultiple) {
+        onSelectMultiple(Array.from(newSelected), 'set');
+      }
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+
+      if (isDragging) {
+        justFinishedMarquee.current = true;
+        setTimeout(() => {
+          justFinishedMarquee.current = false;
+        }, 80);
+        setMarqueeRect(null);
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
   // TanStack Virtualizer
   const rowVirtualizer = useVirtualizer({
     count: items.length,
@@ -466,6 +744,27 @@ export function FileTable({
   return (
     <div {...stylex.props(styles.container)}>
       <div {...stylex.props(styles.headerRow)}>
+        <div {...stylex.props(styles.checkboxCell)}>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={isIndeterminate ? 'mixed' : isAllSelected}
+            aria-label="Select all files in current folder"
+            disabled={selectableIds.length === 0}
+            {...stylex.props(
+              styles.checkbox,
+              (isAllSelected || isIndeterminate) && styles.checkboxChecked,
+              selectableIds.length === 0 && styles.checkboxDisabled
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleSelectAll();
+            }}
+          >
+            {isAllSelected && <IconCheck size={12} strokeWidth={3} />}
+            {isIndeterminate && <IconMinus size={12} strokeWidth={3} />}
+          </button>
+        </div>
         <div>Name</div>
         <div>Account</div>
         <div {...stylex.props(styles.colRight)}>Size</div>
@@ -476,12 +775,15 @@ export function FileTable({
       <div
         ref={parentRef}
         {...stylex.props(styles.scrollViewport)}
+        onMouseDown={handleMouseDown}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => {
-          onClearSelection?.();
+          if (!justFinishedMarquee.current) {
+            onClearSelection?.();
+          }
         }}
       >
         {items.length === 0 ? (
@@ -523,108 +825,231 @@ export function FileTable({
           </div>
         ) : (
           <div {...stylex.props(styles.tableBodyContainer)}>
-          <div
-            {...stylex.props(styles.virtualTrack)}
-            style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
-          >
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const item = items[virtualRow.index];
-              if (!item) return null;
+            {marqueeRect && (
+              <div
+                {...stylex.props(styles.marqueeBox)}
+                style={{
+                  left: `${marqueeRect.left}px`,
+                  top: `${marqueeRect.top}px`,
+                  width: `${marqueeRect.width}px`,
+                  height: `${marqueeRect.height}px`,
+                }}
+              />
+            )}
+            <div
+              {...stylex.props(styles.virtualTrack)}
+              style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+            >
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const item = items[virtualRow.index];
+                if (!item) return null;
 
-              if (item.kind === 'parent') {
-                return (
-                  <div
-                    key={`parent-${virtualRow.index}`}
-                    {...stylex.props(styles.row)}
-                    style={{
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onNavigate(item.path);
-                    }}
-                  >
-                    <div {...stylex.props(styles.nameCell)}>
-                      <IconChevronLeft {...stylex.props(styles.itemIcon)} />
-                      <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
-                    </div>
-                    <div />
-                    <div />
-                    <div />
-                    <div />
-                  </div>
-                );
-              }
-
-              if (item.kind === 'folder') {
-                const folder = item.data;
-                const isSelected = selectedIds.has(folder.id);
-
-                return (
-                  <div
-                    key={folder.id}
-                    {...stylex.props(styles.row, isSelected && styles.rowSelected)}
-                    style={{
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelect(folder.id, e.shiftKey || e.ctrlKey || e.metaKey);
-                    }}
-                    onDoubleClick={() => onNavigate(folder.virtualPath)}
-                  >
-                    <div {...stylex.props(styles.nameCell)}>
-                      <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-                      <span {...stylex.props(styles.itemLabel)}>{folder.name}</span>
-                    </div>
-
-                    <div>
-                      <span {...stylex.props(styles.accountPill)}>Cluster folder</span>
-                    </div>
-
-                    <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
-                    <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                      {formatDate(folder.updatedAt)}
-                    </div>
-                    <div {...stylex.props(styles.actionsCell)}>
-                      {onDeleteFolder && (
+                if (item.kind === 'parent') {
+                  return (
+                    <div
+                      key={`parent-${virtualRow.index}`}
+                      {...stylex.props(styles.row)}
+                      style={{
+                        height: `${virtualRow.size}px`,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                      onDoubleClick={() => onNavigate(item.path)}
+                    >
+                      <div />
+                      <div {...stylex.props(styles.nameCell)}>
+                        <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
+                        <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
+                      </div>
+                      <div>
+                        <span {...stylex.props(styles.accountPill)}>Parent folder</span>
+                      </div>
+                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
+                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
+                      <div {...stylex.props(styles.actionsCell)}>
                         <button
                           type="button"
-                          {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                          title="Delete folder"
+                          {...stylex.props(styles.rowBtn)}
+                          title="Open parent folder"
                           onClick={(e) => {
                             e.stopPropagation();
-                            onDeleteFolder(folder);
+                            onNavigate(item.path);
                           }}
                         >
-                          <IconTrash {...stylex.props(styles.actionIcon)} />
+                          <IconChevronRight {...stylex.props(styles.actionIcon)} />
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        {...stylex.props(styles.rowBtn)}
-                        title="Open folder"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onNavigate(folder.virtualPath);
-                        }}
-                      >
-                        <IconChevronRight {...stylex.props(styles.actionIcon)} />
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              }
+                  );
+                }
 
-              if (item.kind === 'trash') {
+                if (item.kind === 'folder') {
+                  const folder = item.data;
+                  const isSelected = selectedIds.has(folder.id);
+
+                  return (
+                    <div
+                      key={folder.id}
+                      {...stylex.props(styles.row, isSelected && styles.rowSelected)}
+                      style={{
+                        height: `${virtualRow.size}px`,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleItemClick(folder.id, e);
+                      }}
+                      onDoubleClick={() => onNavigate(folder.virtualPath)}
+                    >
+                      <div {...stylex.props(styles.checkboxCell)}>
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={isSelected}
+                          aria-label={`Select folder ${folder.name}`}
+                          {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
+                          onClick={(e) => handleCheckboxToggle(folder.id, e)}
+                        >
+                          {isSelected && <IconCheck size={12} strokeWidth={3} />}
+                        </button>
+                      </div>
+
+                      <div {...stylex.props(styles.nameCell)}>
+                        <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
+                        <span {...stylex.props(styles.itemLabel)}>{folder.name}</span>
+                      </div>
+
+                      <div>
+                        <span {...stylex.props(styles.accountPill)}>Cluster folder</span>
+                      </div>
+
+                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
+                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>
+                        {formatDate(folder.updatedAt)}
+                      </div>
+                      <div {...stylex.props(styles.actionsCell)}>
+                        {onDeleteFolder && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+                            title="Delete folder"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteFolder(folder);
+                            }}
+                          >
+                            <IconTrash {...stylex.props(styles.actionIcon)} />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          {...stylex.props(styles.rowBtn)}
+                          title="Open folder"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onNavigate(folder.virtualPath);
+                          }}
+                        >
+                          <IconChevronRight {...stylex.props(styles.actionIcon)} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (item.kind === 'trash') {
+                  const file = item.data;
+                  const isSelected = selectedIds.has(file.id);
+
+                  return (
+                    <div
+                      key={`trash-${file.id}`}
+                      {...stylex.props(styles.row, isSelected && styles.rowSelected)}
+                      style={{
+                        height: `${virtualRow.size}px`,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleItemClick(file.id, e);
+                      }}
+                    >
+                      <div {...stylex.props(styles.checkboxCell)}>
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={isSelected}
+                          aria-label={`Select trashed file ${file.name}`}
+                          {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
+                          onClick={(e) => handleCheckboxToggle(file.id, e)}
+                        >
+                          {isSelected && <IconCheck size={12} strokeWidth={3} />}
+                        </button>
+                      </div>
+
+                      <div {...stylex.props(styles.nameCell)}>
+                        <IconFile {...stylex.props(styles.itemIcon)} />
+                        <span
+                          {...stylex.props(styles.itemLabel)}
+                          title={`Original location: ${file.virtualPath}`}
+                        >
+                          {file.name}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span {...stylex.props(styles.accountPill)} title={`Stored on account ${file.accountId}`}>
+                          {file.accountId}
+                        </span>
+                      </div>
+
+                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>
+                        {formatBytes(file.sizeBytes)}
+                      </div>
+
+                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>
+                        {formatDate(file.trashedAt || file.updatedAt)}
+                      </div>
+
+                      <div {...stylex.props(styles.actionsCell)}>
+                        {onRestore && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.rowBtn)}
+                            title="Restore to original location"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRestore(file);
+                            }}
+                          >
+                            <IconRotateCcw {...stylex.props(styles.actionIcon)} />
+                          </button>
+                        )}
+
+                        {onPermanentDelete && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+                            title="Delete permanently from Google Drive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPermanentDelete(file);
+                            }}
+                          >
+                            <IconTrash {...stylex.props(styles.actionIcon)} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // File row
                 const file = item.data;
                 const isSelected = selectedIds.has(file.id);
 
                 return (
                   <div
-                    key={`trash-${file.id}`}
+                    key={file.id}
                     {...stylex.props(styles.row, isSelected && styles.rowSelected)}
                     style={{
                       height: `${virtualRow.size}px`,
@@ -632,17 +1057,26 @@ export function FileTable({
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onSelect(file.id, e.shiftKey || e.ctrlKey || e.metaKey);
+                      handleItemClick(file.id, e);
                     }}
+                    onDoubleClick={() => onDownload(file)}
                   >
+                    <div {...stylex.props(styles.checkboxCell)}>
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={isSelected}
+                        aria-label={`Select file ${file.name}`}
+                        {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
+                        onClick={(e) => handleCheckboxToggle(file.id, e)}
+                      >
+                        {isSelected && <IconCheck size={12} strokeWidth={3} />}
+                      </button>
+                    </div>
+
                     <div {...stylex.props(styles.nameCell)}>
                       <IconFile {...stylex.props(styles.itemIcon)} />
-                      <span
-                        {...stylex.props(styles.itemLabel)}
-                        title={`Original location: ${file.virtualPath}`}
-                      >
-                        {file.name}
-                      </span>
+                      <span {...stylex.props(styles.itemLabel)}>{file.name}</span>
                     </div>
 
                     <div>
@@ -656,108 +1090,38 @@ export function FileTable({
                     </div>
 
                     <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                      {formatDate(file.trashedAt || file.updatedAt)}
+                      {formatDate(file.updatedAt)}
                     </div>
 
                     <div {...stylex.props(styles.actionsCell)}>
-                      {onRestore && (
-                        <button
-                          type="button"
-                          {...stylex.props(styles.rowBtn)}
-                          title="Restore to original location"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onRestore(file);
-                          }}
-                        >
-                          <IconRotateCcw {...stylex.props(styles.actionIcon)} />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        {...stylex.props(styles.rowBtn)}
+                        title="Download file"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDownload(file);
+                        }}
+                      >
+                        <IconDownload {...stylex.props(styles.actionIcon)} />
+                      </button>
 
-                      {onPermanentDelete && (
-                        <button
-                          type="button"
-                          {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                          title="Delete permanently from Google Drive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPermanentDelete(file);
-                          }}
-                        >
-                          <IconTrash {...stylex.props(styles.actionIcon)} />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        {...stylex.props(styles.rowBtn)}
+                        title="Move to trash"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onTrash(file);
+                        }}
+                      >
+                        <IconTrash {...stylex.props(styles.actionIcon)} />
+                      </button>
                     </div>
                   </div>
                 );
-              }
-
-              // File row
-              const file = item.data;
-              const isSelected = selectedIds.has(file.id);
-
-              return (
-                <div
-                  key={file.id}
-                  {...stylex.props(styles.row, isSelected && styles.rowSelected)}
-                  style={{
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelect(file.id, e.shiftKey || e.ctrlKey || e.metaKey);
-                  }}
-                  onDoubleClick={() => onDownload(file)}
-                >
-                  <div {...stylex.props(styles.nameCell)}>
-                    <IconFile {...stylex.props(styles.itemIcon)} />
-                    <span {...stylex.props(styles.itemLabel)}>{file.name}</span>
-                  </div>
-
-                  <div>
-                    <span {...stylex.props(styles.accountPill)} title={`Stored on account ${file.accountId}`}>
-                      {file.accountId}
-                    </span>
-                  </div>
-
-                  <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                    {formatBytes(file.sizeBytes)}
-                  </div>
-
-                  <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                    {formatDate(file.updatedAt)}
-                  </div>
-
-                  <div {...stylex.props(styles.actionsCell)}>
-                    <button
-                      type="button"
-                      {...stylex.props(styles.rowBtn)}
-                      title="Download file"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDownload(file);
-                      }}
-                    >
-                      <IconDownload {...stylex.props(styles.actionIcon)} />
-                    </button>
-
-                    <button
-                      type="button"
-                      {...stylex.props(styles.rowBtn)}
-                      title="Move to trash"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onTrash(file);
-                      }}
-                    >
-                      <IconTrash {...stylex.props(styles.actionIcon)} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+              })}
+            </div>
 
             <div {...stylex.props(styles.emptyDropZone)}>
               {isDragOver && !isTrashView && (

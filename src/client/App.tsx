@@ -302,6 +302,24 @@ export function App() {
     });
   }
 
+  const handleSelectMultiple = useCallback((ids: string[], mode: 'set' | 'add' | 'toggle' = 'set') => {
+    setSelectedIds((prev) => {
+      if (mode === 'set') {
+        return new Set(ids);
+      }
+      const next = new Set(prev);
+      if (mode === 'add') {
+        for (const id of ids) next.add(id);
+      } else if (mode === 'toggle') {
+        for (const id of ids) {
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+        }
+      }
+      return next;
+    });
+  }, []);
+
   function handleNavigate(path: string) {
     setCurrentPath(path);
     setSelectedIds(new Set());
@@ -564,6 +582,9 @@ export function App() {
 
   const breachedAccounts = accountItems.filter((a) => a.quotaUsedBytes > a.usableLimitBytes);
 
+  const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => selectedIds.has(f.id));
+  const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+
   return (
     <div
       {...stylex.props(
@@ -666,6 +687,7 @@ export function App() {
           trashedCount={trashedFiles.length}
           onEmptyTrash={() => setConfirmEmptyTrash(true)}
           selectedCount={selectedIds.size}
+          selectedTotalBytes={selectedTotalBytes}
           onClearSelection={() => setSelectedIds(new Set())}
           onDeleteSelected={handleDeleteSelected}
         />
@@ -677,6 +699,7 @@ export function App() {
           searchQuery={searchQuery}
           selectedIds={selectedIds}
           onSelect={handleSelect}
+          onSelectMultiple={handleSelectMultiple}
           onClearSelection={() => setSelectedIds(new Set())}
           onNavigate={(path) => {
             if (currentNav === 'trash') setCurrentNav('files');
