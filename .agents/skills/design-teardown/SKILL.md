@@ -132,8 +132,15 @@ Synthesize findings into two concrete artifacts:
 
 ### Connecting to a live target via CDP
 
-1. Verify target browser is listening on CDP (default `http://127.0.0.1:9222`).
-2. List available pages and inspect:
+1. **Launch target Chrome with remote debugging:**
+   Provide this launch command to the user so they can start an isolated Chrome instance listening on port 9222:
+   ```cmd
+   "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-teardown" <target url>
+   ```
+   An isolated data directory (`%TEMP%\chrome-teardown`) keeps this session separate from any existing Chrome windows and ensures port 9222 opens.
+
+2. Verify the target browser is listening on CDP (`http://127.0.0.1:9222`).
+3. List available pages and inspect:
    - Use REA tool `list_browser_targets` to obtain target page IDs.
    - Use REA tool `inspect_web_page` to inspect DOM fragments and scripts.
    - Use REA tool `capture_web_screenshot` to document component visual states.

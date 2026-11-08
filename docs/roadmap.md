@@ -203,9 +203,9 @@ flowchart TD
   - [x] Build pool status sidebar (isolated Tsubasa storage meter, per-account headroom cards, 24-hour transfer status).
   - [x] Build virtualized file explorer table using TanStack Virtual (fixed 32px rows, folder navigation, inline actions).
   - [x] Build buffer breach warning banners for locked over-ceiling accounts.
-  - [ ] Build drag-and-drop upload drawer with allocation preview and transfer progress bars.
-  - [ ] Build external modification notification drawer with "Accept into Tsubasa", "Move to root", and "Rebalance" actions.
-  - [ ] Build trash management modal with restore and purge actions.
+  - [~] Build drag-and-drop upload drawer with allocation preview and transfer progress bars.
+  - [~] Build external modification notification drawer with "Accept into Tsubasa", "Move to root", and "Rebalance" actions.
+  - [~] Build trash management modal with restore and purge actions.
 
 ### Phase 6: Durability verification and performance tuning
 - [ ] Benchmark local SQLite query latency under 100,000 file records.
