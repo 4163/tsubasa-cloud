@@ -57,7 +57,7 @@ export const darkColors = stylex.createTheme(colors, {
   canvas: '#0b1412',
   surface: '#12211d',
   surfaceContainer: '#12211d',
-  surfaceElevated: '#182b26',
+  surfaceElevated: '#28443b',
   surfaceAlt: '#162d26',
 
   primaryText: '#e5f2eb',
@@ -79,8 +79,8 @@ export const darkColors = stylex.createTheme(colors, {
   borderSubtle: '#1e302a',
   outline: '#2d453b',
 
-  success: '#7ee787',
-  successSurface: '#0f291e',
+  success: '#2dd4bf',
+  successSurface: '#0d2a24',
   warning: '#facc15',
   warningSurface: '#2d2407',
   danger: '#ff9492',

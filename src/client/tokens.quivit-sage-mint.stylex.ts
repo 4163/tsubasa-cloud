@@ -98,7 +98,7 @@ export const darkColors = stylex.createTheme(colors, {
   grillLines: 'rgba(210, 150, 180, 0.42)',
   grillBorder: 'rgba(210, 150, 180, 0.42)',
 
-  success: '#7ee787',
+  success: '#2dd4bf',
   warning: '#facc15',
   danger: '#ff9492',
   systemError: '#ff9492',
