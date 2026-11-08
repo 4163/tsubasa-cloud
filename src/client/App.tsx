@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
-import { colors, darkColors, layout } from './tokens.stylex.js';
+import { colors, darkColors, layout, radius, typography } from './tokens.stylex.js';
 import { Header, type ThemeChoice } from './components/Header.js';
 import { Sidebar, type AccountItem } from './components/Sidebar.js';
 import { ActionPortal } from './components/ActionPortal.js';
@@ -10,7 +10,6 @@ import { DitherDivider } from './components/DitherDivider.js';
 import { UploadDrawer } from './components/UploadDrawer.js';
 import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
 import { NewFolderModal } from './components/NewFolderModal.js';
-import { IconUpload } from './components/Icons.js';
 
 interface HealthData {
   status: string;
@@ -98,37 +97,11 @@ const styles = stylex.create({
     cursor: 'pointer',
     flexShrink: 0,
   },
-  dragOverlay: {
-    position: 'absolute',
-    inset: 0,
-    backgroundColor: 'rgba(222, 183, 108, 0.15)',
-    borderWidth: '2px',
-    borderStyle: 'dashed',
-    borderColor: colors.accentGold,
-    zIndex: 50,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    pointerEvents: 'none',
-    gap: '8px',
-  },
-  dragOverlayText: {
-    fontSize: '15px',
-    fontWeight: '600',
-    color: colors.primaryText,
-    backgroundColor: colors.surfaceElevated,
-    paddingTop: '6px',
-    paddingBottom: '6px',
-    paddingLeft: '14px',
-    paddingRight: '14px',
-    borderRadius: '6px',
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.12)',
-  },
   statusToast: {
     position: 'fixed',
-    bottom: '20px',
-    right: '20px',
+    bottom: '24px',
+    left: '50%',
+    transform: 'translateX(-50%)',
     backgroundColor: colors.surfaceElevated,
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -136,14 +109,25 @@ const styles = stylex.create({
     color: colors.primaryText,
     paddingTop: '8px',
     paddingBottom: '8px',
-    paddingLeft: '16px',
-    paddingRight: '16px',
-    borderRadius: '8px',
-    fontSize: '12px',
-    fontWeight: '500',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.12)',
+    paddingLeft: '18px',
+    paddingRight: '18px',
+    borderRadius: radius.card,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: typography.fontWeightTitle,
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.16)',
     zIndex: 10000,
     pointerEvents: 'none',
+    whiteSpace: 'nowrap',
+    userSelect: 'none',
+  },
+  errorToast: {
+    backgroundColor: colors.dangerSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.danger,
+    color: colors.danger,
+    pointerEvents: 'auto',
+    cursor: 'pointer',
   },
 });
 
@@ -226,7 +210,6 @@ export function App() {
   // Drawers and modals state
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [isUploadDrawerOpen, setIsUploadDrawerOpen] = useState<boolean>(false);
-  const [isDragOver, setIsDragOver] = useState<boolean>(false);
 
   const [isExternalChangesOpen, setIsExternalChangesOpen] = useState<boolean>(false);
   const [externalChangesAccountId, setExternalChangesAccountId] = useState<string | undefined>(undefined);
@@ -611,38 +594,7 @@ export function App() {
 
       <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
 
-      <div
-        {...stylex.props(styles.mainWorkspace)}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setIsDragOver(true);
-        }}
-        onDragEnter={(e) => {
-          e.preventDefault();
-          setIsDragOver(true);
-        }}
-        onDragLeave={(e) => {
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-          setIsDragOver(false);
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          setIsDragOver(false);
-          if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-            setStagedFiles(Array.from(e.dataTransfer.files));
-            setIsUploadDrawerOpen(true);
-          }
-        }}
-      >
-        {isDragOver && (
-          <div {...stylex.props(styles.dragOverlay)}>
-            <IconUpload size={32} color={colors.accentGold} strokeWidth={2.5} />
-            <div {...stylex.props(styles.dragOverlayText)}>
-              Drop files here to stage for allocation and upload
-            </div>
-          </div>
-        )}
-
+      <div {...stylex.props(styles.mainWorkspace)}>
         <Header
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -736,6 +688,12 @@ export function App() {
           isTrashView={currentNav === 'trash'}
           onRestore={handleRestoreFile}
           onPermanentDelete={handlePermanentDelete}
+          onDropFiles={(droppedFiles) => {
+            if (droppedFiles.length > 0) {
+              setStagedFiles(droppedFiles);
+              setIsUploadDrawerOpen(true);
+            }
+          }}
         />
       </div>
 
@@ -779,8 +737,7 @@ export function App() {
 
       {errorNotice && (
         <div
-          {...stylex.props(styles.statusToast)}
-          style={{ backgroundColor: '#82071e', color: '#ff9492' }}
+          {...stylex.props(styles.statusToast, styles.errorToast)}
           onClick={() => setErrorNotice(null)}
         >
           Notice: {errorNotice}

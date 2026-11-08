@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
@@ -10,6 +10,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconRotateCcw,
+  IconUpload,
 } from './Icons';
 import type { FileRecord, Folder } from '../../server/db/schema.js';
 
@@ -39,6 +40,7 @@ interface FileTableProps {
   isTrashView?: boolean;
   onRestore?: (file: ClientFileRecord) => void;
   onPermanentDelete?: (file: ClientFileRecord) => void;
+  onDropFiles?: (files: File[]) => void;
 }
 
 type TableItem =
@@ -90,6 +92,7 @@ const styles = stylex.create({
   virtualTrack: {
     width: '100%',
     position: 'relative',
+    flexShrink: 0,
   },
   row: {
     position: 'absolute',
@@ -224,10 +227,12 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: '100%',
+    width: '100%',
     padding: spacing.space10,
     textAlign: 'center',
     color: colors.secondaryText,
     gap: spacing.space2,
+    boxSizing: 'border-box',
   },
   emptyTitle: {
     fontFamily: typography.fontFamilyBrand,
@@ -239,6 +244,77 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     color: colors.secondaryText,
     maxWidth: '360px',
+  },
+  emptyStateDragOver: {
+    padding: spacing.space2,
+  },
+  tableBodyContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: '100%',
+    width: '100%',
+    position: 'relative',
+    boxSizing: 'border-box',
+  },
+  emptyDropZone: {
+    flex: 1,
+    minHeight: '120px',
+    width: '100%',
+    position: 'relative',
+    boxSizing: 'border-box',
+    display: 'flex',
+    padding: spacing.space2,
+  },
+  dropBox: {
+    flex: 1,
+    width: '100%',
+    minHeight: '120px',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.space2,
+    borderRadius: radius.card,
+    borderWidth: '2px',
+    borderStyle: 'dashed',
+    borderColor: colors.accentGold,
+    backgroundColor: 'rgba(222, 183, 108, 0.10)',
+    pointerEvents: 'none',
+    userSelect: 'none',
+    padding: spacing.space6,
+  },
+  dropTitle: {
+    fontFamily: typography.fontFamilyBrand,
+    fontSize: typography.fontSizeTitle,
+    fontWeight: typography.fontWeightBrand,
+    color: colors.primaryText,
+    letterSpacing: '0.02em',
+    margin: 0,
+    lineHeight: '1.2',
+  },
+  dropSubtitle: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    color: colors.secondaryText,
+    margin: 0,
+    lineHeight: '1.4',
+  },
+  dropTargetBadge: {
+    fontFamily: typography.fontFamilyMono,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightBadge,
+    color: colors.primaryText,
+    backgroundColor: colors.selectionBg,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    marginTop: spacing.space1,
   },
 });
 
@@ -283,8 +359,55 @@ export function FileTable({
   isTrashView = false,
   onRestore,
   onPermanentDelete,
+  onDropFiles,
 }: FileTableProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const dragCounter = useRef(0);
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (isTrashView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current += 1;
+    if (e.dataTransfer?.types?.includes('Files')) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (isTrashView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    if (!isDragOver && e.dataTransfer?.types?.includes('Files')) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (isTrashView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) {
+      dragCounter.current = 0;
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (isTrashView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragOver(false);
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      onDropFiles?.(Array.from(e.dataTransfer.files));
+    }
+  };
 
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
 
@@ -353,28 +476,53 @@ export function FileTable({
       <div
         ref={parentRef}
         {...stylex.props(styles.scrollViewport)}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         onClick={() => {
           onClearSelection?.();
         }}
       >
         {items.length === 0 ? (
-          <div {...stylex.props(styles.emptyState)}>
-            <h3 {...stylex.props(styles.emptyTitle)}>
-              {isTrashView
-                ? 'Trash is empty'
-                : isSearching
-                ? 'No search results'
-                : 'Folder is empty'}
-            </h3>
-            <p {...stylex.props(styles.emptyDesc)}>
-              {isTrashView
-                ? 'Soft-deleted files across connected accounts will appear here.'
-                : isSearching
-                ? `No files or directories match "${searchQuery}".`
-                : 'Upload files or create subfolders to populate this directory.'}
-            </p>
+          <div
+            {...stylex.props(
+              styles.emptyState,
+              isDragOver && !isTrashView && styles.emptyStateDragOver
+            )}
+          >
+            {isDragOver && !isTrashView ? (
+              <div {...stylex.props(styles.dropBox)}>
+                <IconUpload size={36} color={colors.accentGold} strokeWidth={2.5} />
+                <h3 {...stylex.props(styles.dropTitle)}>Drop files to upload</h3>
+                <p {...stylex.props(styles.dropSubtitle)}>
+                  Files will be staged for cluster allocation
+                </p>
+                <span {...stylex.props(styles.dropTargetBadge)}>
+                  Target: {cleanPath}
+                </span>
+              </div>
+            ) : (
+              <>
+                <h3 {...stylex.props(styles.emptyTitle)}>
+                  {isTrashView
+                    ? 'Trash is empty'
+                    : isSearching
+                    ? 'No search results'
+                    : 'Folder is empty'}
+                </h3>
+                <p {...stylex.props(styles.emptyDesc)}>
+                  {isTrashView
+                    ? 'Soft-deleted files across connected accounts will appear here.'
+                    : isSearching
+                    ? `No files or directories match "${searchQuery}".`
+                    : 'Upload files or create subfolders to populate this directory.'}
+                </p>
+              </>
+            )}
           </div>
         ) : (
+          <div {...stylex.props(styles.tableBodyContainer)}>
           <div
             {...stylex.props(styles.virtualTrack)}
             style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
@@ -609,6 +757,22 @@ export function FileTable({
                 </div>
               );
             })}
+          </div>
+
+            <div {...stylex.props(styles.emptyDropZone)}>
+              {isDragOver && !isTrashView && (
+                <div {...stylex.props(styles.dropBox)}>
+                  <IconUpload size={32} color={colors.accentGold} strokeWidth={2.5} />
+                  <h3 {...stylex.props(styles.dropTitle)}>Drop files to upload</h3>
+                  <p {...stylex.props(styles.dropSubtitle)}>
+                    Files will be staged for cluster allocation
+                  </p>
+                  <span {...stylex.props(styles.dropTargetBadge)}>
+                    Target: {cleanPath}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

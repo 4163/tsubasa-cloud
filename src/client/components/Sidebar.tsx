@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconFolder, IconTrash } from './Icons';
@@ -373,30 +373,58 @@ export function maskEmail(email: string): string {
   return `${start}${dots}${end}@${domain}`;
 }
 
+function isNodeSelected(el: HTMLElement | null): boolean {
+  if (!el || typeof window === 'undefined') return false;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  if ((anchor && el.contains(anchor)) || (focus && el.contains(focus))) {
+    return true;
+  }
+  if (typeof selection.containsNode === 'function') {
+    return selection.containsNode(el, true);
+  }
+  return false;
+}
+
 function RedactedEmail({ email }: { email: string }) {
-  const [isRevealed, setIsRevealed] = useState(false);
+  const spanRef = useRef<HTMLSpanElement>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isSelected, setIsSelected] = useState(false);
   const masked = useMemo(() => maskEmail(email), [email]);
 
-  const handleMouseLeave = () => {
-    const selection = typeof window !== 'undefined' ? window.getSelection()?.toString() : '';
-    if (selection && selection.length > 0) {
-      const onClearSelection = () => {
-        if (!window.getSelection()?.toString()) {
-          setIsRevealed(false);
-          document.removeEventListener('selectionchange', onClearSelection);
-        }
-      };
-      document.addEventListener('selectionchange', onClearSelection);
-      return;
-    }
-    setIsRevealed(false);
-  };
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selected = isNodeSelected(spanRef.current);
+      setIsSelected((prev) => (prev !== selected ? selected : prev));
+    };
+
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange);
+    };
+  }, []);
+
+  const isRevealed = isHovered || isSelected;
 
   return (
     <span
+      ref={spanRef}
       {...stylex.props(styles.redactedEmail, isRevealed && styles.redactedEmailRevealed)}
-      onMouseEnter={() => setIsRevealed(true)}
-      onMouseLeave={handleMouseLeave}
+      onMouseEnter={() => {
+        setIsHovered(true);
+        if (spanRef.current) {
+          setIsSelected(isNodeSelected(spanRef.current));
+        }
+      }}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        if (spanRef.current) {
+          setIsSelected(isNodeSelected(spanRef.current));
+        }
+      }}
     >
       {isRevealed ? email : masked}
     </span>
@@ -467,10 +495,12 @@ export function Sidebar({
             const usedGb = formatGb(acc.quotaUsedBytes);
             const usableGb = formatGb(acc.usableLimitBytes);
             const headroomGb = formatGb(acc.headroomBytes);
-            const pct = acc.usableLimitBytes > 0
-              ? Math.min(100, Math.round((acc.quotaUsedBytes / acc.usableLimitBytes) * 100))
-              : 0;
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
+            const pct = isBreached
+              ? 100
+              : acc.usableLimitBytes > 0
+                ? Math.min(100, Math.round((acc.headroomBytes / acc.usableLimitBytes) * 100))
+                : 0;
 
             return (
               <div key={acc.id} {...stylex.props(styles.accountCard)}>
@@ -509,7 +539,7 @@ export function Sidebar({
 
                 <div {...stylex.props(styles.accountActionsRow)}>
                   <span {...stylex.props(styles.quotaMeterText)}>
-                    {headroomGb} GB pool headroom ({usedGb} GB Drive)
+                    {headroomGb} GB account headroom ({usedGb} GB is used by Drive)
                   </span>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -556,7 +586,7 @@ export function Sidebar({
             {tsubasaUsedGb} GB used of {poolCapacityGb} GB ({poolPercentage}%)
           </div>
           <div {...stylex.props(styles.footerHeadroom)}>
-            {poolHeadroomGb} GB available for pool across {accounts.length} drives (750 MB buffer reserved)
+            {poolHeadroomGb} GB free across {accounts.length} {accounts.length === 1 ? 'account' : 'accounts'} (each account has a safety buffer of 750 MB)
           </div>
         </div>
       </aside>
