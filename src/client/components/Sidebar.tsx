@@ -1,8 +1,31 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolder, IconTrash, IconPlus } from './Icons';
+import { IconFolder, IconTrash, IconPlus, IconClock } from './Icons';
 import { AccountAvatar } from './AccountAvatar.js';
+
+export interface AccountTransferStats {
+  accountId: string;
+  rollingWindowMs: number;
+  uploadedBytes24h: number;
+  remainingUploadBytes24h: number;
+  dailyUploadLimitBytes: number;
+  isUploadRateLimited: boolean;
+  downloadedBytes24h: number;
+  oldestTransferTimestamp: number | null;
+  latestTransferTimestamp: number | null;
+  nextResetMs: number | null;
+  fullResetMs: number | null;
+  nextExpiringBytes: number | null;
+  activeTransferCount24h: number;
+}
+
+export interface ClusterTransferOverview {
+  totalUploadedBytes24h: number;
+  totalRemainingUploadBytes24h: number;
+  dailyUploadLimitBytes: number;
+  rateLimitedAccountsCount: number;
+}
 
 export interface AccountItem {
   id: string;
@@ -16,6 +39,7 @@ export interface AccountItem {
   tsubasaUsedBytes?: number;
   syncState: string;
   authorized: boolean;
+  transferStats?: AccountTransferStats;
 }
 
 interface SidebarProps {
@@ -23,12 +47,13 @@ interface SidebarProps {
   tsubasaUsedBytes: number;
   poolHeadroomBytes: number;
   totalLimitBytes: number;
+  clusterTransfer?: ClusterTransferOverview;
   currentNav: 'files' | 'trash';
   onSelectNav: (nav: 'files' | 'trash') => void;
   onAuthorizeAccount: (id: string) => void;
-  onSyncAccount: (id: string) => void;
   onOpenExternalChanges?: (id: string) => void;
   onImportOAuth?: (file: File) => void;
+  onRefreshStorage?: () => void;
   isImporting?: boolean;
   isSyncing: boolean;
   isMobileOpen?: boolean;
@@ -332,6 +357,33 @@ const styles = stylex.create({
   redactedEmailRevealed: {
     color: colors.primaryText,
   },
+  storageSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+  },
+  storageHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    fontSize: typography.fontSizeBadge,
+  },
+  storageLabel: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: '10px',
+    fontWeight: '600',
+    color: colors.secondaryText,
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  storageValueText: {
+    fontSize: '10px',
+    color: colors.secondaryText,
+    fontVariantNumeric: 'tabular-nums',
+  },
   quotaMeterText: {
     fontSize: typography.fontSizeBadge,
     color: colors.secondaryText,
@@ -361,7 +413,8 @@ const styles = stylex.create({
   accountActionsRow: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
+    marginTop: '2px',
   },
   miniSyncBtn: {
     backgroundColor: 'transparent',
@@ -499,7 +552,204 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
   },
+  footerTransfer: {
+    fontSize: '10px',
+    color: colors.dimText,
+    fontVariantNumeric: 'tabular-nums',
+    paddingTop: '4px',
+    borderTopWidth: '1px',
+    borderTopStyle: 'solid',
+    borderTopColor: colors.borderSubtle,
+  },
+  transferSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    paddingTop: spacing.space1,
+    marginTop: '2px',
+  },
+  transferHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    fontSize: typography.fontSizeBadge,
+  },
+  transferLabel: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: '10px',
+    fontWeight: '600',
+    color: colors.secondaryText,
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  transferValueText: {
+    fontSize: '10px',
+    color: colors.secondaryText,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  transferProgressBarContainer: {
+    width: '100%',
+    height: '4px',
+    borderRadius: radius.pill,
+    backgroundColor: colors.borderSubtle,
+    overflow: 'hidden',
+  },
+  transferProgressBarFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    transition: 'width 0.3s ease',
+  },
+  transferProgressBarWarning: {
+    backgroundColor: colors.warning,
+  },
+  transferProgressBarBreach: {
+    backgroundColor: colors.danger,
+  },
+  transferTimerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: '10px',
+    color: colors.dimText,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  transferTimerText: {
+    fontSize: '10px',
+    color: colors.dimText,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  transferTimerActive: {
+    color: colors.secondaryText,
+    fontWeight: '500',
+  },
+  transferTimerRateLimited: {
+    color: colors.danger,
+    fontWeight: '600',
+  },
 });
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return '0s';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function formatBytesCompact(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const val = bytes / Math.pow(k, i);
+  return `${val >= 10 || i === 0 ? Math.round(val) : val.toFixed(1)} ${sizes[i]}`;
+}
+
+interface AccountTransferGaugeProps {
+  stats?: AccountTransferStats;
+  onTimerExpired?: () => void;
+}
+
+export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferGaugeProps) {
+  const [now, setNow] = useState<number>(Date.now());
+  const timerExpiredRef = useRef<boolean>(false);
+
+  // 750 GB in bytes
+  const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
+  const uploaded = stats?.uploadedBytes24h ?? 0;
+  const remaining = stats?.remainingUploadBytes24h ?? DAILY_LIMIT;
+  const isRateLimited = stats?.isUploadRateLimited || remaining <= 0;
+  const oldestTs = stats?.oldestTransferTimestamp ?? null;
+  const latestTs = stats?.latestTransferTimestamp ?? null;
+  const nextExpiringBytes = stats?.nextExpiringBytes ?? 0;
+  const activeCount = stats?.activeTransferCount24h ?? 0;
+
+  const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+  useEffect(() => {
+    if (!oldestTs && uploaded === 0) return;
+
+    timerExpiredRef.current = false;
+    const interval = setInterval(() => {
+      const currentNow = Date.now();
+      setNow(currentNow);
+
+      if (oldestTs && currentNow >= oldestTs + ROLLING_WINDOW_MS && !timerExpiredRef.current) {
+        timerExpiredRef.current = true;
+        if (onTimerExpired) onTimerExpired();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [oldestTs, uploaded, onTimerExpired]);
+
+  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_LIMIT) * 100)));
+  const nextResetMs = oldestTs ? Math.max(0, oldestTs + ROLLING_WINDOW_MS - now) : 0;
+  const fullResetMs = latestTs ? Math.max(0, latestTs + ROLLING_WINDOW_MS - now) : 0;
+
+  // The 24h transfer section only appears if an account is actively counting down
+  if (uploaded <= 0 || (!isRateLimited && nextResetMs <= 0)) {
+    return null;
+  }
+
+  const uploadedGb = (uploaded / (1024 * 1024 * 1024)).toFixed(1);
+  const remainingGb = (remaining / (1024 * 1024 * 1024)).toFixed(1);
+
+  return (
+    <div {...stylex.props(styles.transferSection)}>
+      <div {...stylex.props(styles.transferHeaderRow)}>
+        <span {...stylex.props(styles.transferLabel)}>
+          <IconClock size={11} />
+          24h quota
+        </span>
+        <span {...stylex.props(styles.transferValueText)}>
+          {uploadedGb} / 750 GB ({pct}%)
+        </span>
+      </div>
+
+      <div {...stylex.props(styles.transferProgressBarContainer)}>
+        <div
+          {...stylex.props(
+            styles.transferProgressBarFill,
+            pct >= 70 && styles.transferProgressBarWarning,
+            isRateLimited && styles.transferProgressBarBreach
+          )}
+          style={{ width: `${isRateLimited ? 100 : pct}%` }}
+        />
+      </div>
+
+      <div {...stylex.props(styles.transferTimerRow)}>
+        {isRateLimited ? (
+          <span {...stylex.props(styles.transferTimerText, styles.transferTimerRateLimited)}>
+            Limit reached (750 GB) • Quota frees in {formatCountdown(nextResetMs)}
+          </span>
+        ) : uploaded > 0 && nextResetMs > 0 ? (
+          <span {...stylex.props(styles.transferTimerText, styles.transferTimerActive)}>
+            +{formatBytesCompact(nextExpiringBytes)} releases in {formatCountdown(nextResetMs)}
+          </span>
+        ) : (
+          <span {...stylex.props(styles.transferTimerText)}>
+            750 GB available • Window idle
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function maskEmail(email: string): string {
   if (!email || !email.includes('@')) return email;
@@ -580,12 +830,13 @@ export function Sidebar({
   tsubasaUsedBytes,
   poolHeadroomBytes,
   totalLimitBytes,
+  clusterTransfer,
   currentNav,
   onSelectNav,
   onAuthorizeAccount,
-  onSyncAccount,
   onOpenExternalChanges,
   onImportOAuth,
+  onRefreshStorage,
   isImporting = false,
   isSyncing,
   isMobileOpen = false,
@@ -814,47 +1065,49 @@ export function Sidebar({
 
                 {acc.authorized && (
                   <>
-                    <div {...stylex.props(styles.progressBarContainer)}>
-                      <div
-                        {...stylex.props(styles.progressBarFill, isBreached && styles.progressBarBreach)}
-                        style={{ width: `${usedPct}%` }}
-                      />
+                    <div {...stylex.props(styles.storageSection)}>
+                      <div {...stylex.props(styles.storageHeaderRow)}>
+                        <span {...stylex.props(styles.storageLabel)}>
+                          <IconFolder size={11} />
+                          Storage
+                        </span>
+                        <span
+                          {...stylex.props(styles.storageValueText)}
+                          title={`${headroomGb} GB free headroom remaining (${driveUsedGb} GB total Drive usage)`}
+                        >
+                          {tsubasaUsedGb} / {capacityGb} GB ({usedPct}%)
+                        </span>
+                      </div>
+
+                      <div {...stylex.props(styles.progressBarContainer)}>
+                        <div
+                          {...stylex.props(styles.progressBarFill, isBreached && styles.progressBarBreach)}
+                          style={{ width: `${usedPct}%` }}
+                        />
+                      </div>
+
+                      {hasNonTsubasaData && (
+                        <div {...stylex.props(styles.externalDriveText)}>
+                          ({nonTsubasaGb} GB already used in Drive)
+                        </div>
+                      )}
                     </div>
 
-                    <div {...stylex.props(styles.accountActionsRow)}>
-                      <span
-                        {...stylex.props(styles.quotaMeterText)}
-                        title={`${headroomGb} GB free headroom remaining (${driveUsedGb} GB total Drive usage)`}
-                      >
-                        {tsubasaUsedGb} / {capacityGb} GB ({usedPct}%)
-                      </span>
+                    <AccountTransferGauge
+                      stats={acc.transferStats}
+                      onTimerExpired={onRefreshStorage}
+                    />
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        {onOpenExternalChanges && (
-                          <button
-                            type="button"
-                            {...stylex.props(styles.miniSyncBtn)}
-                            onClick={() => onOpenExternalChanges(acc.id)}
-                            title="Check external modifications"
-                          >
-                            Changes
-                          </button>
-                        )}
-
+                    {onOpenExternalChanges && (
+                      <div {...stylex.props(styles.accountActionsRow)}>
                         <button
                           type="button"
                           {...stylex.props(styles.miniSyncBtn)}
-                          onClick={() => onSyncAccount(acc.id)}
-                          disabled={isSyncing}
+                          onClick={() => onOpenExternalChanges(acc.id)}
+                          title="Check external modifications"
                         >
-                          Sync
+                          Changes
                         </button>
-                      </div>
-                    </div>
-
-                    {hasNonTsubasaData && (
-                      <div {...stylex.props(styles.externalDriveText)}>
-                        ({nonTsubasaGb} GB already used in Drive)
                       </div>
                     )}
 
@@ -881,6 +1134,11 @@ export function Sidebar({
           <div {...stylex.props(styles.footerHeadroom)}>
             {poolHeadroomGb} GB free across {authorizedCount} {authorizedCount === 1 ? 'account' : 'accounts'} (each account has a safety buffer of 750 MB)
           </div>
+          {clusterTransfer && clusterTransfer.totalUploadedBytes24h > 0 && (
+            <div {...stylex.props(styles.footerTransfer)}>
+              24h cluster transfers: {(clusterTransfer.totalUploadedBytes24h / (1024 * 1024 * 1024)).toFixed(1)} / {(clusterTransfer.dailyUploadLimitBytes / (1024 * 1024 * 1024)).toFixed(0)} GB ({Math.round((clusterTransfer.totalUploadedBytes24h / clusterTransfer.dailyUploadLimitBytes) * 100)}%)
+            </div>
+          )}
         </div>
       </aside>
     </>

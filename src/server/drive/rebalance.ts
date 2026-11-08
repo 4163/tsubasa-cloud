@@ -6,6 +6,8 @@ import { getDriveClient } from './client.js';
 import { ensureRemoteFolderHierarchy } from './mirror.js';
 import {
   calculateHeadroom,
+  getAccountTransferStats,
+  recordTransfer,
   MAX_SINGLE_FILE_BYTES,
   InsufficientStorageError,
 } from '../storage/index.js';
@@ -58,6 +60,14 @@ export async function rebalanceFile(
   if (targetHeadroom < file.sizeBytes) {
     throw new InsufficientStorageError(
       `Target account ${targetAccountId} does not have enough headroom for ${file.sizeBytes} bytes`
+    );
+  }
+
+  // Google Drive server-side copy consumes target account's 750 GB daily upload limit
+  const targetTransferStats = await getAccountTransferStats(targetAccountId);
+  if (targetTransferStats.remainingUploadBytes24h < file.sizeBytes) {
+    throw new InsufficientStorageError(
+      `Target account ${targetAccountId} has insufficient Google 750 GB daily transfer quota (${targetTransferStats.remainingUploadBytes24h} bytes remaining, requires ${file.sizeBytes} bytes)`
     );
   }
 
@@ -139,6 +149,9 @@ export async function rebalanceFile(
       })
       .where(eq(accounts.id, targetAccountId));
 
+    // Server-side copy consumes target account's 750 GB daily upload/copy limit
+    await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
+
     return {
       fileId: file.id,
       virtualPath: file.virtualPath,
@@ -203,29 +216,55 @@ export async function executeAutoRebalance(
   const allAccounts = await db.query.accounts.findMany();
   const targetCandidates = allAccounts.filter((a) => a.id !== sourceAccountId);
 
+  // Pre-fetch initial headroom and 24h transfer quotas for all target candidate accounts
+  const targetStates: Array<{
+    id: string;
+    headroomBytes: number;
+    remainingDailyBytes: number;
+  }> = [];
+
+  for (const cand of targetCandidates) {
+    const headroom = calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes);
+    const transferStats = await getAccountTransferStats(cand.id);
+    targetStates.push({
+      id: cand.id,
+      headroomBytes: headroom,
+      remainingDailyBytes: transferStats.remainingUploadBytes24h,
+    });
+  }
+
   let remainingExcess = plan.excessBytes;
   const results: RebalanceOperationResult[] = [];
 
   for (const candidateFile of plan.candidateFiles) {
     if (remainingExcess <= 0) break;
 
-    // Pick target account with largest headroom
-    let bestTarget = targetCandidates[0];
-    let maxHeadroom = calculateHeadroom(bestTarget.quotaLimitBytes, bestTarget.quotaUsedBytes);
+    // Filter candidate target accounts that have BOTH sufficient headroom AND daily transfer quota
+    const eligibleTargets = targetStates.filter(
+      (t) => t.headroomBytes >= candidateFile.sizeBytes && t.remainingDailyBytes >= candidateFile.sizeBytes
+    );
 
-    for (const cand of targetCandidates) {
-      const hr = calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes);
-      if (hr > maxHeadroom) {
-        maxHeadroom = hr;
-        bestTarget = cand;
-      }
+    if (eligibleTargets.length === 0) {
+      console.warn(
+        `Auto-rebalance: No candidate account has both headroom and daily transfer quota for ${candidateFile.virtualPath} (${candidateFile.sizeBytes} bytes)`
+      );
+      continue;
     }
 
-    if (maxHeadroom >= candidateFile.sizeBytes) {
-      const res = await rebalanceFile(candidateFile.id, bestTarget.id);
+    // Pick target account with largest headroom among eligible
+    eligibleTargets.sort((a, b) => b.headroomBytes - a.headroomBytes);
+    const chosenTarget = eligibleTargets[0];
+
+    try {
+      const res = await rebalanceFile(candidateFile.id, chosenTarget.id);
       results.push(res);
       remainingExcess -= candidateFile.sizeBytes;
-      bestTarget.quotaUsedBytes += candidateFile.sizeBytes;
+
+      // Update simulated headroom and daily transfer budget for subsequent files
+      chosenTarget.headroomBytes -= candidateFile.sizeBytes;
+      chosenTarget.remainingDailyBytes -= candidateFile.sizeBytes;
+    } catch (err) {
+      console.error(`Auto-rebalance failed for file ${candidateFile.id} onto target ${chosenTarget.id}:`, err);
     }
   }
 

@@ -22,6 +22,19 @@ export interface AccountTransferStats {
   dailyUploadLimitBytes: number;
   isUploadRateLimited: boolean;
   downloadedBytes24h: number;
+  oldestTransferTimestamp: number | null;
+  latestTransferTimestamp: number | null;
+  nextResetMs: number | null;
+  fullResetMs: number | null;
+  nextExpiringBytes: number | null;
+  activeTransferCount24h: number;
+}
+
+export interface ClusterTransferOverview {
+  totalUploadedBytes24h: number;
+  totalRemainingUploadBytes24h: number;
+  dailyUploadLimitBytes: number;
+  rateLimitedAccountsCount: number;
 }
 
 export interface AccountStorageSummary {
@@ -50,6 +63,7 @@ export interface PooledStorageOverview {
   totalHeadroomBytes: number;
   totalTsubasaUsedBytes: number;
   systemStorage: SystemStorageBreakdown;
+  clusterTransfer?: ClusterTransferOverview;
   accounts: AccountStorageSummary[];
 }
 
@@ -68,33 +82,67 @@ export async function getAccountTransferStats(
 ): Promise<AccountTransferStats> {
   const windowStart = nowMs - ROLLING_WINDOW_MS;
 
-  const result = await db
+  // Query active upload transfers within the rolling 24-hour window, ordered chronologically
+  const activeUploads = await db
     .select({
-      transferType: transferLogs.transferType,
+      byteCount: transferLogs.byteCount,
+      timestamp: transferLogs.timestamp,
+    })
+    .from(transferLogs)
+    .where(
+      and(
+        eq(transferLogs.accountId, accountId),
+        eq(transferLogs.transferType, 'upload'),
+        gte(transferLogs.timestamp, windowStart)
+      )
+    )
+    .orderBy(transferLogs.timestamp);
+
+  // Query downloads within the rolling 24-hour window
+  const downloadResult = await db
+    .select({
       totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
     })
     .from(transferLogs)
     .where(
       and(
         eq(transferLogs.accountId, accountId),
+        eq(transferLogs.transferType, 'download'),
         gte(transferLogs.timestamp, windowStart)
       )
-    )
-    .groupBy(transferLogs.transferType);
+    );
+
+  const downloadedBytes24h = Number(downloadResult[0]?.totalBytes || 0);
 
   let uploadedBytes24h = 0;
-  let downloadedBytes24h = 0;
-
-  for (const row of result) {
-    if (row.transferType === 'upload') {
-      uploadedBytes24h = Number(row.totalBytes || 0);
-    } else if (row.transferType === 'download') {
-      downloadedBytes24h = Number(row.totalBytes || 0);
-    }
+  for (const row of activeUploads) {
+    uploadedBytes24h += row.byteCount;
   }
 
   const remainingUploadBytes24h = Math.max(0, DAILY_UPLOAD_LIMIT_BYTES - uploadedBytes24h);
   const isUploadRateLimited = remainingUploadBytes24h <= 0;
+
+  const activeTransferCount24h = activeUploads.length;
+  let oldestTransferTimestamp: number | null = null;
+  let latestTransferTimestamp: number | null = null;
+  let nextResetMs: number | null = null;
+  let fullResetMs: number | null = null;
+  let nextExpiringBytes: number | null = null;
+
+  if (activeUploads.length > 0) {
+    oldestTransferTimestamp = activeUploads[0].timestamp;
+    latestTransferTimestamp = activeUploads[activeUploads.length - 1].timestamp;
+
+    // Time remaining until the earliest transfer falls outside the 24h sliding window
+    nextResetMs = Math.max(0, oldestTransferTimestamp + ROLLING_WINDOW_MS - nowMs);
+    // Time remaining until all currently recorded transfers fall outside the sliding window
+    fullResetMs = Math.max(0, latestTransferTimestamp + ROLLING_WINDOW_MS - nowMs);
+
+    // Sum byte count for all transfers matching the oldest timestamp (e.g. parallel batch chunk)
+    nextExpiringBytes = activeUploads
+      .filter((u) => u.timestamp === oldestTransferTimestamp)
+      .reduce((sum, u) => sum + u.byteCount, 0);
+  }
 
   return {
     accountId,
@@ -104,7 +152,18 @@ export async function getAccountTransferStats(
     dailyUploadLimitBytes: DAILY_UPLOAD_LIMIT_BYTES,
     isUploadRateLimited,
     downloadedBytes24h,
+    oldestTransferTimestamp,
+    latestTransferTimestamp,
+    nextResetMs,
+    fullResetMs,
+    nextExpiringBytes,
+    activeTransferCount24h,
   };
+}
+
+export async function pruneOldTransferLogs(nowMs = Date.now()): Promise<void> {
+  const cutoff = nowMs - 7 * ROLLING_WINDOW_MS;
+  await db.delete(transferLogs).where(sql`${transferLogs.timestamp} < ${cutoff}`);
 }
 
 export async function recordTransfer(
@@ -119,6 +178,11 @@ export async function recordTransfer(
     transferType,
     byteCount,
     timestamp,
+  });
+
+  // Prune entries older than 7 days in the background
+  pruneOldTransferLogs(timestamp).catch((err) => {
+    console.warn('Transfer logs pruning warning:', err instanceof Error ? err.message : String(err));
   });
 }
 
@@ -168,6 +232,9 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
   let totalLimit = 0;
   let totalUsed = 0;
   let totalHeadroom = 0;
+  let totalUploaded24h = 0;
+  let totalRemainingDailyTransfer = 0;
+  let rateLimitedCount = 0;
 
   const accountSummaries: AccountStorageSummary[] = [];
 
@@ -181,6 +248,12 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
 
     const transferStats = await getAccountTransferStats(acc.id, nowMs);
     const tsubasaUsed = tsubasaUsedByAccount.get(acc.id) || 0;
+
+    totalUploaded24h += transferStats.uploadedBytes24h;
+    totalRemainingDailyTransfer += transferStats.remainingUploadBytes24h;
+    if (transferStats.isUploadRateLimited) {
+      rateLimitedCount++;
+    }
 
     accountSummaries.push({
       id: acc.id,
@@ -197,6 +270,8 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
     });
   }
 
+  const clusterDailyCapacity = allAccounts.length * DAILY_UPLOAD_LIMIT_BYTES;
+
   return {
     totalAccounts: allAccounts.length,
     totalLimitBytes: totalLimit,
@@ -204,6 +279,12 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
     totalHeadroomBytes: totalHeadroom,
     totalTsubasaUsedBytes: totalTsubasaUsed,
     systemStorage,
+    clusterTransfer: {
+      totalUploadedBytes24h: totalUploaded24h,
+      totalRemainingUploadBytes24h: totalRemainingDailyTransfer,
+      dailyUploadLimitBytes: clusterDailyCapacity,
+      rateLimitedAccountsCount: rateLimitedCount,
+    },
     accounts: accountSummaries,
   };
 }

@@ -17,6 +17,22 @@ interface HealthData {
   timestamp: number;
 }
 
+export interface AccountTransferStats {
+  accountId: string;
+  rollingWindowMs: number;
+  uploadedBytes24h: number;
+  remainingUploadBytes24h: number;
+  dailyUploadLimitBytes: number;
+  isUploadRateLimited: boolean;
+  downloadedBytes24h: number;
+  oldestTransferTimestamp: number | null;
+  latestTransferTimestamp: number | null;
+  nextResetMs: number | null;
+  fullResetMs: number | null;
+  nextExpiringBytes: number | null;
+  activeTransferCount24h: number;
+}
+
 interface AccountSummary {
   id: string;
   email: string;
@@ -28,6 +44,7 @@ interface AccountSummary {
   headroomBytes: number;
   tsubasaUsedBytes?: number;
   syncState: string;
+  transferStats?: AccountTransferStats;
 }
 
 interface StorageOverview {
@@ -39,6 +56,12 @@ interface StorageOverview {
   systemStorage?: {
     systemFilesCount: number;
     systemBytesTotal: number;
+  };
+  clusterTransfer?: {
+    totalUploadedBytes24h: number;
+    totalRemainingUploadBytes24h: number;
+    dailyUploadLimitBytes: number;
+    rateLimitedAccountsCount: number;
   };
   accounts: AccountSummary[];
 }
@@ -395,37 +418,19 @@ export function App() {
     }
   }
 
-  async function handleSyncAccount(accountId: string) {
-    setIsSyncing(true);
-    showToast(`Syncing drive account ${accountId}...`);
-    try {
-      const res = await client.api.sync[':id'].$post({ param: { id: accountId } });
-      if (res.ok) {
-        const report = await res.json();
-        showToast(`Sync complete for ${accountId}: ${'filesUpdated' in report ? report.filesUpdated : 0} records.`);
-        await loadClusterData();
-        await loadFiles(currentPath);
-      }
-    } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : 'Sync failed');
-    } finally {
-      setIsSyncing(false);
-    }
-  }
-
   async function handleSyncAll() {
     setIsSyncing(true);
-    showToast('Syncing all cluster accounts with Google Drive...');
+    showToast('Fetching changes from Google Drive...');
     try {
       const res = await client.api.sync.all.$post();
       if (res.ok) {
         const report = await res.json();
-        showToast(`Sync completed: ${report.synced.length} drives updated.`);
+        showToast(`Update complete: ${report.synced.length} drives checked.`);
         await loadClusterData();
         await loadFiles(currentPath);
       }
     } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : 'Sync all failed');
+      setErrorNotice(err instanceof Error ? err.message : 'Fetch changes failed');
     } finally {
       setIsSyncing(false);
     }
@@ -631,6 +636,7 @@ export function App() {
       tsubasaUsedBytes: summary?.tsubasaUsedBytes ?? 0,
       syncState: summary?.syncState || 'idle',
       authorized: d.authorized,
+      transferStats: summary?.transferStats,
     };
   });
 
@@ -654,10 +660,11 @@ export function App() {
         tsubasaUsedBytes={storage?.totalTsubasaUsedBytes ?? storage?.systemStorage?.systemBytesTotal ?? 0}
         poolHeadroomBytes={storage?.totalHeadroomBytes ?? 0}
         totalLimitBytes={storage?.totalLimitBytes ?? 0}
+        clusterTransfer={storage?.clusterTransfer}
         currentNav={currentNav}
         onSelectNav={(nav) => setCurrentNav(nav)}
         onAuthorizeAccount={handleAuthorizeAccount}
-        onSyncAccount={handleSyncAccount}
+        onRefreshStorage={loadClusterData}
         onOpenExternalChanges={(accId) => {
           setExternalChangesAccountId(accId);
           setIsExternalChangesOpen(true);

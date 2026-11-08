@@ -121,7 +121,8 @@ export async function findFolderAffinityAccounts(normalizedPath: string): Promis
 export async function selectPlacementForFile(
   item: PlacementItem,
   simulatedHeadrooms?: Map<string, number>,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  simulatedTransferBudgets?: Map<string, number>
 ): Promise<PlacementDecision> {
   const normalizedPath = normalizeVirtualPath(item.virtualPath);
 
@@ -138,15 +139,29 @@ export async function selectPlacementForFile(
     return baseHeadroom;
   };
 
+  const getEffectiveBudget = (accId: string, baseBudget: number) => {
+    if (simulatedTransferBudgets && simulatedTransferBudgets.has(accId)) {
+      return simulatedTransferBudgets.get(accId)!;
+    }
+    return baseBudget;
+  };
+
   // Filter candidates with sufficient effective headroom and daily transfer budget
   const eligible = candidates.filter((cand) => {
     const effectiveHeadroom = getEffectiveHeadroom(cand.id, cand.headroomBytes);
+    const effectiveBudget = getEffectiveBudget(cand.id, cand.transferStats.remainingUploadBytes24h);
     const hasHeadroom = effectiveHeadroom >= item.sizeBytes;
-    const hasDailyBudget = cand.transferStats.remainingUploadBytes24h >= item.sizeBytes;
+    const hasDailyBudget = effectiveBudget >= item.sizeBytes;
     return hasHeadroom && hasDailyBudget;
   });
 
   if (eligible.length === 0) {
+    const hasSpaceAccount = candidates.some((c) => getEffectiveHeadroom(c.id, c.headroomBytes) >= item.sizeBytes);
+    if (hasSpaceAccount) {
+      throw new InsufficientStorageError(
+        `All accounts with available headroom have exhausted their Google 750 GB daily transfer quota for ${item.virtualPath} (${item.sizeBytes} bytes)`
+      );
+    }
     throw new InsufficientStorageError(
       `No account has sufficient headroom or daily transfer quota for ${item.virtualPath} (${item.sizeBytes} bytes)`
     );
@@ -160,6 +175,11 @@ export async function selectPlacementForFile(
       const before = getEffectiveHeadroom(match.id, match.headroomBytes);
       const after = before - item.sizeBytes;
       if (simulatedHeadrooms) simulatedHeadrooms.set(match.id, after);
+
+      if (simulatedTransferBudgets) {
+        const curBudget = getEffectiveBudget(match.id, match.transferStats.remainingUploadBytes24h);
+        simulatedTransferBudgets.set(match.id, curBudget - item.sizeBytes);
+      }
 
       return {
         accountId: match.id,
@@ -188,6 +208,11 @@ export async function selectPlacementForFile(
   const before = getEffectiveHeadroom(bestCandidate.id, bestCandidate.headroomBytes);
   const after = before - item.sizeBytes;
   if (simulatedHeadrooms) simulatedHeadrooms.set(bestCandidate.id, after);
+
+  if (simulatedTransferBudgets) {
+    const curBudget = getEffectiveBudget(bestCandidate.id, bestCandidate.transferStats.remainingUploadBytes24h);
+    simulatedTransferBudgets.set(bestCandidate.id, curBudget - item.sizeBytes);
+  }
 
   return {
     accountId: bestCandidate.id,
@@ -274,9 +299,11 @@ export async function planBatchPlacement(
   }
 
   const simulatedHeadrooms = new Map<string, number>();
+  const simulatedTransferBudgets = new Map<string, number>();
   const candidates = await getEligibleAccounts(nowMs);
   for (const c of candidates) {
     simulatedHeadrooms.set(c.id, c.headroomBytes);
+    simulatedTransferBudgets.set(c.id, c.transferStats.remainingUploadBytes24h);
   }
 
   const decisions: PlacementDecision[] = [];
@@ -309,7 +336,7 @@ export async function planBatchPlacement(
     // Check if entire branch fits into a single account's effective headroom and transfer budget
     const eligibleForBranch = candidates.filter((cand) => {
       const effectiveHeadroom = simulatedHeadrooms.get(cand.id) ?? cand.headroomBytes;
-      const effectiveBudget = cand.transferStats.remainingUploadBytes24h - (accountAllocations[cand.id]?.bytesAllocated || 0);
+      const effectiveBudget = simulatedTransferBudgets.get(cand.id) ?? cand.transferStats.remainingUploadBytes24h;
       return effectiveHeadroom >= node.totalBranchBytes && effectiveBudget >= node.totalBranchBytes;
     });
 
@@ -339,6 +366,9 @@ export async function planBatchPlacement(
         const after = before - f.sizeBytes;
         simulatedHeadrooms.set(targetAccount.id, after);
 
+        const currentBudget = simulatedTransferBudgets.get(targetAccount.id) ?? targetAccount.transferStats.remainingUploadBytes24h;
+        simulatedTransferBudgets.set(targetAccount.id, currentBudget - f.sizeBytes);
+
         recordDecision({
           accountId: targetAccount.id,
           virtualPath: f.virtualPath,
@@ -358,7 +388,7 @@ export async function planBatchPlacement(
 
     // Place remaining direct files in this node individually
     for (const f of node.files) {
-      const decision = await selectPlacementForFile(f, simulatedHeadrooms, nowMs);
+      const decision = await selectPlacementForFile(f, simulatedHeadrooms, nowMs, simulatedTransferBudgets);
       recordDecision(decision);
     }
   }

@@ -404,9 +404,10 @@ export function ActionPortal({
               {...stylex.props(styles.secondaryBtn)}
               onClick={onSyncAll}
               disabled={isSyncing}
+              title="Fetch external changes from Google Drive and scan .oauths/ credentials"
             >
               <IconRefreshCw {...stylex.props(styles.btnIcon)} />
-              {isSyncing ? 'Syncing...' : 'Sync pool'}
+              {isSyncing ? 'Fetching...' : 'Fetch Drive changes'}
             </button>
           </>
         )}

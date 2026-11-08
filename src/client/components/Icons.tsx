@@ -229,5 +229,15 @@ export function IconPlus({ size = 16, strokeWidth = 2, ...props }: IconProps) {
   );
 }
 
+export function IconClock({ size = 14, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+
+
 
 
