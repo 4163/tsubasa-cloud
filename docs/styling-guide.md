@@ -33,12 +33,6 @@ graph TD
 ### Viewport size breakpoints vs pointer capabilities
 Layout reflow and touch interaction are decoupled into two distinct query types:
 
-- **Viewport width queries control layout:** Media queries based on width (such as `max-width: 768px`, adjust accordingly) dictate layout reflow, drawer collapse, and column visibility. Pointer type never decides layout. A desktop browser resized below 768px displays the compact single-column layout, and a high-resolution touchscreen tablet in landscape retains the full multi-column desktop shell.
-- **Pointer queries control interaction physics:** `@media (pointer: coarse)` strictly dictates how touch and tap events behave, eliminating sticky hover bugs and enabling physical tap feedback.
-
-### Viewport size breakpoints vs pointer capabilities
-Layout reflow and touch interaction are decoupled into two distinct query types:
-
 - **Viewport width queries control layout:** Media queries based on width (such as `max-width: 768px`) dictate layout reflow, drawer collapse, and column visibility. Pointer type never decides layout. A desktop browser resized below 768px displays the compact single-column layout, and a high-resolution touchscreen tablet in landscape retains the full multi-column desktop shell.
 - **Pointer queries control interaction physics:** `@media (pointer: coarse)` strictly dictates how touch and tap events behave, eliminating sticky hover bugs and enabling physical tap feedback.
 
