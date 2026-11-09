@@ -1,17 +1,23 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
 import { colors, darkColors, layout, radius, typography } from './tokens.stylex.js';
 import { Header, type ThemeChoice } from './components/Header.js';
 import { Sidebar, type AccountItem } from './components/Sidebar.js';
-import { ActionPortal } from './components/ActionPortal.js';
-import { FileTable, type ClientFileRecord, type ClientFolder } from './components/FileTable.js';
+import { ActionPortal, type ActionPortalClipboard } from './components/ActionPortal.js';
+import {
+  FileTable,
+  extractDataTransferEntries,
+  type ClientFileRecord,
+  type ClientFolder,
+} from './components/FileTable.js';
 import { DitherDivider } from './components/DitherDivider.js';
-import { UploadDrawer } from './components/UploadDrawer.js';
+import { UploadDrawer, type StagedItem } from './components/UploadDrawer.js';
 import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
 import { NewFolderModal } from './components/NewFolderModal.js';
 import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
 import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js';
+import { RenameModal, type RenameTarget } from './components/RenameModal.js';
 
 interface HealthData {
   status: string;
@@ -113,7 +119,6 @@ const styles = stylex.create({
     borderRadius: radius.card,
     fontSize: typography.fontSizeMeta,
     fontWeight: typography.fontWeightTitle,
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.16)',
     zIndex: 10000,
     pointerEvents: 'none',
     whiteSpace: 'nowrap',
@@ -196,10 +201,80 @@ export function App() {
   const [files, setFiles] = useState<ClientFileRecord[]>([]);
   const [folders, setFolders] = useState<ClientFolder[]>([]);
 
-  const [currentPath, setCurrentPath] = useState<string>('/');
+  function getPathUrl(targetPath: string): string {
+    if (typeof window === 'undefined') return '';
+    const url = new URL(window.location.href);
+    if (targetPath === '/' || !targetPath) {
+      url.searchParams.delete('path');
+    } else {
+      url.searchParams.set('path', targetPath);
+    }
+    return url.pathname + (url.search ? url.search : '') + url.hash;
+  }
+
+  const [currentPath, setCurrentPath] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlPath = urlParams.get('path');
+      if (urlPath) return urlPath;
+      return window.sessionStorage.getItem('tsubasa-current-path') || '/';
+    }
+    return '/';
+  });
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [currentNav, setCurrentNav] = useState<'files' | 'trash'>('files');
+  const [currentNav, setCurrentNav] = useState<'files' | 'trash'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.sessionStorage.getItem('tsubasa-current-nav');
+      if (saved === 'files' || saved === 'trash') return saved;
+    }
+    return 'files';
+  });
+  const [clipboard, setClipboard] = useState<ActionPortalClipboard | null>(null);
+  const [renameModalItem, setRenameModalItem] = useState<RenameTarget | null>(null);
+
+  const handleNavigate = useCallback(
+    (newPath: string) => {
+      if (typeof window !== 'undefined') {
+        const nextUrl = getPathUrl(newPath);
+        if (newPath !== currentPath) {
+          window.history.pushState({ path: newPath }, '', nextUrl);
+        }
+      }
+      setCurrentPath(newPath);
+      setSelectedIds(new Set());
+    },
+    [currentPath]
+  );
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('tsubasa-current-path', currentPath);
+    }
+  }, [currentPath]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('tsubasa-current-nav', currentNav);
+    }
+  }, [currentNav]);
+
+  useEffect(() => {
+    if (currentPath === '/' || folders.length === 0) return;
+    const exists = folders.some((f) => f.virtualPath === currentPath);
+    if (!exists) {
+      const parts = currentPath.split('/').filter(Boolean);
+      let fallback = '/';
+      for (let i = parts.length - 1; i >= 1; i--) {
+        const ancestor = '/' + parts.slice(0, i).join('/');
+        if (folders.some((f) => f.virtualPath === ancestor)) {
+          fallback = ancestor;
+          break;
+        }
+      }
+      handleNavigate(fallback);
+    }
+  }, [folders, currentPath, handleNavigate]);
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
@@ -255,7 +330,8 @@ export function App() {
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   // Drawers and modals state
-  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [stagedFiles, setStagedFiles] = useState<Array<File | StagedItem>>([]);
+  const [stagedEmptyFolders, setStagedEmptyFolders] = useState<string[]>([]);
   const [isUploadDrawerOpen, setIsUploadDrawerOpen] = useState<boolean>(false);
 
   const [isExternalChangesOpen, setIsExternalChangesOpen] = useState<boolean>(false);
@@ -265,6 +341,41 @@ export function App() {
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState<boolean>(false);
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
   const [pendingDiscrepancies, setPendingDiscrepancies] = useState<Record<string, boolean>>({});
+
+  // Synchronize browser history and popstate events (e.g. Mouse Back/Forward, Browser Back/Forward, Alt+Left/Right)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const currentUrl = getPathUrl(currentPath);
+    if (!window.history.state || window.history.state.path !== currentPath) {
+      window.history.replaceState({ path: currentPath }, '', currentUrl);
+    }
+
+    function handlePopState(e: PopStateEvent) {
+      const params = new URLSearchParams(window.location.search);
+      const targetPath = e.state?.path || params.get('path') || '/';
+
+      if (renameModalItem) setRenameModalItem(null);
+      if (isUploadDrawerOpen) setIsUploadDrawerOpen(false);
+      if (isExternalChangesOpen) setIsExternalChangesOpen(false);
+      if (isNewFolderOpen) setIsNewFolderOpen(false);
+      if (confirmEmptyTrash) setConfirmEmptyTrash(false);
+
+      setCurrentNav('files');
+      setCurrentPath(targetPath);
+      setSelectedIds(new Set());
+    }
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [
+    currentPath,
+    renameModalItem,
+    isUploadDrawerOpen,
+    isExternalChangesOpen,
+    isNewFolderOpen,
+    confirmEmptyTrash,
+  ]);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -378,8 +489,15 @@ export function App() {
 
   function handleSelect(id: string, isMulti: boolean) {
     setSelectedIds((prev) => {
+      if (id === '__parent__') {
+        if (prev.has('__parent__') && prev.size === 1) {
+          return new Set();
+        }
+        return new Set(['__parent__']);
+      }
       if (isMulti) {
         const next = new Set(prev);
+        next.delete('__parent__');
         if (next.has(id)) {
           next.delete(id);
         } else {
@@ -397,13 +515,17 @@ export function App() {
   const handleSelectMultiple = useCallback((ids: string[], mode: 'set' | 'add' | 'toggle' = 'set') => {
     setSelectedIds((prev) => {
       if (mode === 'set') {
-        return new Set(ids);
+        return new Set(ids.filter((id) => id !== '__parent__'));
       }
       const next = new Set(prev);
+      next.delete('__parent__');
       if (mode === 'add') {
-        for (const id of ids) next.add(id);
+        for (const id of ids) {
+          if (id !== '__parent__') next.add(id);
+        }
       } else if (mode === 'toggle') {
         for (const id of ids) {
+          if (id === '__parent__') continue;
           if (next.has(id)) next.delete(id);
           else next.add(id);
         }
@@ -412,10 +534,69 @@ export function App() {
     });
   }, []);
 
-  function handleNavigate(path: string) {
-    setCurrentPath(path);
-    setSelectedIds(new Set());
-  }
+  // Mouse button navigation for directory history (mouse buttons 3 & 4)
+  useEffect(() => {
+    function handlePointerDown(e: PointerEvent) {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+      }
+    }
+
+    function handleMouseDown(e: MouseEvent) {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+      }
+    }
+
+    function handleMouseUp(e: MouseEvent) {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const isAnyModalOpen = Boolean(
+          renameModalItem ||
+          isUploadDrawerOpen ||
+          isExternalChangesOpen ||
+          confirmEmptyTrash ||
+          isNewFolderOpen ||
+          driveActionModal.isOpen
+        );
+        if (isAnyModalOpen) return;
+
+        if (e.button === 3) {
+          window.history.back();
+        } else if (e.button === 4) {
+          window.history.forward();
+        }
+      }
+    }
+
+    function handleAuxClick(e: MouseEvent) {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown, { capture: true });
+    window.addEventListener('mousedown', handleMouseDown, { capture: true });
+    window.addEventListener('mouseup', handleMouseUp, { capture: true });
+    window.addEventListener('auxclick', handleAuxClick, { capture: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
+      window.removeEventListener('mousedown', handleMouseDown, { capture: true });
+      window.removeEventListener('mouseup', handleMouseUp, { capture: true });
+      window.removeEventListener('auxclick', handleAuxClick, { capture: true });
+    };
+  }, [
+    renameModalItem,
+    isUploadDrawerOpen,
+    isExternalChangesOpen,
+    confirmEmptyTrash,
+    isNewFolderOpen,
+    driveActionModal.isOpen,
+  ]);
 
   async function handleAuthorizeAccount(accountId: string) {
     showToast('Authorize link copied to clipboard. Paste it in your browser.');
@@ -488,9 +669,65 @@ export function App() {
     const list = Array.from(fileList);
     if (list.length > 0) {
       setStagedFiles(list);
+      setStagedEmptyFolders([]);
       setIsUploadDrawerOpen(true);
     }
   }
+
+  const handleStageDroppedUpload = useCallback(
+    (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }) => {
+      if (dropped.files.length > 0 || dropped.emptyFolders.length > 0) {
+        setStagedFiles(dropped.files);
+        setStagedEmptyFolders(dropped.emptyFolders);
+        setIsUploadDrawerOpen(true);
+      }
+    },
+    []
+  );
+
+  const handleDropExternalToPath = useCallback(
+    async (targetPath: string, dataTransfer: DataTransfer) => {
+      const extracted = await extractDataTransferEntries(dataTransfer, targetPath);
+      if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
+        setStagedFiles(extracted.files);
+        setStagedEmptyFolders(extracted.emptyFolders);
+        setIsUploadDrawerOpen(true);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const handleWindowDragOver = (e: DragEvent) => {
+      if (currentNav === 'trash') return;
+      if (e.dataTransfer?.types?.includes('Files')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const handleWindowDrop = async (e: DragEvent) => {
+      if (currentNav === 'trash') return;
+      if (e.dataTransfer?.types?.includes('Files')) {
+        e.preventDefault();
+        if ((e as any).__tsubasaHandled) return;
+        const extracted = await extractDataTransferEntries(e.dataTransfer, currentPath);
+        if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
+          setStagedFiles(extracted.files);
+          setStagedEmptyFolders(extracted.emptyFolders);
+          setIsUploadDrawerOpen(true);
+        }
+      }
+    };
+
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('drop', handleWindowDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('drop', handleWindowDrop);
+    };
+  }, [currentNav, currentPath]);
 
   function handleOpenNewFolder() {
     setIsNewFolderOpen(true);
@@ -587,7 +824,7 @@ export function App() {
         if (currentPath === folder.virtualPath || currentPath.startsWith(folder.virtualPath + '/')) {
           const parts = folder.virtualPath.split('/').filter(Boolean);
           const parent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
-          setCurrentPath(parent);
+          handleNavigate(parent);
           await loadFiles(parent);
         } else {
           await loadFiles(currentPath);
@@ -602,8 +839,8 @@ export function App() {
   }
 
   async function handleDeleteSelected() {
-    if (selectedIds.size === 0) return;
-    const idsToDelete = new Set(selectedIds);
+    const idsToDelete = new Set(Array.from(selectedIds).filter((id) => id !== '__parent__'));
+    if (idsToDelete.size === 0) return;
     setSelectedIds(new Set());
 
     const selectedFolders = folders.filter((f) => idsToDelete.has(f.id));
@@ -623,6 +860,179 @@ export function App() {
     }
   }
 
+  const handleMoveItems = useCallback(
+    async (itemsToMove: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
+      if (itemsToMove.length === 0) return;
+      try {
+        const res = await fetch('/api/items/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: itemsToMove, targetFolderPath }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const successCount = (data.results || []).filter((r: any) => r.success).length;
+          const failed = (data.results || []).filter((r: any) => !r.success);
+          if (failed.length > 0) {
+            setErrorNotice(failed[0].error || 'Some items could not be moved');
+          }
+          if (successCount > 0) {
+            showToast(`Moved ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
+          }
+          setClipboard((prev) => {
+            if (!prev || prev.mode !== 'cut') return prev;
+            const movedIds = new Set(itemsToMove.map((i) => i.id));
+            const remaining = prev.items.filter((i) => !movedIds.has(i.id));
+            return remaining.length > 0 ? { ...prev, items: remaining } : null;
+          });
+          setSelectedIds(new Set());
+          await loadFiles(currentPath);
+        } else {
+          setErrorNotice(data.error || 'Failed to move items');
+        }
+      } catch (err) {
+        setErrorNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [currentPath, loadFiles, showToast]
+  );
+
+  const handleCopyItems = useCallback(
+    async (itemsToCopy: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
+      if (itemsToCopy.length === 0) return;
+      try {
+        showToast(`Copying ${itemsToCopy.length} ${itemsToCopy.length === 1 ? 'item' : 'items'}...`);
+        const res = await fetch('/api/items/copy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: itemsToCopy, targetFolderPath }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const successCount = (data.results || []).filter((r: any) => r.success).length;
+          const failed = (data.results || []).filter((r: any) => !r.success);
+          if (failed.length > 0) {
+            setErrorNotice(failed[0].error || 'Some items could not be copied');
+          }
+          if (successCount > 0) {
+            showToast(`Copied ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
+          }
+          setSelectedIds(new Set());
+          await Promise.all([loadFiles(currentPath), loadClusterData()]);
+        } else {
+          setErrorNotice(data.error || 'Failed to copy items');
+        }
+      } catch (err) {
+        setErrorNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [currentPath, loadFiles, loadClusterData, showToast]
+  );
+
+  const handleCutSelected = useCallback(() => {
+    const actionableIds = Array.from(selectedIds).filter((id) => id !== '__parent__');
+    if (actionableIds.length === 0 || currentNav === 'trash') return;
+    const selectedFolders = folders.filter((f) => actionableIds.includes(f.id));
+    const selectedFilesList = files.filter((f) => actionableIds.includes(f.id) && !f.isTrashed);
+    const items = [
+      ...selectedFolders.map((f) => ({ kind: 'folder' as const, id: f.id, name: f.name, virtualPath: f.virtualPath })),
+      ...selectedFilesList.map((f) => ({ kind: 'file' as const, id: f.id, name: f.name, virtualPath: f.virtualPath })),
+    ];
+    if (items.length > 0) {
+      setClipboard({ mode: 'cut', items });
+      showToast(`Cut ${items.length} ${items.length === 1 ? 'item' : 'items'}. Press Ctrl+V or Paste to move here.`);
+    }
+  }, [selectedIds, currentNav, folders, files, showToast]);
+
+  const handleCopySelected = useCallback(() => {
+    const actionableIds = Array.from(selectedIds).filter((id) => id !== '__parent__');
+    if (actionableIds.length === 0 || currentNav === 'trash') return;
+    const selectedFolders = folders.filter((f) => actionableIds.includes(f.id));
+    const selectedFilesList = files.filter((f) => actionableIds.includes(f.id) && !f.isTrashed);
+    const items = [
+      ...selectedFolders.map((f) => ({ kind: 'folder' as const, id: f.id, name: f.name, virtualPath: f.virtualPath })),
+      ...selectedFilesList.map((f) => ({ kind: 'file' as const, id: f.id, name: f.name, virtualPath: f.virtualPath })),
+    ];
+    if (items.length > 0) {
+      setClipboard({ mode: 'copy', items });
+      showToast(`Copied ${items.length} ${items.length === 1 ? 'item' : 'items'}. Press Ctrl+V or Paste to duplicate.`);
+    }
+  }, [selectedIds, currentNav, folders, files, showToast]);
+
+  const handlePaste = useCallback(() => {
+    if (!clipboard || clipboard.items.length === 0 || currentNav === 'trash') return;
+    if (clipboard.mode === 'cut') {
+      handleMoveItems(clipboard.items, currentPath);
+    } else {
+      handleCopyItems(clipboard.items, currentPath);
+    }
+  }, [clipboard, currentNav, currentPath, handleMoveItems, handleCopyItems]);
+
+  const handleOpenRenameSelected = useCallback(() => {
+    if (selectedIds.size !== 1 || selectedIds.has('__parent__')) return;
+    const selectedId = Array.from(selectedIds)[0];
+    const foundFolder = folders.find((f) => f.id === selectedId);
+    if (foundFolder) {
+      setRenameModalItem({ kind: 'folder', id: foundFolder.id, name: foundFolder.name });
+      return;
+    }
+    const allFiles = currentNav === 'trash' ? trashedFiles : files;
+    const foundFile = allFiles.find((f) => f.id === selectedId);
+    if (foundFile) {
+      setRenameModalItem({ kind: 'file', id: foundFile.id, name: foundFile.name });
+    }
+  }, [selectedIds, currentNav, folders, files, trashedFiles]);
+
+  const handleRename = useCallback(
+    async (kind: 'file' | 'folder', id: string, newName: string) => {
+      try {
+        const res = await fetch('/api/items/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind, id, name: newName, newName }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          showToast(`Renamed to "${newName}".`);
+          setRenameModalItem(null);
+          const oldFolderP = data.oldPath || data.oldVirtualPath;
+          const newFolderP = data.newPath || data.newVirtualPath;
+          if (
+            kind === 'folder' &&
+            oldFolderP &&
+            (currentPath === oldFolderP || currentPath.startsWith(oldFolderP + '/'))
+          ) {
+            const relativeSuffix = currentPath.slice(oldFolderP.length);
+            const nextPath = `${newFolderP}${relativeSuffix}`;
+            handleNavigate(nextPath);
+            await loadFiles(nextPath);
+          } else {
+            await loadFiles(currentPath);
+          }
+        } else {
+          const errMsg = data.error || 'Failed to rename item';
+          setErrorNotice(errMsg);
+          throw new Error(errMsg);
+        }
+      } catch (err) {
+        setErrorNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [currentPath, loadFiles, showToast, handleNavigate]
+  );
+
+  const handleBatchRestore = useCallback(async () => {
+    const actionableIds = Array.from(selectedIds).filter((id) => id !== '__parent__');
+    if (actionableIds.length === 0 || currentNav !== 'trash') return;
+    const toRestore = trashedFiles.filter((f) => actionableIds.includes(f.id));
+    if (toRestore.length === 0) return;
+    for (const file of toRestore) {
+      await handleRestoreFile(file);
+    }
+    setSelectedIds(new Set());
+    showToast(`Restored ${toRestore.length} ${toRestore.length === 1 ? 'file' : 'files'}.`);
+  }, [selectedIds, currentNav, trashedFiles, handleRestoreFile, showToast]);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const activeTag = (document.activeElement?.tagName || '').toLowerCase();
@@ -634,7 +1044,24 @@ export function App() {
         return;
       }
 
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        window.history.back();
+        return;
+      }
+
+      if (e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault();
+        window.history.forward();
+        return;
+      }
+
       if (e.key === 'Escape') {
+        if (renameModalItem) {
+          e.preventDefault();
+          setRenameModalItem(null);
+          return;
+        }
         if (selectedIds.size > 0) {
           e.preventDefault();
           setSelectedIds(new Set());
@@ -643,14 +1070,89 @@ export function App() {
       }
 
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size > 0) {
+        if (selectedIds.size === 1 && selectedIds.has('__parent__')) {
+          return;
+        }
         e.preventDefault();
         handleDeleteSelected();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
+        if (selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
+          e.preventDefault();
+          handleCutSelected();
+        }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        if (selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
+          e.preventDefault();
+          handleCopySelected();
+        }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+        if (clipboard && clipboard.items.length > 0 && currentNav !== 'trash') {
+          e.preventDefault();
+          handlePaste();
+        }
+        return;
+      }
+
+      if (e.key === 'F2') {
+        if (selectedIds.size === 1 && !selectedIds.has('__parent__')) {
+          e.preventDefault();
+          handleOpenRenameSelected();
+        }
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        if (selectedIds.size === 1 && currentNav !== 'trash') {
+          const singleId = Array.from(selectedIds)[0];
+          if (singleId === '__parent__') {
+            e.preventDefault();
+            const parts = currentPath.split('/').filter(Boolean);
+            const parent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
+            handleNavigate(parent);
+            return;
+          }
+          const foundFolder = folders.find((f) => f.id === singleId);
+          if (foundFolder) {
+            e.preventDefault();
+            handleNavigate(foundFolder.virtualPath);
+            return;
+          }
+          const foundFile = files.find((f) => f.id === singleId && !f.isTrashed);
+          if (foundFile) {
+            e.preventDefault();
+            handleDownload(foundFile);
+            return;
+          }
+        }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, folders, files, trashedFiles, currentNav]);
+  }, [
+    selectedIds,
+    folders,
+    files,
+    trashedFiles,
+    currentNav,
+    clipboard,
+    renameModalItem,
+    currentPath,
+    handleNavigate,
+    handleCutSelected,
+    handleCopySelected,
+    handlePaste,
+    handleOpenRenameSelected,
+  ]);
 
   async function handleEmptyTrashExecute() {
     try {
@@ -858,6 +1360,10 @@ export function App() {
       }));
   }, [accountItems, externalChangesAccountId]);
 
+  const actionableSelectedCount = useMemo(() => {
+    return Array.from(selectedIds).filter((id) => id !== '__parent__').length;
+  }, [selectedIds]);
+
   const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => selectedIds.has(f.id));
   const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
   const trashedTotalBytes = trashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
@@ -920,10 +1426,18 @@ export function App() {
           isTrashView={currentNav === 'trash'}
           trashedCount={trashedFiles.length}
           onEmptyTrash={() => setConfirmEmptyTrash(true)}
-          selectedCount={selectedIds.size}
+          selectedCount={actionableSelectedCount}
           selectedTotalBytes={selectedTotalBytes}
           onClearSelection={() => setSelectedIds(new Set())}
           onDeleteSelected={handleDeleteSelected}
+          onRenamePrompt={handleOpenRenameSelected}
+          onRestoreSelected={handleBatchRestore}
+          onCutSelected={handleCutSelected}
+          onCopySelected={handleCopySelected}
+          clipboard={clipboard}
+          onPaste={handlePaste}
+          onMoveItemsToPath={handleMoveItems}
+          onDropExternalToPath={handleDropExternalToPath}
         />
 
         <FileTable
@@ -948,9 +1462,13 @@ export function App() {
           onDropFiles={(droppedFiles) => {
             if (droppedFiles.length > 0) {
               setStagedFiles(droppedFiles);
+              setStagedEmptyFolders([]);
               setIsUploadDrawerOpen(true);
             }
           }}
+          onStageDroppedUpload={handleStageDroppedUpload}
+          onMoveItems={handleMoveItems}
+          clipboard={clipboard}
           accounts={accountItems}
           onTransferFile={handleTransferFile}
           transferringFileId={transferringFileId}
@@ -959,8 +1477,13 @@ export function App() {
 
       <UploadDrawer
         isOpen={isUploadDrawerOpen}
-        onClose={() => setIsUploadDrawerOpen(false)}
+        onClose={() => {
+          setIsUploadDrawerOpen(false);
+          setStagedFiles([]);
+          setStagedEmptyFolders([]);
+        }}
         stagedFiles={stagedFiles}
+        stagedEmptyFolders={stagedEmptyFolders}
         currentPath={currentPath}
         accounts={accountItems}
         onUploadComplete={async () => {
@@ -968,7 +1491,10 @@ export function App() {
           await loadFiles(currentPath);
           showToast('Upload finished. Cluster updated.');
         }}
-        onClearFiles={() => setStagedFiles([])}
+        onClearFiles={() => {
+          setStagedFiles([]);
+          setStagedEmptyFolders([]);
+        }}
       />
 
       {isExternalChangesOpen && (
@@ -993,6 +1519,13 @@ export function App() {
         onClose={() => setIsNewFolderOpen(false)}
         currentPath={currentPath}
         onCreateFolder={handleCreateFolder}
+      />
+
+      <RenameModal
+        isOpen={renameModalItem !== null}
+        onClose={() => setRenameModalItem(null)}
+        item={renameModalItem}
+        onRename={handleRename}
       />
 
       <ConfirmPurgeModal

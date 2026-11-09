@@ -1,7 +1,27 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconUpload, IconFolderPlus, IconRefreshCw, IconTrash } from './Icons';
+import {
+  IconUpload,
+  IconFolderPlus,
+  IconRefreshCw,
+  IconTrash,
+  IconRotateCcw,
+  IconEdit,
+  IconCopy,
+  IconClipboard,
+  IconFolder,
+} from './Icons.js';
+
+export interface ActionPortalClipboard {
+  mode: 'cut' | 'copy';
+  items: Array<{
+    kind: 'file' | 'folder';
+    id: string;
+    name: string;
+    virtualPath: string;
+  }>;
+}
 
 interface ActionPortalProps {
   currentPath: string;
@@ -17,6 +37,14 @@ interface ActionPortalProps {
   selectedTotalBytes?: number;
   onClearSelection?: () => void;
   onDeleteSelected?: () => void;
+  onRenamePrompt?: () => void;
+  onRestoreSelected?: () => void;
+  onCutSelected?: () => void;
+  onCopySelected?: () => void;
+  clipboard?: ActionPortalClipboard | null;
+  onPaste?: () => void;
+  onMoveItemsToPath?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => void;
+  onDropExternalToPath?: (targetPath: string, dataTransfer: DataTransfer) => void;
 }
 
 const styles = stylex.create({
@@ -47,7 +75,9 @@ const styles = stylex.create({
   },
   crumbBtn: {
     backgroundColor: 'transparent',
-    borderWidth: '0px',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'transparent',
     color: colors.secondaryText,
     cursor: 'pointer',
     fontSize: typography.fontSizeBody,
@@ -71,6 +101,11 @@ const styles = stylex.create({
     color: colors.primaryText,
     fontWeight: typography.fontWeightTitle,
     cursor: 'default',
+  },
+  crumbDragOver: {
+    backgroundColor: colors.brandAccentSurface,
+    color: colors.brandAccent,
+    borderColor: colors.accentGold,
   },
   crumbSeparator: {
     color: colors.dimText,
@@ -261,8 +296,18 @@ export function ActionPortal({
   selectedTotalBytes = 0,
   onClearSelection,
   onDeleteSelected,
+  onRenamePrompt,
+  onRestoreSelected,
+  onCutSelected,
+  onCopySelected,
+  clipboard,
+  onPaste,
+  onMoveItemsToPath,
+  onDropExternalToPath,
 }: ActionPortalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Normalize path segments
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
@@ -277,13 +322,62 @@ export function ActionPortal({
     }
   }
 
+  function handleBreadcrumbDragOver(e: React.DragEvent, index: number) {
+    if (isTrashView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    setDragOverIndex(index);
+  }
+
+  function handleBreadcrumbDragLeave(e: React.DragEvent, index: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOverIndex((prev) => (prev === index ? null : prev));
+    }
+  }
+
+  function handleBreadcrumbDrop(e: React.DragEvent, index: number) {
+    if (isTrashView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverIndex(null);
+    const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
+
+    if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
+      try {
+        const raw = e.dataTransfer.getData('application/x-tsubasa-items');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          onMoveItemsToPath?.(parsed, targetPath);
+          return;
+        }
+      } catch {}
+    }
+
+    if (e.dataTransfer.types.includes('Files') && e.dataTransfer.files.length > 0) {
+      onDropExternalToPath?.(targetPath, e.dataTransfer);
+    }
+  }
+
   return (
     <div {...stylex.props(styles.portal)}>
       <nav aria-label="Breadcrumb" {...stylex.props(styles.breadcrumbs)}>
         <button
           type="button"
-          {...stylex.props(styles.crumbBtn, !isTrashView && segments.length === 0 && styles.crumbActive)}
+          {...stylex.props(
+            styles.crumbBtn,
+            !isTrashView && segments.length === 0 && styles.crumbActive,
+            dragOverIndex === -1 && styles.crumbDragOver
+          )}
           onClick={() => handleBreadcrumbClick(-1)}
+          onDragOver={(e) => handleBreadcrumbDragOver(e, -1)}
+          onDragLeave={(e) => handleBreadcrumbDragLeave(e, -1)}
+          onDrop={(e) => handleBreadcrumbDrop(e, -1)}
+          title="All files (/)"
         >
           All files
         </button>
@@ -302,14 +396,23 @@ export function ActionPortal({
         ) : (
           segments.map((segment, idx) => {
             const isLast = idx === segments.length - 1;
+            const fullPath = '/' + segments.slice(0, idx + 1).join('/');
             return (
               <React.Fragment key={segment + idx}>
                 <span {...stylex.props(styles.crumbSeparator)}>›</span>
                 <button
                   type="button"
-                  {...stylex.props(styles.crumbBtn, isLast && styles.crumbActive)}
+                  {...stylex.props(
+                    styles.crumbBtn,
+                    isLast && styles.crumbActive,
+                    dragOverIndex === idx && styles.crumbDragOver
+                  )}
                   onClick={() => !isLast && handleBreadcrumbClick(idx)}
+                  onDragOver={(e) => handleBreadcrumbDragOver(e, idx)}
+                  onDragLeave={(e) => handleBreadcrumbDragLeave(e, idx)}
+                  onDrop={(e) => handleBreadcrumbDrop(e, idx)}
                   aria-current={isLast ? 'page' : undefined}
+                  title={fullPath}
                 >
                   {segment}
                 </button>
@@ -331,17 +434,68 @@ export function ActionPortal({
                   </span>
                 )}
               </span>
+
+              {isTrashView && onRestoreSelected && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.primaryBtn)}
+                  onClick={onRestoreSelected}
+                  title="Restore selected items to their original locations"
+                >
+                  <IconRotateCcw size={14} />
+                  Restore
+                </button>
+              )}
+
+              {!isTrashView && selectedCount === 1 && onRenamePrompt && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={onRenamePrompt}
+                  title="Rename item (F2)"
+                >
+                  <IconEdit size={14} />
+                  Rename
+                </button>
+              )}
+
+              {!isTrashView && onCutSelected && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={onCutSelected}
+                  title="Cut selected items (Ctrl+X)"
+                >
+                  <IconCopy size={14} />
+                  Cut
+                </button>
+              )}
+
+              {!isTrashView && onCopySelected && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={onCopySelected}
+                  title="Copy selected items (Ctrl+C)"
+                >
+                  <IconCopy size={14} />
+                  Copy
+                </button>
+              )}
+
               {onDeleteSelected && (
                 <button
                   type="button"
                   {...stylex.props(styles.secondaryBtn, styles.deleteSelectedBtn)}
                   onClick={onDeleteSelected}
                   aria-label="Delete selected items"
+                  title="Delete selected (Delete)"
                 >
                   <IconTrash size={14} />
-                  Delete
+                  {isTrashView ? 'Purge' : 'Delete'}
                 </button>
               )}
+
               {onClearSelection && (
                 <button
                   type="button"
@@ -353,6 +507,21 @@ export function ActionPortal({
                 </button>
               )}
             </div>
+            <div {...stylex.props(styles.clusterDivider)} />
+          </>
+        )}
+
+        {clipboard && !isTrashView && onPaste && (
+          <>
+            <button
+              type="button"
+              {...stylex.props(styles.secondaryBtn)}
+              onClick={onPaste}
+              title={`Paste ${clipboard.items.length} item(s) (${clipboard.mode === 'cut' ? 'move' : 'copy'}) into ${cleanPath}`}
+            >
+              <IconClipboard size={14} />
+              Paste ({clipboard.items.length})
+            </button>
             <div {...stylex.props(styles.clusterDivider)} />
           </>
         )}
@@ -382,21 +551,47 @@ export function ActionPortal({
               }}
             />
 
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              {...({ webkitdirectory: '', directory: '' } as any)}
+              {...stylex.props(styles.hiddenInput)}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  onUploadFiles(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
+
             <button
               type="button"
               {...stylex.props(styles.primaryBtn)}
               onClick={() => fileInputRef.current?.click()}
+              title="Upload files to current folder"
             >
               <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
-              Upload
+              Upload file
+            </button>
+
+            <button
+              type="button"
+              {...stylex.props(styles.secondaryBtn)}
+              onClick={() => folderInputRef.current?.click()}
+              title="Upload an entire folder with nested files and structure"
+            >
+              <IconFolderPlus {...stylex.props(styles.btnIcon)} />
+              Upload folder
             </button>
 
             <button
               type="button"
               {...stylex.props(styles.secondaryBtn)}
               onClick={onCreateFolderPrompt}
+              title="Create new directory in current location"
             >
-              <IconFolderPlus {...stylex.props(styles.btnIcon)} />
+              <IconFolder {...stylex.props(styles.btnIcon)} />
               New folder
             </button>
 

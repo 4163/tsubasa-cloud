@@ -21,7 +21,8 @@ export interface PlacementItemPreview {
 interface UploadDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  stagedFiles: File[];
+  stagedFiles: Array<File | StagedItem>;
+  stagedEmptyFolders?: string[];
   currentPath: string;
   accounts?: AccountItem[];
   onUploadComplete: () => Promise<void>;
@@ -49,7 +50,6 @@ const styles = stylex.create({
     borderLeftWidth: '1px',
     borderLeftStyle: 'solid',
     borderLeftColor: colors.borderSubtle,
-    boxShadow: '-4px 0 24px rgba(0, 0, 0, 0.18)',
     display: 'flex',
     flexDirection: 'column',
     zIndex: 100,
@@ -472,6 +472,7 @@ export function UploadDrawer({
   isOpen,
   onClose,
   stagedFiles,
+  stagedEmptyFolders = [],
   currentPath,
   accounts = [],
   onUploadComplete,
@@ -487,17 +488,38 @@ export function UploadDrawer({
     Record<string, { loaded: number; total: number; status: 'pending' | 'uploading' | 'complete' | 'error'; error?: string }>
   >({});
 
+  const normalizedItems = useMemo(() => {
+    return stagedFiles.map((item) => {
+      if ('virtualPath' in item && 'file' in item) {
+        const vPath = item.virtualPath.startsWith('/') ? item.virtualPath : '/' + item.virtualPath;
+        return {
+          file: item.file,
+          virtualPath: vPath,
+          key: vPath,
+        };
+      }
+      const rel = (item as any).webkitRelativePath || item.name;
+      const cleanBase = currentPath === '/' ? '' : currentPath;
+      const vPath = `${cleanBase}/${rel}`.replace(/\/+/g, '/');
+      return {
+        file: item,
+        virtualPath: vPath,
+        key: vPath,
+      };
+    });
+  }, [stagedFiles, currentPath]);
+
   // Compute total size and valid files
   const { totalBytes, allRejected } = useMemo(() => {
     let bytes = 0;
-    stagedFiles.forEach((f) => (bytes += f.size));
-    const allExceed = stagedFiles.length > 0 && stagedFiles.every((f) => f.size > CEILING_14_25_GB);
+    normalizedItems.forEach((it) => (bytes += it.file.size));
+    const allExceed = normalizedItems.length > 0 && normalizedItems.every((it) => it.file.size > CEILING_14_25_GB);
     return { totalBytes: bytes, allRejected: allExceed };
-  }, [stagedFiles]);
+  }, [normalizedItems]);
 
   // Request placement plan whenever staged files change
   useEffect(() => {
-    if (!isOpen || stagedFiles.length === 0) {
+    if (!isOpen || normalizedItems.length === 0) {
       setPreviews([]);
       setPlanError(null);
       setFileProgress({});
@@ -509,12 +531,11 @@ export function UploadDrawer({
     setIsPlanning(true);
     setPlanError(null);
 
-    const items = stagedFiles.map((f) => {
-      const virtualPath = (currentPath === '/' ? '' : currentPath) + '/' + f.name;
-      const isOverCeiling = f.size > CEILING_14_25_GB;
+    const items = normalizedItems.map((it) => {
+      const isOverCeiling = it.file.size > CEILING_14_25_GB;
       return {
-        virtualPath,
-        sizeBytes: f.size,
+        virtualPath: it.virtualPath,
+        sizeBytes: it.file.size,
         rejected: isOverCeiling,
         rejectReason: isOverCeiling ? 'Exceeds 14.25 GB single-account ceiling' : undefined,
       };
@@ -577,14 +598,14 @@ export function UploadDrawer({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, stagedFiles, currentPath]);
+  }, [isOpen, normalizedItems]);
 
   // Overall transfer progress computation
   const overallProgress = useMemo(() => {
     let totalLoaded = 0;
     let completedCount = 0;
-    stagedFiles.forEach((f) => {
-      const p = fileProgress[f.name];
+    normalizedItems.forEach((it) => {
+      const p = fileProgress[it.key];
       if (p) {
         totalLoaded += p.loaded;
         if (p.status === 'complete') completedCount += 1;
@@ -592,50 +613,65 @@ export function UploadDrawer({
     });
     const percent = totalBytes > 0 ? Math.min(100, Math.round((totalLoaded / totalBytes) * 100)) : 0;
     return { totalLoaded, percent, completedCount };
-  }, [stagedFiles, fileProgress, totalBytes]);
+  }, [normalizedItems, fileProgress, totalBytes]);
 
   const handleStartUpload = useCallback(async () => {
-    if (isUploading || stagedFiles.length === 0) return;
+    if (isUploading || normalizedItems.length === 0) return;
 
     setIsUploading(true);
+
+    if (stagedEmptyFolders && stagedEmptyFolders.length > 0) {
+      for (const folderPath of stagedEmptyFolders) {
+        try {
+          const name = folderPath.split('/').filter(Boolean).pop() || folderPath;
+          await fetch('/api/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ virtualPath: folderPath, name }),
+          });
+        } catch {
+          // Continue if already exists
+        }
+      }
+    }
+
     const initialProgress: Record<string, { loaded: number; total: number; status: 'pending' | 'uploading' | 'complete' | 'error' }> = {};
-    stagedFiles.forEach((f) => {
-      initialProgress[f.name] = {
+    normalizedItems.forEach((it) => {
+      initialProgress[it.key] = {
         loaded: 0,
-        total: f.size,
-        status: f.size > CEILING_14_25_GB ? 'error' : 'pending',
+        total: it.file.size,
+        status: it.file.size > CEILING_14_25_GB ? 'error' : 'pending',
       };
     });
     setFileProgress(initialProgress);
 
-    for (let i = 0; i < stagedFiles.length; i++) {
-      const file = stagedFiles[i];
-      if (file.size > CEILING_14_25_GB) continue;
+    for (let i = 0; i < normalizedItems.length; i++) {
+      const item = normalizedItems[i];
+      if (item.file.size > CEILING_14_25_GB) continue;
 
-      const virtualPath = (currentPath === '/' ? '' : currentPath) + '/' + file.name;
       const chosenAccountId =
-        selectedAccounts[file.name] ||
-        previews.find((p) => p.virtualPath.endsWith('/' + file.name))?.targetAccountId;
+        selectedAccounts[item.key] ||
+        previews.find((p) => p.virtualPath === item.virtualPath)?.targetAccountId;
       const accountParam = chosenAccountId ? `&accountId=${encodeURIComponent(chosenAccountId)}` : '';
 
       setFileProgress((prev) => ({
         ...prev,
-        [file.name]: { loaded: 0, total: file.size, status: 'uploading' },
+        [item.key]: { loaded: 0, total: item.file.size, status: 'uploading' },
       }));
 
       try {
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(virtualPath)}&sizeBytes=${file.size}&mimeType=${encodeURIComponent(file.type || 'application/octet-stream')}${accountParam}`;
+          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(item.virtualPath)}&sizeBytes=${item.file.size}&mimeType=${encodeURIComponent(item.file.type || 'application/octet-stream')}${accountParam}`;
 
           xhr.open('POST', uploadUrl, true);
-          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+          xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
 
           xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
               setFileProgress((prev) => ({
                 ...prev,
-                [file.name]: { loaded: e.loaded, total: e.total, status: 'uploading' },
+                [item.key]: { loaded: e.loaded, total: e.total, status: 'uploading' },
               }));
             }
           };
@@ -644,7 +680,7 @@ export function UploadDrawer({
             if (xhr.status >= 200 && xhr.status < 300) {
               setFileProgress((prev) => ({
                 ...prev,
-                [file.name]: { loaded: file.size, total: file.size, status: 'complete' },
+                [item.key]: { loaded: item.file.size, total: item.file.size, status: 'complete' },
               }));
               resolve();
             } else {
@@ -655,7 +691,7 @@ export function UploadDrawer({
               } catch {}
               setFileProgress((prev) => ({
                 ...prev,
-                [file.name]: { loaded: 0, total: file.size, status: 'error', error: errMsg },
+                [item.key]: { loaded: 0, total: item.file.size, status: 'error', error: errMsg },
               }));
               reject(new Error(errMsg));
             }
@@ -665,12 +701,12 @@ export function UploadDrawer({
             const errMsg = 'Network stream error';
             setFileProgress((prev) => ({
               ...prev,
-              [file.name]: { loaded: 0, total: file.size, status: 'error', error: errMsg },
+              [item.key]: { loaded: 0, total: item.file.size, status: 'error', error: errMsg },
             }));
             reject(new Error(errMsg));
           };
 
-          xhr.send(file);
+          xhr.send(item.file);
         });
       } catch (err) {
         // Individual file error; continue to next file
@@ -679,13 +715,13 @@ export function UploadDrawer({
 
     setIsUploading(false);
     await onUploadComplete();
-  }, [isUploading, stagedFiles, currentPath, onUploadComplete, selectedAccounts, previews]);
+  }, [isUploading, normalizedItems, stagedEmptyFolders, onUploadComplete, selectedAccounts, previews]);
 
-  const hasUnallocatedFiles = stagedFiles.some((f) => {
-    if (f.size > CEILING_14_25_GB) return false;
+  const hasUnallocatedFiles = normalizedItems.some((it) => {
+    if (it.file.size > CEILING_14_25_GB) return false;
     const chosen =
-      selectedAccounts[f.name] ||
-      previews.find((p) => p.virtualPath.endsWith('/' + f.name))?.targetAccountId;
+      selectedAccounts[it.key] ||
+      previews.find((p) => p.virtualPath === it.virtualPath)?.targetAccountId;
     return !chosen;
   });
 
@@ -721,7 +757,7 @@ export function UploadDrawer({
               </span>
             </div>
             <span {...stylex.props(styles.stagedStats)}>
-              {stagedFiles.length} {stagedFiles.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)}
+              {normalizedItems.length} {normalizedItems.length === 1 ? 'file' : 'files'}{stagedEmptyFolders && stagedEmptyFolders.length > 0 ? ` + ${stagedEmptyFolders.length} folder${stagedEmptyFolders.length === 1 ? '' : 's'}` : ''} · {formatBytes(totalBytes)}
             </span>
           </div>
 
@@ -731,15 +767,15 @@ export function UploadDrawer({
                 {...stylex.props(
                   styles.statusDot,
                   (isUploading || isPlanning) && styles.statusDotActive,
-                  overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0 && styles.statusDotComplete
+                  overallProgress.completedCount === normalizedItems.length && normalizedItems.length > 0 && styles.statusDotComplete
                 )}
               />
               <span>
                 {isPlanning
                   ? 'Calculating placement...'
                   : isUploading
-                  ? `Uploading ${Math.min(overallProgress.completedCount + 1, stagedFiles.length)} of ${stagedFiles.length} (${overallProgress.percent}%)`
-                  : overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0
+                  ? `Uploading ${Math.min(overallProgress.completedCount + 1, normalizedItems.length)} of ${normalizedItems.length} (${overallProgress.percent}%)`
+                  : overallProgress.completedCount === normalizedItems.length && normalizedItems.length > 0
                   ? 'All transfers complete'
                   : allRejected
                   ? 'All files exceed ceiling'
@@ -748,12 +784,12 @@ export function UploadDrawer({
             </div>
           </div>
 
-          {(isUploading || (overallProgress.completedCount > 0 && overallProgress.completedCount === stagedFiles.length)) && (
+          {(isUploading || (overallProgress.completedCount > 0 && overallProgress.completedCount === normalizedItems.length)) && (
             <div {...stylex.props(styles.progressBarContainer)}>
               <div
                 {...stylex.props(
                   styles.progressBarFill,
-                  overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0 && styles.progressBarComplete
+                  overallProgress.completedCount === normalizedItems.length && normalizedItems.length > 0 && styles.progressBarComplete
                 )}
                 style={{ width: `${overallProgress.percent}%` }}
               />
@@ -770,25 +806,41 @@ export function UploadDrawer({
             </div>
           )}
 
-          {stagedFiles.map((file) => {
-            const preview = previews.find((p) => p.virtualPath.endsWith('/' + file.name));
-            const prog = fileProgress[file.name];
-            const isRejected = file.size > CEILING_14_25_GB || preview?.rejected;
+          {normalizedItems.map((item) => {
+            const preview = previews.find((p) => p.virtualPath === item.virtualPath);
+            const prog = fileProgress[item.key];
+            const isRejected = item.file.size > CEILING_14_25_GB || preview?.rejected;
             const pct = prog && prog.total > 0 ? Math.round((prog.loaded / prog.total) * 100) : 0;
-            const chosenAccountId = selectedAccounts[file.name] || preview?.targetAccountId || '';
+            const chosenAccountId = selectedAccounts[item.key] || preview?.targetAccountId || '';
+            const chosenAcc = accounts.find((a) => a.id === chosenAccountId);
 
             return (
               <div
-                key={file.name}
+                key={item.key}
                 {...stylex.props(styles.fileCard, isRejected && styles.fileCardRejected)}
               >
                 {/* Header row: file name + size or completion status */}
                 <div {...stylex.props(styles.fileCardHeader)}>
                   <div {...stylex.props(styles.fileInfoGroup)}>
                     <IconFile size={16} {...stylex.props(styles.fileIcon)} />
-                    <span {...stylex.props(styles.fileName)} title={file.name}>
-                      {file.name}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                      <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                        {item.file.name}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          color: colors.dimText,
+                          fontFamily: typography.fontFamilyMono,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={item.virtualPath}
+                      >
+                        {item.virtualPath}
+                      </span>
+                    </div>
                   </div>
 
                   {isRejected ? (
@@ -804,7 +856,7 @@ export function UploadDrawer({
                       Failed
                     </span>
                   ) : (
-                    <span {...stylex.props(styles.fileMeta)}>{formatBytes(file.size)}</span>
+                    <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.file.size)}</span>
                   )}
                 </div>
 
@@ -823,13 +875,14 @@ export function UploadDrawer({
                       {accounts && accounts.length > 0 ? (
                         <div {...stylex.props(styles.selectWrapper)}>
                           <select
-                            aria-label={`Select target drive for ${file.name}`}
+                            aria-label={`Select target drive for ${item.virtualPath}`}
+                            title={chosenAcc ? `${chosenAcc.displayName || chosenAcc.id} (${chosenAcc.email || chosenAcc.id})` : 'Select drive'}
                             value={chosenAccountId}
                             disabled={isUploading || prog?.status === 'complete'}
                             {...stylex.props(styles.accountSelect)}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setSelectedAccounts((prev) => ({ ...prev, [file.name]: val }));
+                              setSelectedAccounts((prev) => ({ ...prev, [item.key]: val }));
                             }}
                           >
                             {!chosenAccountId && (
@@ -839,10 +892,10 @@ export function UploadDrawer({
                             )}
                             {accounts.map((acc) => {
                               const isDriveDisabled = Boolean(acc.isDisabled);
-                              const hasHeadroom = acc.headroomBytes >= file.size;
+                              const hasHeadroom = acc.headroomBytes >= item.file.size;
                               const remainingBudget =
                                 acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
-                              const hasTransferBudget = remainingBudget >= file.size;
+                              const hasTransferBudget = remainingBudget >= item.file.size;
                               const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
 
                               let labelSuffix = '';
@@ -854,13 +907,15 @@ export function UploadDrawer({
                                 labelSuffix = ' (No headroom)';
                               } else if (!hasTransferBudget) {
                                 labelSuffix = ' (24h limit reached)';
-                              } else if (acc.id === preview?.targetAccountId && !selectedAccounts[file.name]) {
+                              } else if (acc.id === preview?.targetAccountId && !selectedAccounts[item.key]) {
                                 labelSuffix = ' (Auto)';
                               }
 
+                              const fullLabel = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
+
                               return (
-                                <option key={acc.id} value={acc.id} disabled={!canHold}>
-                                  {acc.displayName || acc.id} ({acc.email || acc.id}){labelSuffix}
+                                <option key={acc.id} value={acc.id} disabled={!canHold} title={fullLabel}>
+                                  {fullLabel}
                                 </option>
                               );
                             })}
@@ -870,7 +925,7 @@ export function UploadDrawer({
                           </div>
                         </div>
                       ) : preview?.targetAccountId ? (
-                        <span {...stylex.props(styles.badge)}>
+                        <span {...stylex.props(styles.badge)} title={preview.targetAccountId}>
                           {preview.targetAccountId}
                         </span>
                       ) : planError ? (
@@ -910,7 +965,7 @@ export function UploadDrawer({
             }}
             disabled={isUploading}
           >
-            {overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0
+            {overallProgress.completedCount === normalizedItems.length && normalizedItems.length > 0
               ? 'Close'
               : 'Cancel'}
           </button>
@@ -921,9 +976,9 @@ export function UploadDrawer({
             onClick={handleStartUpload}
             disabled={
               isUploading ||
-              (isPlanning && !stagedFiles.every((f) => selectedAccounts[f.name])) ||
+              (isPlanning && !normalizedItems.every((it) => selectedAccounts[it.key])) ||
               allRejected ||
-              stagedFiles.length === 0 ||
+              normalizedItems.length === 0 ||
               hasUnallocatedFiles
             }
           >
