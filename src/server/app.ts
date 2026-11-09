@@ -131,7 +131,30 @@ const app = new Hono()
       authorized: r.authorized,
       sourceFile: r.config.sourceFile,
       isDisabled: dbMap.get(r.config.accountId)?.isDisabled ?? false,
+      mtimeMs: r.config.mtimeMs ?? 0,
     }));
+
+    list.sort((a, b) => {
+      // Unauthorized / imported accounts at top
+      if (!a.authorized && b.authorized) return -1;
+      if (a.authorized && !b.authorized) return 1;
+
+      // Both unauthorized: newest imported at top
+      if (!a.authorized && !b.authorized) {
+        if (a.mtimeMs !== b.mtimeMs) {
+          return b.mtimeMs - a.mtimeMs;
+        }
+        return a.accountId.localeCompare(b.accountId);
+      }
+
+      // Both authorized: alphabetical by Gmail address (email)
+      const dbA = dbMap.get(a.accountId);
+      const dbB = dbMap.get(b.accountId);
+      const emailA = (dbA?.email || a.accountId).toLowerCase();
+      const emailB = (dbB?.email || b.accountId).toLowerCase();
+      return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
     return c.json({ accounts: list });
   })
   .post('/api/accounts/:id/disable', async (c) => {

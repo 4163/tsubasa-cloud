@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
 import { accounts, files, transferLogs } from '../db/schema.js';
-import { eq, and, gte, sql } from 'drizzle-orm';
+import { eq, and, gte, sql, asc } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 // Safety reserve strictly set aside to protect Gmail, Google Photos, and system metadata
@@ -210,7 +210,10 @@ export async function getSystemStorageBreakdown(): Promise<SystemStorageBreakdow
 }
 
 export async function getPooledStorageOverview(nowMs = Date.now()): Promise<PooledStorageOverview> {
-  const allAccounts = await db.select().from(accounts);
+  const allAccounts = await db
+    .select()
+    .from(accounts)
+    .orderBy(asc(accounts.email));
   const systemStorage = await getSystemStorageBreakdown();
 
   const activeFiles = await db

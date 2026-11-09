@@ -48,6 +48,7 @@ export interface AccountCredentials {
   redirectUris: string[];
   tokens?: Credentials;
   sourceFile: string;
+  mtimeMs?: number;
 }
 
 export interface AccountAuthRecord {
@@ -96,6 +97,7 @@ class AuthPool {
       if (!parsed) {
         continue;
       }
+      parsed.mtimeMs = stat.mtimeMs;
 
       if (parsed.tokens?.id_token) {
         const email = extractEmailFromIdToken(parsed.tokens.id_token);
@@ -124,6 +126,7 @@ class AuthPool {
 
       const existing = this.pool.get(parsed.accountId);
       if (existing) {
+        existing.config.mtimeMs = stat.mtimeMs;
         if (parsed.tokens && JSON.stringify(parsed.tokens) !== JSON.stringify(existing.config.tokens)) {
           existing.config.tokens = parsed.tokens;
           existing.client.setCredentials(parsed.tokens);
