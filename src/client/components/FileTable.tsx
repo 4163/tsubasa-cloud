@@ -9,6 +9,8 @@ import {
   IconTrash,
   IconChevronLeft,
   IconChevronRight,
+  IconChevronUp,
+  IconChevronDown,
   IconRotateCcw,
   IconUpload,
   IconCheck,
@@ -27,6 +29,9 @@ export type ClientFolder = Omit<Folder, 'createdAt' | 'updatedAt'> & {
   createdAt: string | Date;
   updatedAt: string | Date;
 };
+
+export type SortColumn = 'name' | 'account' | 'size' | 'date';
+export type SortDirection = 'asc' | 'desc';
 
 interface FileTableProps {
   files: ClientFileRecord[];
@@ -48,6 +53,9 @@ interface FileTableProps {
   accounts?: AccountItem[];
   onTransferFile?: (fileId: string, targetAccountId: string) => Promise<void>;
   transferringFileId?: string | null;
+  sortColumn?: SortColumn;
+  sortDirection?: SortDirection;
+  onSortChange?: (column: SortColumn, direction: SortDirection) => void;
 }
 
 type TableItem =
@@ -77,7 +85,7 @@ const styles = stylex.create({
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
     gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
-    alignItems: 'center',
+    alignItems: 'stretch',
     paddingLeft: spacing.space3,
     paddingRight: spacing.space4,
     fontSize: typography.fontSizeTableHeader,
@@ -92,6 +100,76 @@ const styles = stylex.create({
   },
   colRight: {
     textAlign: 'right',
+  },
+  headerCell: {
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    minWidth: 0,
+    boxSizing: 'border-box',
+  },
+  headerCellRight: {
+    justifyContent: 'flex-end',
+  },
+  headerBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space1,
+    height: '100%',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    backgroundColor: 'transparent',
+    borderWidth: '0px',
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeTableHeader,
+    fontWeight: typography.fontWeightTableHeader,
+    color: colors.secondaryText,
+    cursor: 'pointer',
+    userSelect: 'none',
+    outline: 'none',
+    borderRadius: radius.compact,
+    boxSizing: 'border-box',
+    transition: motion.transitionFast,
+    ':hover': {
+      color: colors.primaryText,
+      backgroundColor: colors.rowHover,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+      transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.accentGold,
+      outlineOffset: '-2px',
+    },
+  },
+  headerBtnLeft: {
+    marginLeft: '-4px',
+  },
+  headerBtnRight: {
+    marginRight: '-4px',
+  },
+  headerBtnActive: {
+    color: colors.primaryText,
+  },
+  sortSlot: {
+    width: '12px',
+    height: '12px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  sortIcon: {
+    color: 'currentColor',
+    flexShrink: 0,
+    transition: motion.transitionFast,
+  },
+  sortIconHidden: {
+    visibility: 'hidden',
+    pointerEvents: 'none',
   },
   scrollViewport: {
     flex: 1,
@@ -468,6 +546,90 @@ function formatDate(dateValue: Date | number | string | null | undefined): strin
       });
 }
 
+function sortFolders(
+  foldersList: ClientFolder[],
+  column: SortColumn,
+  direction: SortDirection
+): ClientFolder[] {
+  return [...foldersList].sort((a, b) => {
+    if (column === 'name') {
+      const cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      return direction === 'asc' ? cmp : -cmp;
+    }
+    if (column === 'date') {
+      const timeA = new Date(a.updatedAt).getTime() || 0;
+      const timeB = new Date(b.updatedAt).getTime() || 0;
+      const diff = timeA - timeB;
+      if (diff !== 0) return direction === 'asc' ? diff : -diff;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    }
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  });
+}
+
+function sortFiles(
+  filesList: ClientFileRecord[],
+  column: SortColumn,
+  direction: SortDirection,
+  isTrash: boolean
+): ClientFileRecord[] {
+  return [...filesList].sort((a, b) => {
+    if (column === 'name') {
+      const cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      return direction === 'asc' ? cmp : -cmp;
+    }
+    if (column === 'account') {
+      const cmp = a.accountId.localeCompare(b.accountId, undefined, { numeric: true, sensitivity: 'base' });
+      if (cmp !== 0) return direction === 'asc' ? cmp : -cmp;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    }
+    if (column === 'size') {
+      const diff = a.sizeBytes - b.sizeBytes;
+      if (diff !== 0) return direction === 'asc' ? diff : -diff;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    }
+    if (column === 'date') {
+      const dateA = isTrash ? (a.trashedAt || a.updatedAt) : a.updatedAt;
+      const dateB = isTrash ? (b.trashedAt || b.updatedAt) : b.updatedAt;
+      const timeA = new Date(dateA).getTime() || 0;
+      const timeB = new Date(dateB).getTime() || 0;
+      const diff = timeA - timeB;
+      if (diff !== 0) return direction === 'asc' ? diff : -diff;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    }
+    return 0;
+  });
+}
+
+const SESSION_SORT_COL_KEY = 'tsubasa-filetable-sort-column';
+const SESSION_SORT_DIR_KEY = 'tsubasa-filetable-sort-direction';
+
+function getSessionSortColumn(fallback: SortColumn = 'name'): SortColumn {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const val = window.sessionStorage.getItem(SESSION_SORT_COL_KEY);
+    if (val === 'name' || val === 'account' || val === 'size' || val === 'date') {
+      return val;
+    }
+  } catch {
+    // sessionStorage not accessible
+  }
+  return fallback;
+}
+
+function getSessionSortDirection(fallback: SortDirection = 'asc'): SortDirection {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const val = window.sessionStorage.getItem(SESSION_SORT_DIR_KEY);
+    if (val === 'asc' || val === 'desc') {
+      return val;
+    }
+  } catch {
+    // sessionStorage not accessible
+  }
+  return fallback;
+}
+
 export function FileTable({
   files,
   folders,
@@ -488,6 +650,9 @@ export function FileTable({
   accounts = [],
   onTransferFile,
   transferringFileId = null,
+  sortColumn: sortColumnProp,
+  sortDirection: sortDirectionProp,
+  onSortChange,
 }: FileTableProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const dragCounter = useRef(0);
@@ -495,6 +660,42 @@ export function FileTable({
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const justFinishedMarquee = useRef(false);
   const lastSelectedIdRef = useRef<string | null>(null);
+
+  const [internalSortColumn, setInternalSortColumn] = useState<SortColumn>(() => getSessionSortColumn('name'));
+  const [internalSortDirection, setInternalSortDirection] = useState<SortDirection>(() => getSessionSortDirection('asc'));
+
+  const currentSortColumn = sortColumnProp ?? internalSortColumn;
+  const currentSortDirection = sortDirectionProp ?? internalSortDirection;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.setItem(SESSION_SORT_COL_KEY, currentSortColumn);
+      window.sessionStorage.setItem(SESSION_SORT_DIR_KEY, currentSortDirection);
+    } catch {
+      // ignore storage errors
+    }
+  }, [currentSortColumn, currentSortDirection]);
+
+  const handleSort = (column: SortColumn) => {
+    let newDirection: SortDirection = 'asc';
+    if (currentSortColumn === column) {
+      newDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      if (column === 'date' || column === 'size') {
+        newDirection = 'desc';
+      } else {
+        newDirection = 'asc';
+      }
+    }
+    if (sortColumnProp === undefined) {
+      setInternalSortColumn(column);
+    }
+    if (sortDirectionProp === undefined) {
+      setInternalSortDirection(newDirection);
+    }
+    onSortChange?.(column, newDirection);
+  };
 
   const handleDragEnter = (e: React.DragEvent) => {
     if (isTrashView) return;
@@ -558,15 +759,16 @@ export function FileTable({
         )
       : files;
 
-    list.forEach((f) => items.push({ kind: 'trash', data: f }));
+    const sortedList = sortFiles(list, currentSortColumn, currentSortDirection, true);
+    sortedList.forEach((f) => items.push({ kind: 'trash', data: f }));
   } else if (isSearching) {
-    folders
-      .filter((f) => f.name.toLowerCase().includes(searchLower))
-      .forEach((f) => items.push({ kind: 'folder', data: f }));
+    const matchedFolders = folders.filter((f) => f.name.toLowerCase().includes(searchLower));
+    const sortedFoldersList = sortFolders(matchedFolders, currentSortColumn, currentSortDirection);
+    sortedFoldersList.forEach((f) => items.push({ kind: 'folder', data: f }));
 
-    files
-      .filter((f) => !f.isTrashed && f.name.toLowerCase().includes(searchLower))
-      .forEach((f) => items.push({ kind: 'file', data: f }));
+    const matchedFiles = files.filter((f) => !f.isTrashed && f.name.toLowerCase().includes(searchLower));
+    const sortedFilesList = sortFiles(matchedFiles, currentSortColumn, currentSortDirection, false);
+    sortedFilesList.forEach((f) => items.push({ kind: 'file', data: f }));
   } else {
     // Add ".." if not root
     if (cleanPath !== '/') {
@@ -574,16 +776,14 @@ export function FileTable({
     }
 
     // Folders in current dir
-    folders
-      .filter((f) => getParentDir(f.virtualPath) === cleanPath)
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach((f) => items.push({ kind: 'folder', data: f }));
+    const dirFolders = folders.filter((f) => getParentDir(f.virtualPath) === cleanPath);
+    const sortedFoldersList = sortFolders(dirFolders, currentSortColumn, currentSortDirection);
+    sortedFoldersList.forEach((f) => items.push({ kind: 'folder', data: f }));
 
     // Files in current dir
-    files
-      .filter((f) => !f.isTrashed && getParentDir(f.virtualPath) === cleanPath)
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach((f) => items.push({ kind: 'file', data: f }));
+    const dirFiles = files.filter((f) => !f.isTrashed && getParentDir(f.virtualPath) === cleanPath);
+    const sortedFilesList = sortFiles(dirFiles, currentSortColumn, currentSortDirection, false);
+    sortedFilesList.forEach((f) => items.push({ kind: 'file', data: f }));
   }
 
   // Selectable items in current view
@@ -814,11 +1014,111 @@ export function FileTable({
             {isIndeterminate && <IconMinus size={12} strokeWidth={3} />}
           </button>
         </div>
-        <div>Name</div>
-        <div>Account</div>
-        <div {...stylex.props(styles.colRight)}>Size</div>
-        <div {...stylex.props(styles.colRight)}>{isTrashView ? 'Date trashed' : 'Modified'}</div>
-        <div {...stylex.props(styles.colRight)}>Actions</div>
+        <div
+          role="columnheader"
+          aria-sort={currentSortColumn === 'name' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+          {...stylex.props(styles.headerCell)}
+        >
+          <button
+            type="button"
+            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'name' && styles.headerBtnActive)}
+            onClick={() => handleSort('name')}
+            aria-label={`Sort by Name in ${currentSortColumn === 'name' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
+            title={`Sort by Name ${currentSortColumn === 'name' ? (currentSortDirection === 'asc' ? '(Z to A)' : '(A to Z)') : '(A to Z)'}`}
+          >
+            <span>Name</span>
+            <span {...stylex.props(styles.sortSlot)}>
+              {currentSortColumn === 'name' ? (
+                currentSortDirection === 'asc' ? (
+                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                ) : (
+                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                )
+              ) : (
+                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
+              )}
+            </span>
+          </button>
+        </div>
+        <div
+          role="columnheader"
+          aria-sort={currentSortColumn === 'account' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+          {...stylex.props(styles.headerCell)}
+        >
+          <button
+            type="button"
+            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'account' && styles.headerBtnActive)}
+            onClick={() => handleSort('account')}
+            aria-label={`Sort by Account in ${currentSortColumn === 'account' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
+            title={`Sort by Account ${currentSortColumn === 'account' ? (currentSortDirection === 'asc' ? '(Z to A)' : '(A to Z)') : '(A to Z)'}`}
+          >
+            <span>Account</span>
+            <span {...stylex.props(styles.sortSlot)}>
+              {currentSortColumn === 'account' ? (
+                currentSortDirection === 'asc' ? (
+                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                ) : (
+                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                )
+              ) : (
+                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
+              )}
+            </span>
+          </button>
+        </div>
+        <div
+          role="columnheader"
+          aria-sort={currentSortColumn === 'size' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+          {...stylex.props(styles.headerCell, styles.headerCellRight)}
+        >
+          <button
+            type="button"
+            {...stylex.props(styles.headerBtn, styles.headerBtnRight, currentSortColumn === 'size' && styles.headerBtnActive)}
+            onClick={() => handleSort('size')}
+            aria-label={`Sort by Size in ${currentSortColumn === 'size' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
+            title={`Sort by Size ${currentSortColumn === 'size' ? (currentSortDirection === 'asc' ? '(largest first)' : '(smallest first)') : '(largest first)'}`}
+          >
+            <span>Size</span>
+            <span {...stylex.props(styles.sortSlot)}>
+              {currentSortColumn === 'size' ? (
+                currentSortDirection === 'asc' ? (
+                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                ) : (
+                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                )
+              ) : (
+                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
+              )}
+            </span>
+          </button>
+        </div>
+        <div
+          role="columnheader"
+          aria-sort={currentSortColumn === 'date' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+          {...stylex.props(styles.headerCell, styles.headerCellRight)}
+        >
+          <button
+            type="button"
+            {...stylex.props(styles.headerBtn, styles.headerBtnRight, currentSortColumn === 'date' && styles.headerBtnActive)}
+            onClick={() => handleSort('date')}
+            aria-label={`Sort by ${isTrashView ? 'Date trashed' : 'Date modified'} in ${currentSortColumn === 'date' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
+            title={`Sort by ${isTrashView ? 'Date trashed' : 'Date modified'} ${currentSortColumn === 'date' ? (currentSortDirection === 'asc' ? '(newest first)' : '(oldest first)') : '(newest first)'}`}
+          >
+            <span>{isTrashView ? 'Date trashed' : 'Modified'}</span>
+            <span {...stylex.props(styles.sortSlot)}>
+              {currentSortColumn === 'date' ? (
+                currentSortDirection === 'asc' ? (
+                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                ) : (
+                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                )
+              ) : (
+                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
+              )}
+            </span>
+          </button>
+        </div>
+        <div {...stylex.props(styles.headerCell, styles.headerCellRight)}>Actions</div>
       </div>
 
       <div
