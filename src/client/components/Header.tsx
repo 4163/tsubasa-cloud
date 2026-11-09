@@ -149,7 +149,6 @@ const styles = stylex.create({
   themeBtnActive: {
     backgroundColor: colors.surfaceElevated,
     color: colors.primaryText,
-    boxShadow: '0 1px 2px rgba(17, 29, 24, 0.08)',
     cursor: 'pointer',
     ':hover': {
       backgroundColor: colors.surfaceElevated,

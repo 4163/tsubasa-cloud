@@ -61,7 +61,6 @@ const styles = stylex.create({
     borderLeftWidth: '1px',
     borderLeftStyle: 'solid',
     borderLeftColor: colors.borderSubtle,
-    boxShadow: '-4px 0 24px rgba(0, 0, 0, 0.18)',
     display: 'flex',
     flexDirection: 'column',
     zIndex: 100,
@@ -565,6 +564,10 @@ export function ExternalChangesDrawer({
           <div {...stylex.props(styles.selectWrapper)}>
             <select
               aria-label="Select connected account"
+              title={(() => {
+                const cur = accounts.find((a) => a.id === selectedAccount);
+                return cur ? `${cur.displayName || cur.id} (${cur.email || cur.id})` : 'Select connected account';
+              })()}
               {...stylex.props(styles.select)}
               value={selectedAccount}
               onChange={(e) => setSelectedAccount(e.target.value)}
@@ -576,7 +579,11 @@ export function ExternalChangesDrawer({
                 </option>
               ) : (
                 accounts.map((acc) => (
-                  <option key={acc.id} value={acc.id}>
+                  <option
+                    key={acc.id}
+                    value={acc.id}
+                    title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
+                  >
                     {acc.displayName || acc.id} ({acc.email || acc.id})
                   </option>
                 ))
@@ -611,7 +618,24 @@ export function ExternalChangesDrawer({
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <span {...stylex.props(styles.fileName)}>{item.name}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                            {item.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              color: colors.dimText,
+                              fontFamily: typography.fontFamilyMono,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={item.virtualPath}
+                          >
+                            {item.virtualPath}
+                          </span>
+                        </div>
                       </div>
                       <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
                     </div>
@@ -652,7 +676,24 @@ export function ExternalChangesDrawer({
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <span {...stylex.props(styles.fileName)}>{item.name}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                            {item.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              color: colors.dimText,
+                              fontFamily: typography.fontFamilyMono,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={item.virtualPath}
+                          >
+                            {item.virtualPath}
+                          </span>
+                        </div>
                       </div>
                       <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
                     </div>
@@ -691,7 +732,24 @@ export function ExternalChangesDrawer({
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <span {...stylex.props(styles.fileName)}>{item.name}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                            {item.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              color: colors.dimText,
+                              fontFamily: typography.fontFamilyMono,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={item.virtualPath}
+                          >
+                            {item.virtualPath}
+                          </span>
+                        </div>
                       </div>
                       <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
                     </div>
@@ -728,7 +786,9 @@ export function ExternalChangesDrawer({
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <span {...stylex.props(styles.fileName)}>{item.virtualPath}</span>
+                        <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                          {item.virtualPath}
+                        </span>
                       </div>
                     </div>
 

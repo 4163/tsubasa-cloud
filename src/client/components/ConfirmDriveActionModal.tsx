@@ -42,7 +42,6 @@ const styles = stylex.create({
     overflow: 'hidden',
     zIndex: 120,
     boxSizing: 'border-box',
-    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
   },
   header: {
     height: '48px',

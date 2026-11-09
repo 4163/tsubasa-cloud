@@ -873,6 +873,7 @@ function RedactedEmail({ email }: { email: string }) {
   return (
     <span
       ref={spanRef}
+      title={email}
       {...stylex.props(styles.redactedEmail, isRevealed && styles.redactedEmailRevealed)}
       onMouseEnter={() => {
         setIsHovered(true);
@@ -1099,7 +1100,10 @@ export function Sidebar({
                       index={index}
                     />
                     <div {...stylex.props(styles.accountTextGroup)}>
-                      <span {...stylex.props(styles.accountName)}>
+                      <span
+                        {...stylex.props(styles.accountName)}
+                        title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
+                      >
                         {acc.displayName || acc.id}
                       </span>
                       <RedactedEmail email={acc.email || acc.id} />
@@ -1108,11 +1112,17 @@ export function Sidebar({
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     {acc.isDisabled ? (
-                      <span {...stylex.props(styles.disabledPill)}>Disabled</span>
+                      <span {...stylex.props(styles.disabledPill)} title="Excluded from cluster storage pool">
+                        Disabled
+                      </span>
                     ) : isBreached ? (
-                      <span {...stylex.props(styles.fullPill)}>Full</span>
+                      <span {...stylex.props(styles.fullPill)} title="Usable limit breached">
+                        Full
+                      </span>
                     ) : acc.authorized ? (
-                      <span {...stylex.props(styles.authPill)}>Active</span>
+                      <span {...stylex.props(styles.authPill)} title="Authorized and active in storage pool">
+                        Active
+                      </span>
                     ) : null}
                   </div>
                 </div>

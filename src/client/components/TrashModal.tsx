@@ -33,7 +33,6 @@ const styles = stylex.create({
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
-    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.25)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -421,10 +420,10 @@ export function TrashModal({ isOpen, onClose, onActionComplete }: TrashModalProp
               <div {...stylex.props(styles.itemInfo)}>
                 <IconFile size={16} {...stylex.props(styles.itemIcon)} />
                 <div {...stylex.props(styles.itemTexts)}>
-                  <span {...stylex.props(styles.itemName)}>
+                  <span {...stylex.props(styles.itemName)} title={file.virtualPath}>
                     {file.name}
                   </span>
-                  <span {...stylex.props(styles.itemPath)}>
+                  <span {...stylex.props(styles.itemPath)} title={file.virtualPath}>
                     {file.virtualPath}
                   </span>
                 </div>
