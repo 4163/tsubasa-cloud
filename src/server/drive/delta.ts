@@ -1,8 +1,9 @@
-import { getDriveClient, getDescendantFolderIds } from './client.js';
+import { getDriveClient, resolveRemoteFolderTree } from './client.js';
 import {
   runColdReconciliation,
   extractFolderPaths,
   insertFolderRecord,
+  insertFolderStmt,
   upsertFileRecord,
   deleteFileStmt,
   trashFileStmt,
@@ -52,7 +53,14 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
       throw new Error(`Account ${accountId} does not have a registered root folder`);
     }
 
-    const validFolderIds = await getDescendantFolderIds(drive, rootFolderId);
+    const folderTree = await resolveRemoteFolderTree(drive, rootFolderId);
+    const validFolderIds = folderTree.folderIds;
+
+    sqlite.transaction(() => {
+      for (const folder of folderTree.folders) {
+        insertFolderStmt.run(folder.virtualPath, folder.virtualPath, folder.name, folder.parentId);
+      }
+    })();
 
     let pageToken: string | undefined = accountRecord.lastSyncToken;
     let newStartToken: string | null = null;
@@ -87,6 +95,10 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
           const file = change.file;
           if (!file) continue;
 
+          if (file.mimeType === 'application/vnd.google-apps.folder') {
+            continue;
+          }
+
           if (file.trashed) {
             trashFileStmt.run(change.fileId, accountId);
             updatedCount++;
@@ -118,7 +130,9 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
           }
 
           if (file.appProperties?.tsubasa_managed === 'true') {
-            const virtualPath = file.appProperties.tsubasa_virtual_path || `/${file.name}`;
+            const parentFolderPath = file.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+            const computedPath = parentFolderPath === '/' ? `/${file.name}` : `${parentFolderPath}/${file.name}`;
+            const virtualPath = file.appProperties.tsubasa_virtual_path || computedPath;
             const fileId = file.appProperties.tsubasa_virtual_id || file.id || change.fileId;
             const hash = file.appProperties.tsubasa_checksum || file.md5Checksum || file.sha256Checksum || null;
 
@@ -161,7 +175,7 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
 
     do {
       const remoteRes: any = await drive.files.list({
-        q: "appProperties has { key='tsubasa_managed' and value='true' } and trashed = false",
+        q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder' and trashed = false",
         fields: 'nextPageToken, files(id, name, parents, appProperties)',
         pageSize: 1000,
         pageToken: managedPageToken,

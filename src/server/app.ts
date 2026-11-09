@@ -27,6 +27,11 @@ import {
   disableDriveAccount,
   enableDriveAccount,
   removeDriveAccount,
+  moveItems,
+  copyItems,
+  renameItem,
+  trashFolder,
+  ensureLocalFolderHierarchy,
 } from './drive/index.js';
 import {
   getPooledStorageOverview,
@@ -329,15 +334,7 @@ const app = new Hono()
       const { virtualPath, name } = c.req.valid('json');
       const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
       try {
-        await db
-          .insert(folders)
-          .values({
-            id: normalizedPath,
-            virtualPath: normalizedPath,
-            name,
-          })
-          .onConflictDoNothing();
-
+        ensureLocalFolderHierarchy(normalizedPath);
         return c.json({ id: normalizedPath, virtualPath: normalizedPath, name }, 201);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -351,35 +348,91 @@ const app = new Hono()
     }
     const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
     try {
-      // Soft-trash descendant files
-      await db
-        .update(files)
-        .set({ isTrashed: true, trashedAt: new Date() })
-        .where(
-          or(
-            like(files.virtualPath, `${normalizedPath}/%`),
-            eq(files.folderId, normalizedPath),
-            eq(files.folderId, virtualPath)
-          )
-        );
-
-      // Delete folder and nested folders
-      await db
-        .delete(folders)
-        .where(
-          or(
-            eq(folders.virtualPath, normalizedPath),
-            like(folders.virtualPath, `${normalizedPath}/%`),
-            eq(folders.id, normalizedPath),
-            eq(folders.id, virtualPath)
-          )
-        );
-
-      return c.json({ success: true, virtualPath: normalizedPath });
+      const result = await trashFolder(normalizedPath);
+      return c.json({ success: true, virtualPath: normalizedPath, trashedCount: result.trashedFilesCount });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   })
+  .post(
+    '/api/items/move',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
+        return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
+      }
+      return {
+        items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
+        targetFolderPath: body.targetFolderPath,
+      };
+    }),
+    async (c) => {
+      const { items, targetFolderPath } = c.req.valid('json');
+      try {
+        const result = await moveItems(items, targetFolderPath);
+        return c.json(result);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/items/copy',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
+        return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
+      }
+      return {
+        items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
+        targetFolderPath: body.targetFolderPath,
+      };
+    }),
+    async (c) => {
+      const { items, targetFolderPath } = c.req.valid('json');
+      try {
+        const result = await copyItems(items, targetFolderPath);
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/items/rename',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      const candidateName =
+        typeof body?.name === 'string' ? body.name : typeof body?.newName === 'string' ? body.newName : undefined;
+      if (
+        (body?.kind !== 'file' && body?.kind !== 'folder') ||
+        typeof body?.id !== 'string' ||
+        typeof candidateName !== 'string'
+      ) {
+        return c.json({ error: 'kind ("file"|"folder"), id (string), and name (string) are required' }, 400);
+      }
+      return {
+        kind: body.kind as 'file' | 'folder',
+        id: body.id,
+        name: candidateName.trim(),
+      };
+    }),
+    async (c) => {
+      const { kind, id, name } = c.req.valid('json');
+      if (!name || name.includes('/') || name.includes('\\')) {
+        return c.json({ error: 'Invalid name: cannot be empty or contain slashes' }, 400);
+      }
+      try {
+        const result = await renameItem(kind, id, name);
+        return c.json(result);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
   .post(
     '/api/files/upload/session',
     validator('json', (value, c) => {

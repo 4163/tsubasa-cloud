@@ -6,6 +6,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { authPool } from './auth.js';
 import { getDriveClient, ensureRootFolder } from './client.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
+import { ensureLocalFolderHierarchy } from './sync.js';
 import {
   selectPlacementForFile,
   validateTargetPlacement,
@@ -165,6 +166,9 @@ export async function executeStreamingUpload(
   };
 
   const fileName = path.posix.basename(session.virtualPath);
+  ensureLocalFolderHierarchy(session.virtualPath);
+  const parentDir = path.posix.dirname(session.virtualPath);
+  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
 
   const insertedRecords = await db
     .insert(files)
@@ -177,6 +181,7 @@ export async function executeStreamingUpload(
       hash: options.hash || driveData.md5Checksum || null,
       accountId: session.accountId,
       driveFileId: driveData.id,
+      folderId,
       isTrashed: false,
     })
     .onConflictDoUpdate({
@@ -188,6 +193,7 @@ export async function executeStreamingUpload(
         hash: options.hash || driveData.md5Checksum || null,
         accountId: session.accountId,
         driveFileId: driveData.id,
+        folderId,
         isTrashed: false,
         updatedAt: new Date(),
       },
@@ -289,11 +295,16 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
     supportsAllDrives: false,
   });
 
+  ensureLocalFolderHierarchy(file.virtualPath);
+  const parentDir = path.posix.dirname(file.virtualPath);
+  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+
   const updated = await db
     .update(files)
     .set({
       isTrashed: false,
       trashedAt: null,
+      folderId,
       updatedAt: new Date(),
     })
     .where(eq(files.id, fileId))

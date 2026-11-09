@@ -1,4 +1,4 @@
-import { getDriveClient, getDescendantFolderIds } from './client.js';
+import { getDriveClient, resolveRemoteFolderTree } from './client.js';
 import { db, sqlite } from '../db/index.js';
 import { accounts, files } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
@@ -28,14 +28,15 @@ export const insertFolderStmt = sqlite.prepare(`
   VALUES (?, ?, ?, ?, unixepoch())
   ON CONFLICT(virtual_path) DO UPDATE SET
     name = excluded.name,
+    parent_folder_id = excluded.parent_folder_id,
     updated_at = unixepoch()
 `);
 
 export const upsertFileStmt = sqlite.prepare(`
   INSERT INTO files (
     id, virtual_path, name, size_bytes, mime_type, hash,
-    account_id, drive_file_id, is_trashed, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+    account_id, drive_file_id, folder_id, is_trashed, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
   ON CONFLICT(virtual_path) DO UPDATE SET
     name = excluded.name,
     size_bytes = excluded.size_bytes,
@@ -43,6 +44,7 @@ export const upsertFileStmt = sqlite.prepare(`
     hash = excluded.hash,
     account_id = excluded.account_id,
     drive_file_id = excluded.drive_file_id,
+    folder_id = excluded.folder_id,
     is_trashed = excluded.is_trashed,
     updated_at = unixepoch()
 `);
@@ -73,7 +75,32 @@ export function insertFolderRecord(folderPath: string): void {
   insertFolderStmt.run(folderPath, folderPath, folderName, parentId);
 }
 
+export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string): void {
+  const folders = extractFolderPaths(virtualPathOrFolderPath);
+  if (virtualPathOrFolderPath.startsWith('/') && !virtualPathOrFolderPath.includes('.') && virtualPathOrFolderPath !== '/') {
+    if (!folders.includes(virtualPathOrFolderPath)) {
+      folders.unshift(virtualPathOrFolderPath);
+    }
+  }
+  for (let i = folders.length - 1; i >= 0; i--) {
+    insertFolderRecord(folders[i]);
+  }
+}
+
 export function upsertFileRecord(f: DiscoveredFile): void {
+  const parentPath = path.posix.dirname(f.virtualPath);
+  const folderId = parentPath === '/' || parentPath === '.' ? null : parentPath;
+
+  const existingById = sqlite
+    .prepare('SELECT id, virtual_path FROM files WHERE id = ? OR drive_file_id = ?')
+    .get(f.id, f.driveFileId) as { id: string; virtual_path: string } | undefined;
+
+  if (existingById && existingById.virtual_path !== f.virtualPath) {
+    sqlite
+      .prepare('UPDATE files SET virtual_path = ?, folder_id = ? WHERE id = ?')
+      .run(f.virtualPath, folderId, existingById.id);
+  }
+
   upsertFileStmt.run(
     f.id,
     f.virtualPath,
@@ -83,6 +110,7 @@ export function upsertFileRecord(f: DiscoveredFile): void {
     f.hash,
     f.accountId,
     f.driveFileId,
+    folderId,
     f.isTrashed ? 1 : 0
   );
 }
@@ -101,15 +129,20 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       throw new Error(`Account ${accountId} does not have a registered root folder`);
     }
 
-    const validFolderIds = await getDescendantFolderIds(drive, accountRecord.rootFolderId);
+    const folderTree = await resolveRemoteFolderTree(drive, accountRecord.rootFolderId);
+    const validFolderIds = folderTree.folderIds;
     const discoveredFiles: DiscoveredFile[] = [];
     const discoveredFolderPaths = new Set<string>();
+
+    for (const folder of folderTree.folders) {
+      discoveredFolderPaths.add(folder.virtualPath);
+    }
 
     let pageToken: string | undefined = undefined;
 
     do {
       const res: any = await drive.files.list({
-        q: "appProperties has { key='tsubasa_managed' and value='true' }",
+        q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder'",
         fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, parents, appProperties)',
         pageSize: 1000,
         pageToken,
@@ -138,7 +171,9 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
           continue;
         }
 
-        const virtualPath = item.appProperties?.tsubasa_virtual_path || `/${item.name}`;
+        const parentFolderPath = item.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+        const computedPath = parentFolderPath === '/' ? `/${item.name}` : `${parentFolderPath}/${item.name}`;
+        const virtualPath = item.appProperties?.tsubasa_virtual_path || computedPath;
         const fileId = item.appProperties?.tsubasa_virtual_id || item.id;
         const hash = item.appProperties?.tsubasa_checksum || item.md5Checksum || item.sha256Checksum || null;
 
@@ -169,6 +204,10 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
     const discoveredDriveIds = new Set(discoveredFiles.map((f) => f.driveFileId));
 
     const applySync = sqlite.transaction(() => {
+      for (const folder of folderTree.folders) {
+        insertFolderStmt.run(folder.virtualPath, folder.virtualPath, folder.name, folder.parentId);
+      }
+
       for (const folderPath of discoveredFolderPaths) {
         insertFolderRecord(folderPath);
       }

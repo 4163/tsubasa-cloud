@@ -139,6 +139,113 @@ export async function ensureRootFolder(drive: drive_v3.Drive): Promise<string> {
   return createRes.data.id;
 }
 
+export interface RemoteFolderItem {
+  id: string;
+  virtualPath: string;
+  name: string;
+  parentId: string | null;
+}
+
+export interface RemoteFolderTree {
+  folderIds: Set<string>;
+  folderPathById: Map<string, string>;
+  folderIdByPath: Map<string, string>;
+  folders: RemoteFolderItem[];
+}
+
+/**
+ * Recursively resolves the remote folder tree inside an account's root folder (_Tsubasa~ Cloud).
+ * Discovers subfolders created directly in Google Drive as well as Tsubasa-created folders.
+ */
+export async function resolveRemoteFolderTree(
+  drive: drive_v3.Drive,
+  rootFolderId: string
+): Promise<RemoteFolderTree> {
+  const folderPathById = new Map<string, string>([[rootFolderId, '/']]);
+  const folderIdByPath = new Map<string, string>([['/', rootFolderId]]);
+  const folderIds = new Set<string>([rootFolderId]);
+  const folders: RemoteFolderItem[] = [];
+
+  let pageToken: string | undefined = undefined;
+  const rawFolders: Array<{ id: string; name: string; parents: string[]; appProperties?: Record<string, string> }> = [];
+
+  do {
+    const res: any = await drive.files.list({
+      q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+      fields: 'nextPageToken, files(id, name, parents, appProperties)',
+      pageSize: 1000,
+      pageToken,
+      spaces: 'drive',
+      supportsAllDrives: false,
+    });
+
+    for (const folder of res.data.files || []) {
+      if (folder.id && folder.name) {
+        rawFolders.push({
+          id: folder.id,
+          name: folder.name,
+          parents: folder.parents || [],
+          appProperties: folder.appProperties || {},
+        });
+      }
+    }
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  const childrenByParent = new Map<string, Array<{ id: string; name: string; appProperties?: Record<string, string> }>>();
+  for (const item of rawFolders) {
+    for (const p of item.parents) {
+      if (!childrenByParent.has(p)) {
+        childrenByParent.set(p, []);
+      }
+      childrenByParent.get(p)!.push(item);
+    }
+  }
+
+  const queue: Array<{ id: string; parentVirtualPath: string }> = [
+    { id: rootFolderId, parentVirtualPath: '/' },
+  ];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const children = childrenByParent.get(current.id) || [];
+
+    for (const child of children) {
+      if (folderIds.has(child.id)) {
+        continue;
+      }
+      folderIds.add(child.id);
+
+      const computedPath =
+        current.parentVirtualPath === '/'
+          ? `/${child.name}`
+          : `${current.parentVirtualPath}/${child.name}`;
+
+      const virtualPath = child.appProperties?.tsubasa_folder_path || computedPath;
+
+      folderPathById.set(child.id, virtualPath);
+      folderIdByPath.set(virtualPath, child.id);
+
+      const parentVirtual = current.parentVirtualPath === '/' ? null : current.parentVirtualPath;
+      folders.push({
+        id: child.id,
+        virtualPath,
+        name: child.name,
+        parentId: parentVirtual,
+      });
+
+      queue.push({ id: child.id, parentVirtualPath: virtualPath });
+    }
+  }
+
+  return {
+    folderIds,
+    folderPathById,
+    folderIdByPath,
+    folders,
+  };
+}
+
 /**
  * Resolves all folder IDs descendant from rootFolderId (including rootFolderId itself).
  * Used to verify whether files reside inside the Tsubasa storage pool.
@@ -147,40 +254,8 @@ export async function getDescendantFolderIds(
   drive: drive_v3.Drive,
   rootFolderId: string
 ): Promise<Set<string>> {
-  const folderSet = new Set<string>([rootFolderId]);
-  let pageToken: string | undefined = undefined;
-  const folderList: Array<{ id: string; parents: string[] }> = [];
-
-  do {
-    const res: any = await drive.files.list({
-      q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-      fields: 'nextPageToken, files(id, parents)',
-      pageSize: 1000,
-      pageToken,
-      spaces: 'drive',
-      supportsAllDrives: false,
-    });
-
-    for (const folder of res.data.files || []) {
-      if (folder.id) {
-        folderList.push({ id: folder.id, parents: folder.parents || [] });
-      }
-    }
-    pageToken = res.data.nextPageToken || undefined;
-  } while (pageToken);
-
-  let addedNew = true;
-  while (addedNew) {
-    addedNew = false;
-    for (const folder of folderList) {
-      if (!folderSet.has(folder.id) && folder.parents.some((p) => folderSet.has(p))) {
-        folderSet.add(folder.id);
-        addedNew = true;
-      }
-    }
-  }
-
-  return folderSet;
+  const tree = await resolveRemoteFolderTree(drive, rootFolderId);
+  return tree.folderIds;
 }
 
 
