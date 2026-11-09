@@ -9,6 +9,7 @@ export const accounts = sqliteTable('accounts', {
   quotaLimitBytes: integer('quota_limit_bytes').notNull().default(16106127360), // 15 GB default
   quotaUsedBytes: integer('quota_used_bytes').notNull().default(0),
   syncState: text('sync_state', { enum: ['idle', 'syncing', 'error'] }).notNull().default('idle'),
+  isDisabled: integer('is_disabled', { mode: 'boolean' }).notNull().default(false),
   lastSyncToken: text('last_sync_token'),
   rootFolderId: text('root_folder_id'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),

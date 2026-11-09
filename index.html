@@ -4,10 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Tsubasa~</title>
+    <title>Tsubasa~ Cloud</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <script>
+      (function () {
+        try {
+          var choice = localStorage.getItem('tsubasa-theme-choice') || 'auto';
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var isDark = choice === 'dark' || (choice === 'auto' && prefersDark);
+          var theme = isDark ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.style.backgroundColor = isDark ? '#0b1412' : '#eef2ec';
+          document.documentElement.style.color = isDark ? '#e5f2eb' : '#111d18';
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <style>
       :root {
         color-scheme: light dark;
+        background-color: #0b1412;
+        color: #e5f2eb;
+      }
+      :root[data-theme='light'] {
+        color-scheme: light;
+        background-color: #eef2ec;
+        color: #111d18;
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        background-color: #0b1412;
+        color: #e5f2eb;
       }
       body {
         margin: 0;

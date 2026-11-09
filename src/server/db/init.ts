@@ -10,6 +10,7 @@ export function initializeDatabase(): void {
       quota_limit_bytes INTEGER NOT NULL DEFAULT 16106127360,
       quota_used_bytes INTEGER NOT NULL DEFAULT 0,
       sync_state TEXT NOT NULL DEFAULT 'idle',
+      is_disabled INTEGER NOT NULL DEFAULT 0,
       last_sync_token TEXT,
       root_folder_id TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -58,5 +59,9 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS transfer_account_ts_idx ON transfer_logs(account_id, timestamp);
     CREATE INDEX IF NOT EXISTS transfer_ts_idx ON transfer_logs(timestamp);
   `);
+
+  try {
+    sqlite.exec('ALTER TABLE accounts ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0;');
+  } catch {}
 }
 

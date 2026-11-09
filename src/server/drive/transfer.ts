@@ -4,10 +4,12 @@ import { db } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import { authPool } from './auth.js';
-import { getDriveClient, ensureRootFolder } from './client.js';
+import { getDriveClient, getAccountRootFolderId } from './client.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
+import { ensureLocalFolderHierarchy } from './sync.js';
 import {
   selectPlacementForFile,
+  validateTargetPlacement,
   MAX_SINGLE_FILE_BYTES,
   FileExceedsCeilingError,
   recordTransfer,
@@ -18,6 +20,7 @@ export interface UploadOptions {
   sizeBytes: number;
   mimeType?: string;
   hash?: string;
+  targetAccountId?: string;
 }
 
 export interface ResumableSessionInfo {
@@ -41,24 +44,97 @@ async function getAccessToken(accountId: string): Promise<string> {
   return tokenInfo.token;
 }
 
-async function getAccountRootFolderId(accountId: string): Promise<string> {
-  const accountRecord = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
+export interface CopyCrossAccountOptions {
+  sourceAccountId: string;
+  sourceDriveFileId: string;
+  targetAccountId: string;
+  targetAccountEmail: string;
+  targetRemoteFolderId: string;
+  destFileName: string;
+  appProperties: Record<string, string>;
+  fields?: string;
+}
+
+export async function copyDriveFileCrossAccount(
+  options: CopyCrossAccountOptions
+): Promise<string> {
+  const {
+    sourceAccountId,
+    sourceDriveFileId,
+    targetAccountId,
+    targetAccountEmail,
+    targetRemoteFolderId,
+    destFileName,
+    appProperties,
+    fields = 'id, name, size',
+  } = options;
+
+  const driveSource = getDriveClient(sourceAccountId);
+  const driveTarget = getDriveClient(targetAccountId);
+
+  const shareRes = await driveSource.permissions.create({
+    fileId: sourceDriveFileId,
+    requestBody: {
+      role: 'reader',
+      type: 'user',
+      emailAddress: targetAccountEmail,
+    },
+    supportsAllDrives: false,
   });
 
-  if (accountRecord?.rootFolderId) {
-    return accountRecord.rootFolderId;
+  const permissionId = shareRes.data.id;
+  try {
+    const copyRes = await driveTarget.files.copy({
+      fileId: sourceDriveFileId,
+      requestBody: {
+        name: destFileName,
+        parents: [targetRemoteFolderId],
+        appProperties,
+      },
+      fields,
+      supportsAllDrives: false,
+    });
+
+    const newDriveFileId = copyRes.data.id;
+    if (!newDriveFileId) {
+      throw new Error('Google Drive cross-account copy returned empty file ID');
+    }
+    return newDriveFileId;
+  } finally {
+    if (permissionId) {
+      try {
+        await driveSource.permissions.delete({
+          fileId: sourceDriveFileId,
+          permissionId,
+          supportsAllDrives: false,
+        });
+      } catch (cleanupErr) {
+        console.warn(`Failed to cleanup temp reader permission on ${sourceDriveFileId}:`, cleanupErr);
+      }
+    }
   }
+}
 
-  const drive = getDriveClient(accountId);
-  const rootId = await ensureRootFolder(drive);
+export async function deleteDriveFileIgnoreNotFound(
+  accountId: string,
+  driveFileId: string
+): Promise<void> {
+  try {
+    const drive = getDriveClient(accountId);
+    await drive.files.delete({
+      fileId: driveFileId,
+      supportsAllDrives: false,
+    });
+  } catch (err: unknown) {
+    const isNotFound =
+      (err && typeof err === 'object' && 'status' in err && (err as { status: number }).status === 404) ||
+      (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 404) ||
+      (err instanceof Error && err.message.toLowerCase().includes('not found'));
 
-  await db
-    .update(accounts)
-    .set({ rootFolderId: rootId, updatedAt: new Date() })
-    .where(eq(accounts.id, accountId));
-
-  return rootId;
+    if (!isNotFound) {
+      console.warn(`Drive delete warning for ${driveFileId}:`, err instanceof Error ? err.message : String(err));
+    }
+  }
 }
 
 export async function initiateResumableUpload(
@@ -71,8 +147,14 @@ export async function initiateResumableUpload(
     throw new FileExceedsCeilingError(sizeBytes);
   }
 
-  const decision = await selectPlacementForFile({ virtualPath, sizeBytes });
-  const accountId = decision.accountId;
+  let accountId: string;
+  if (options.targetAccountId) {
+    await validateTargetPlacement(options.targetAccountId, sizeBytes);
+    accountId = options.targetAccountId;
+  } else {
+    const decision = await selectPlacementForFile({ virtualPath, sizeBytes });
+    accountId = decision.accountId;
+  }
 
   const rootFolderId = await getAccountRootFolderId(accountId);
   const drive = getDriveClient(accountId);
@@ -157,6 +239,9 @@ export async function executeStreamingUpload(
   };
 
   const fileName = path.posix.basename(session.virtualPath);
+  ensureLocalFolderHierarchy(session.virtualPath);
+  const parentDir = path.posix.dirname(session.virtualPath);
+  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
 
   const insertedRecords = await db
     .insert(files)
@@ -169,6 +254,7 @@ export async function executeStreamingUpload(
       hash: options.hash || driveData.md5Checksum || null,
       accountId: session.accountId,
       driveFileId: driveData.id,
+      folderId,
       isTrashed: false,
     })
     .onConflictDoUpdate({
@@ -180,6 +266,7 @@ export async function executeStreamingUpload(
         hash: options.hash || driveData.md5Checksum || null,
         accountId: session.accountId,
         driveFileId: driveData.id,
+        folderId,
         isTrashed: false,
         updatedAt: new Date(),
       },
@@ -281,11 +368,16 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
     supportsAllDrives: false,
   });
 
+  ensureLocalFolderHierarchy(file.virtualPath);
+  const parentDir = path.posix.dirname(file.virtualPath);
+  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+
   const updated = await db
     .update(files)
     .set({
       isTrashed: false,
       trashedAt: null,
+      folderId,
       updatedAt: new Date(),
     })
     .where(eq(files.id, fileId))
@@ -303,11 +395,7 @@ export async function purgeFile(fileId: string): Promise<FileRecord> {
     throw new Error(`File ${fileId} not found`);
   }
 
-  const drive = getDriveClient(file.accountId);
-  await drive.files.delete({
-    fileId: file.driveFileId,
-    supportsAllDrives: false,
-  });
+  await deleteDriveFileIgnoreNotFound(file.accountId, file.driveFileId);
 
   await db.delete(files).where(eq(files.id, fileId));
 
@@ -332,11 +420,7 @@ export async function emptyTrash(): Promise<{ filesPurged: number; bytesReclaime
 
   for (const f of trashedFiles) {
     try {
-      const drive = getDriveClient(f.accountId);
-      await drive.files.delete({
-        fileId: f.driveFileId,
-        supportsAllDrives: false,
-      });
+      await deleteDriveFileIgnoreNotFound(f.accountId, f.driveFileId);
 
       await db.delete(files).where(eq(files.id, f.id));
 
@@ -350,8 +434,8 @@ export async function emptyTrash(): Promise<{ filesPurged: number; bytesReclaime
 
       filesPurged++;
       bytesReclaimed += f.sizeBytes;
-    } catch {
-      // Continue purging remaining items if one fails
+    } catch (err) {
+      console.error(`Failed to purge local file ${f.id}:`, err);
     }
   }
 

@@ -21,8 +21,17 @@ import {
   scanAccountDiscrepancies,
   acceptExternalFile,
   ejectFileToDriveRoot,
+  removeMissingFile,
   rebalanceFile,
   executeAutoRebalance,
+  disableDriveAccount,
+  enableDriveAccount,
+  removeDriveAccount,
+  moveItems,
+  copyItems,
+  renameItem,
+  trashFolder,
+  ensureLocalFolderHierarchy,
 } from './drive/index.js';
 import {
   getPooledStorageOverview,
@@ -33,9 +42,48 @@ import {
   InsufficientStorageError,
 } from './storage/index.js';
 
-const app = new Hono()
-  .use('*', logger())
-  .use('*', cors())
+async function getAccountsList() {
+  authPool.scan();
+  const records = authPool.getAll();
+  const dbAccounts = await db.select().from(accounts);
+  const dbMap = new Map(dbAccounts.map((a) => [a.id, a]));
+
+  const list = records.map((r) => ({
+    accountId: r.config.accountId,
+    clientId: r.config.clientId,
+    authorized: r.authorized,
+    sourceFile: r.config.sourceFile,
+    isDisabled: dbMap.get(r.config.accountId)?.isDisabled ?? false,
+    mtimeMs: r.config.mtimeMs ?? 0,
+  }));
+
+  list.sort((a, b) => {
+    if (!a.authorized && b.authorized) return -1;
+    if (a.authorized && !b.authorized) return 1;
+
+    if (!a.authorized && !b.authorized) {
+      if (a.mtimeMs !== b.mtimeMs) {
+        return b.mtimeMs - a.mtimeMs;
+      }
+      return a.accountId.localeCompare(b.accountId);
+    }
+
+    const dbA = dbMap.get(a.accountId);
+    const dbB = dbMap.get(b.accountId);
+    const emailA = (dbA?.email || a.accountId).toLowerCase();
+    const emailB = (dbB?.email || b.accountId).toLowerCase();
+    return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  return list;
+}
+
+const app = new Hono();
+
+app.use('*', logger());
+app.use('*', cors());
+
+const routes = app
   .get('/api/health', (c) => {
     const pragmaRes = sqlite.pragma('journal_mode', { simple: true });
     return c.json({
@@ -46,6 +94,10 @@ const app = new Hono()
         journalMode: String(pragmaRes ?? 'wal'),
       },
     });
+  })
+  .get('/api/storage', async (c) => {
+    const overview = await getPooledStorageOverview();
+    return c.json(overview);
   })
   .get('/api/storage/overview', async (c) => {
     const overview = await getPooledStorageOverview();
@@ -115,17 +167,80 @@ const app = new Hono()
       }
     }
   )
-  .get('/api/accounts/pool', (c) => {
-    authPool.scan();
-    const records = authPool.getAll();
-    const list = records.map((r) => ({
-      accountId: r.config.accountId,
-      clientId: r.config.clientId,
-      authorized: r.authorized,
-      sourceFile: r.config.sourceFile,
-    }));
+  .get('/api/accounts', async (c) => {
+    const list = await getAccountsList();
     return c.json({ accounts: list });
   })
+  .get('/api/accounts/pool', async (c) => {
+    const list = await getAccountsList();
+    return c.json({ accounts: list });
+  })
+  .post('/api/accounts/:id/disable', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const result = await disableDriveAccount(accountId);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof InsufficientStorageError) {
+        return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post('/api/accounts/:id/enable', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const result = await enableDriveAccount(accountId);
+      return c.json(result);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .delete('/api/accounts/:id', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const result = await removeDriveAccount(accountId);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof InsufficientStorageError) {
+        return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post(
+    '/api/accounts/oauth/import',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.filename !== 'string' || typeof body?.content !== 'string') {
+        return c.json({ error: 'filename (string) and content (string) are required' }, 400);
+      }
+      return {
+        filename: body.filename,
+        content: body.content,
+      };
+    }),
+    async (c) => {
+      const { filename, content } = c.req.valid('json');
+      try {
+        const result = await authPool.importCredentials(filename, content);
+        if (!result.success) {
+          return c.json({ error: result.error || 'Failed to import credentials' }, 400);
+        }
+        if (result.authorized && result.accountId) {
+          try {
+            const hydRes = await hydrateAccount(result.accountId);
+            result.accountId = hydRes.accountId;
+          } catch (err) {
+            console.warn(`Hydration deferred for ${result.accountId}:`, err);
+          }
+        }
+        return c.json(result, 201);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
   .get(
     '/api/accounts/auth-url/:id',
     validator('query', (value): { redirect_uri?: string } => {
@@ -153,12 +268,12 @@ const app = new Hono()
     try {
       const url = new URL(c.req.url);
       const redirectUri = `${url.origin}/api/auth/callback`;
-      await authPool.handleCallback(accountId, code, redirectUri);
+      const { accountId: targetAccountId } = await authPool.handleCallback(accountId, code, redirectUri);
 
-      await hydrateAccount(accountId);
+      const hydRes = await hydrateAccount(targetAccountId);
 
       const clientOrigin = process.env.CLIENT_URL || (url.port === '3000' ? 'http://localhost:5173' : url.origin);
-      return c.redirect(`${clientOrigin}/?auth=success&account=` + encodeURIComponent(accountId));
+      return c.redirect(`${clientOrigin}/?auth=success&account=` + encodeURIComponent(hydRes.accountId));
     } catch (err) {
       return c.text(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`, 500);
     }
@@ -216,6 +331,136 @@ const app = new Hono()
       });
     }
   )
+  .get('/api/folders', async (c) => {
+    const folderRecords = await db.select().from(folders);
+    return c.json({ folders: folderRecords });
+  })
+  .post(
+    '/api/folders',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.virtualPath !== 'string' || typeof body?.name !== 'string') {
+        return c.json({ error: 'virtualPath (string) and name (string) are required' }, 400);
+      }
+      return {
+        virtualPath: body.virtualPath,
+        name: body.name,
+      };
+    }),
+    async (c) => {
+      const { virtualPath, name } = c.req.valid('json');
+      const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
+      try {
+        ensureLocalFolderHierarchy(normalizedPath);
+        return c.json({ id: normalizedPath, virtualPath: normalizedPath, name }, 201);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .delete(
+    '/api/folders',
+    validator('query', (value): { virtualPath?: string; path?: string; id?: string } => {
+      return {
+        virtualPath: typeof value.virtualPath === 'string' ? value.virtualPath : undefined,
+        path: typeof value.path === 'string' ? value.path : undefined,
+        id: typeof value.id === 'string' ? value.id : undefined,
+      };
+    }),
+    async (c) => {
+      const query = c.req.valid('query');
+      const virtualPath = query.virtualPath || query.path || query.id;
+      if (!virtualPath) {
+        return c.json({ error: 'virtualPath query parameter required' }, 400);
+      }
+      const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
+      try {
+        const result = await trashFolder(normalizedPath);
+        return c.json({ success: true, virtualPath: normalizedPath, trashedCount: result.trashedFilesCount });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/items/move',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
+        return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
+      }
+      return {
+        items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
+        targetFolderPath: body.targetFolderPath,
+      };
+    }),
+    async (c) => {
+      const { items, targetFolderPath } = c.req.valid('json');
+      try {
+        const result = await moveItems(items, targetFolderPath);
+        return c.json(result);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/items/copy',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
+        return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
+      }
+      return {
+        items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
+        targetFolderPath: body.targetFolderPath,
+      };
+    }),
+    async (c) => {
+      const { items, targetFolderPath } = c.req.valid('json');
+      try {
+        const result = await copyItems(items, targetFolderPath);
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/items/rename',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      const candidateName =
+        typeof body?.name === 'string' ? body.name : typeof body?.newName === 'string' ? body.newName : undefined;
+      if (
+        (body?.kind !== 'file' && body?.kind !== 'folder') ||
+        typeof body?.id !== 'string' ||
+        typeof candidateName !== 'string'
+      ) {
+        return c.json({ error: 'kind ("file"|"folder"), id (string), and name (string) are required' }, 400);
+      }
+      return {
+        kind: body.kind as 'file' | 'folder',
+        id: body.id,
+        name: candidateName.trim(),
+      };
+    }),
+    async (c) => {
+      const { kind, id, name } = c.req.valid('json');
+      if (!name || name.includes('/') || name.includes('\\')) {
+        return c.json({ error: 'Invalid name: cannot be empty or contain slashes' }, 400);
+      }
+      try {
+        const result = await renameItem(kind, id, name);
+        return c.json(result);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
   .post(
     '/api/files/upload/session',
     validator('json', (value, c) => {
@@ -228,6 +473,7 @@ const app = new Hono()
         sizeBytes: body.sizeBytes,
         mimeType: typeof body.mimeType === 'string' ? body.mimeType : undefined,
         hash: typeof body.hash === 'string' ? body.hash : undefined,
+        targetAccountId: typeof body.targetAccountId === 'string' ? body.targetAccountId : undefined,
       };
     }),
     async (c) => {
@@ -251,6 +497,7 @@ const app = new Hono()
     const sizeHeader = c.req.query('sizeBytes') || c.req.header('x-file-size') || c.req.header('content-length');
     const mimeType = c.req.query('mimeType') || c.req.header('content-type') || 'application/octet-stream';
     const hash = c.req.query('hash') || c.req.header('x-file-hash');
+    const targetAccountId = c.req.query('accountId') || c.req.header('x-account-id');
 
     if (!virtualPath || !sizeHeader) {
       return c.json({ error: 'virtualPath and sizeBytes (or Content-Length) required' }, 400);
@@ -267,7 +514,13 @@ const app = new Hono()
 
     try {
       const record = await executeStreamingUpload(
-        { virtualPath, sizeBytes, mimeType, hash: hash || undefined },
+        {
+          virtualPath,
+          sizeBytes,
+          mimeType,
+          hash: hash || undefined,
+          targetAccountId: targetAccountId || undefined,
+        },
         c.req.raw.body
       );
       return c.json(record);
@@ -389,6 +642,25 @@ const app = new Hono()
     }
   )
   .post(
+    '/api/sync/resolve/remove-missing',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.accountId !== 'string' || typeof body?.driveFileId !== 'string') {
+        return c.json({ error: 'accountId and driveFileId required' }, 400);
+      }
+      return { accountId: body.accountId, driveFileId: body.driveFileId };
+    }),
+    async (c) => {
+      const { accountId, driveFileId } = c.req.valid('json');
+      try {
+        await removeMissingFile(accountId, driveFileId);
+        return c.json({ success: true, accountId, driveFileId });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
     '/api/sync/rebalance/file',
     validator('json', (value, c) => {
       const body = value as Record<string, unknown>;
@@ -420,5 +692,5 @@ const app = new Hono()
     }
   });
 
-export type AppType = typeof app;
-export default app;
+export type AppType = typeof routes;
+export default routes;

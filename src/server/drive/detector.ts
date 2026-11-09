@@ -2,9 +2,10 @@ import path from 'node:path';
 import { db } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { getDriveClient } from './client.js';
+import { getDriveClient, resolveRemoteFolderTree } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
+import { ensureLocalFolderHierarchy, insertFolderStmt } from './sync.js';
 
 export interface ExternalFileDiscrepancy {
   driveFileId: string;
@@ -42,6 +43,14 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
   }
 
   const drive = getDriveClient(accountId);
+  const folderTree = await resolveRemoteFolderTree(drive, account.rootFolderId);
+  const validFolderIds = folderTree.folderIds;
+
+  // Sync discovered remote folders into SQLite folders table so folders created directly in Drive are reflected
+  for (const folder of folderTree.folders) {
+    insertFolderStmt.run(folder.virtualPath, folder.virtualPath, folder.name, folder.parentId);
+  }
+
   const knownFiles = await db.query.files.findMany({
     where: and(eq(files.accountId, accountId), eq(files.isTrashed, false)),
   });
@@ -56,67 +65,76 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
   const modified: ExternalFileDiscrepancy[] = [];
   const overCeiling: ExternalFileDiscrepancy[] = [];
 
-  let pageToken: string | undefined = undefined;
+  const folderIdList = Array.from(validFolderIds);
+  const CHUNK_SIZE = 20;
 
-  do {
-    const listRes: any = await drive.files.list({
-      q: `'${account.rootFolderId}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, appProperties)',
-      pageSize: 1000,
-      pageToken,
-      spaces: 'drive',
-      supportsAllDrives: false,
-    });
+  for (let i = 0; i < folderIdList.length; i += CHUNK_SIZE) {
+    const chunk = folderIdList.slice(i, i + CHUNK_SIZE);
+    const parentQuery = chunk.map((id) => `'${id}' in parents`).join(' or ');
+    let pageToken: string | undefined = undefined;
 
-    for (const remote of listRes.data.files || []) {
-      if (!remote.id || !remote.name) continue;
-      foundRemoteIds.add(remote.id);
+    do {
+      const listRes: any = await drive.files.list({
+        q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, parents, appProperties)',
+        pageSize: 1000,
+        pageToken,
+        spaces: 'drive',
+        supportsAllDrives: false,
+      });
 
-      const sizeBytes = Number(remote.size || 0);
-      const virtualPath = normalizeVirtualPath(
-        remote.appProperties?.tsubasa_virtual_path || `/${remote.name}`
-      );
-      const isOverCeiling = sizeBytes > MAX_SINGLE_FILE_BYTES;
+      for (const remote of listRes.data.files || []) {
+        if (!remote.id || !remote.name) continue;
+        foundRemoteIds.add(remote.id);
 
-      if (isOverCeiling) {
-        overCeiling.push({
-          driveFileId: remote.id,
-          name: remote.name,
-          virtualPath,
-          sizeBytes,
-          mimeType: remote.mimeType || 'application/octet-stream',
-          accountId,
-          discrepancyType: 'over_ceiling',
-        });
-        continue;
+        const sizeBytes = Number(remote.size || 0);
+        const parentFolderPath = remote.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+        const computedPath = parentFolderPath === '/' ? `/${remote.name}` : `${parentFolderPath}/${remote.name}`;
+        const virtualPath = normalizeVirtualPath(
+          remote.appProperties?.tsubasa_virtual_path || computedPath
+        );
+        const isOverCeiling = sizeBytes > MAX_SINGLE_FILE_BYTES;
+
+        if (isOverCeiling) {
+          overCeiling.push({
+            driveFileId: remote.id,
+            name: remote.name,
+            virtualPath,
+            sizeBytes,
+            mimeType: remote.mimeType || 'application/octet-stream',
+            accountId,
+            discrepancyType: 'over_ceiling',
+          });
+          continue;
+        }
+
+        const existing = knownMapByDriveId.get(remote.id);
+        if (!existing) {
+          unindexed.push({
+            driveFileId: remote.id,
+            name: remote.name,
+            virtualPath,
+            sizeBytes,
+            mimeType: remote.mimeType || 'application/octet-stream',
+            accountId,
+            discrepancyType: 'unindexed',
+          });
+        } else if (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) {
+          modified.push({
+            driveFileId: remote.id,
+            name: remote.name,
+            virtualPath,
+            sizeBytes,
+            mimeType: remote.mimeType || 'application/octet-stream',
+            accountId,
+            discrepancyType: 'modified',
+          });
+        }
       }
 
-      const existing = knownMapByDriveId.get(remote.id);
-      if (!existing) {
-        unindexed.push({
-          driveFileId: remote.id,
-          name: remote.name,
-          virtualPath,
-          sizeBytes,
-          mimeType: remote.mimeType || 'application/octet-stream',
-          accountId,
-          discrepancyType: 'unindexed',
-        });
-      } else if (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) {
-        modified.push({
-          driveFileId: remote.id,
-          name: remote.name,
-          virtualPath,
-          sizeBytes,
-          mimeType: remote.mimeType || 'application/octet-stream',
-          accountId,
-          discrepancyType: 'modified',
-        });
-      }
-    }
-
-    pageToken = listRes.data.nextPageToken || undefined;
-  } while (pageToken);
+      pageToken = listRes.data.nextPageToken || undefined;
+    } while (pageToken);
+  }
 
   const missingRemote: MissingFileDiscrepancy[] = [];
   for (const kf of knownFiles) {
@@ -148,7 +166,7 @@ export async function acceptExternalFile(
   const drive = getDriveClient(accountId);
   const fileRes = await drive.files.get({
     fileId: driveFileId,
-    fields: 'id, name, size, mimeType, md5Checksum, appProperties',
+    fields: 'id, name, size, mimeType, md5Checksum, parents, appProperties',
     supportsAllDrives: false,
   });
 
@@ -157,12 +175,26 @@ export async function acceptExternalFile(
     throw new Error(`File ${driveFileId} not found in Google Drive`);
   }
 
+  let finalVirtualPath = targetVirtualPath || remote.appProperties?.tsubasa_virtual_path;
+  if (!finalVirtualPath) {
+    const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+    if (account?.rootFolderId) {
+      const folderTree = await resolveRemoteFolderTree(drive, account.rootFolderId);
+      const parentFolderPath = remote.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+      finalVirtualPath = parentFolderPath === '/' ? `/${remote.name}` : `${parentFolderPath}/${remote.name}`;
+    } else {
+      finalVirtualPath = `/${remote.name}`;
+    }
+  }
+
   const sizeBytes = Number(remote.size || 0);
-  const virtualPath = normalizeVirtualPath(
-    targetVirtualPath || remote.appProperties?.tsubasa_virtual_path || `/${remote.name}`
-  );
+  const virtualPath = normalizeVirtualPath(finalVirtualPath);
   const fileName = path.posix.basename(virtualPath);
   const fileId = remote.appProperties?.tsubasa_virtual_id || remote.id;
+
+  ensureLocalFolderHierarchy(virtualPath);
+  const parentDir = path.posix.dirname(virtualPath);
+  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
 
   await drive.files.update({
     fileId: remote.id,
@@ -187,6 +219,7 @@ export async function acceptExternalFile(
       hash: remote.md5Checksum || null,
       accountId,
       driveFileId: remote.id,
+      folderId,
       isTrashed: false,
     })
     .onConflictDoUpdate({
@@ -198,6 +231,7 @@ export async function acceptExternalFile(
         hash: remote.md5Checksum || null,
         accountId,
         driveFileId: remote.id,
+        folderId,
         isTrashed: false,
         updatedAt: new Date(),
       },
@@ -218,13 +252,51 @@ export async function ejectFileToDriveRoot(accountId: string, driveFileId: strin
 
   const drive = getDriveClient(accountId);
 
+  const fileRes = await drive.files.get({
+    fileId: driveFileId,
+    fields: 'parents',
+    supportsAllDrives: false,
+  });
+
+  const parentsToRemove = (fileRes.data.parents || []).join(',');
+
   await drive.files.update({
     fileId: driveFileId,
     addParents: 'root',
-    removeParents: account.rootFolderId,
+    removeParents: parentsToRemove || account.rootFolderId,
+    requestBody: {
+      appProperties: {
+        tsubasa_managed: null,
+        tsubasa_virtual_path: null,
+        tsubasa_virtual_id: null,
+      } as any,
+    },
     supportsAllDrives: false,
   });
 
   await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
 }
+
+export async function removeMissingFile(accountId: string, driveFileId: string): Promise<void> {
+  const drive = getDriveClient(accountId);
+
+  try {
+    await drive.files.update({
+      fileId: driveFileId,
+      requestBody: {
+        appProperties: {
+          tsubasa_managed: null,
+          tsubasa_virtual_path: null,
+          tsubasa_virtual_id: null,
+        } as any,
+      },
+      supportsAllDrives: false,
+    });
+  } catch {
+    // Non-fatal if the file was deleted from Drive entirely
+  }
+
+  await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
+}
+
 

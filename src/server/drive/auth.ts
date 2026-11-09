@@ -3,6 +3,43 @@ import path from 'node:path';
 import { google } from 'googleapis';
 import type { OAuth2Client, Credentials } from 'google-auth-library';
 import dotenv from 'dotenv';
+import { renameAccountInDb } from '../db/index.js';
+
+export function safeRenameFile(srcPath: string, destPath: string): void {
+  const resolvedSrc = path.resolve(srcPath);
+  const resolvedDest = path.resolve(destPath);
+
+  if (resolvedSrc === resolvedDest || !fs.existsSync(resolvedSrc)) {
+    return;
+  }
+
+  if (resolvedSrc.toLowerCase() === resolvedDest.toLowerCase()) {
+    const tempPath = `${resolvedSrc}.${Date.now()}.tmp`;
+    fs.renameSync(resolvedSrc, tempPath);
+    fs.renameSync(tempPath, resolvedDest);
+    return;
+  }
+
+  if (fs.existsSync(resolvedDest)) {
+    try {
+      fs.unlinkSync(resolvedDest);
+    } catch {}
+  }
+  fs.renameSync(resolvedSrc, resolvedDest);
+}
+
+export function extractEmailFromIdToken(idToken?: string | null): string | null {
+  if (!idToken) return null;
+  try {
+    const parts = idToken.split('.');
+    if (parts.length < 2) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (typeof payload.email === 'string' && payload.email.includes('@')) {
+      return payload.email.toLowerCase().trim();
+    }
+  } catch {}
+  return null;
+}
 
 export interface AccountCredentials {
   accountId: string;
@@ -11,6 +48,7 @@ export interface AccountCredentials {
   redirectUris: string[];
   tokens?: Credentials;
   sourceFile: string;
+  mtimeMs?: number;
 }
 
 export interface AccountAuthRecord {
@@ -59,9 +97,36 @@ class AuthPool {
       if (!parsed) {
         continue;
       }
+      parsed.mtimeMs = stat.mtimeMs;
+
+      if (parsed.tokens?.id_token) {
+        const email = extractEmailFromIdToken(parsed.tokens.id_token);
+        if (email && email.toLowerCase() !== parsed.accountId.toLowerCase()) {
+          const oldId = parsed.accountId;
+          const ext = path.extname(parsed.sourceFile).toLowerCase() || '.json';
+          const newSourceFile = path.join(this.oauthDir, `${email}${ext}`);
+          const oldTokenFile = path.join(this.oauthDir, `${oldId}.tokens.json`);
+          const newTokenFile = path.join(this.oauthDir, `${email}.tokens.json`);
+
+          safeRenameFile(parsed.sourceFile, newSourceFile);
+          if (fs.existsSync(oldTokenFile)) {
+            safeRenameFile(oldTokenFile, newTokenFile);
+          }
+
+          parsed.accountId = email;
+          parsed.sourceFile = newSourceFile;
+
+          try {
+            renameAccountInDb(oldId, email);
+          } catch (err) {
+            console.warn(`Failed to update database account ID from ${oldId} to ${email}:`, err);
+          }
+        }
+      }
 
       const existing = this.pool.get(parsed.accountId);
       if (existing) {
+        existing.config.mtimeMs = stat.mtimeMs;
         if (parsed.tokens && JSON.stringify(parsed.tokens) !== JSON.stringify(existing.config.tokens)) {
           existing.config.tokens = parsed.tokens;
           existing.client.setCredentials(parsed.tokens);
@@ -183,12 +248,87 @@ class AuthPool {
       record.config.tokens = merged;
       record.authorized = true;
 
-      const tokenFilePath = path.join(this.oauthDir, `${cred.accountId}.tokens.json`);
+      const currentAccountId = record.config.accountId;
+      const tokenFilePath = path.join(this.oauthDir, `${currentAccountId}.tokens.json`);
       fs.writeFileSync(tokenFilePath, JSON.stringify(merged, null, 2), 'utf8');
     });
 
     this.pool.set(cred.accountId, record);
     return record;
+  }
+
+  public renameAccount(oldAccountId: string, newAccountId: string): string {
+    if (!oldAccountId || !newAccountId || oldAccountId.toLowerCase() === newAccountId.toLowerCase()) {
+      return oldAccountId;
+    }
+
+    const record = this.pool.get(oldAccountId);
+    if (!record) {
+      return oldAccountId;
+    }
+
+    const oldSourceFile = record.config.sourceFile;
+    const ext = path.extname(oldSourceFile).toLowerCase() || '.json';
+    const newSourceFile = path.join(this.oauthDir, `${newAccountId}${ext}`);
+
+    const oldTokenFile = path.join(this.oauthDir, `${oldAccountId}.tokens.json`);
+    const newTokenFile = path.join(this.oauthDir, `${newAccountId}.tokens.json`);
+
+    try {
+      if (fs.existsSync(oldSourceFile) && path.resolve(oldSourceFile) !== path.resolve(newSourceFile)) {
+        safeRenameFile(oldSourceFile, newSourceFile);
+        record.config.sourceFile = newSourceFile;
+      }
+
+      if (fs.existsSync(oldTokenFile) && path.resolve(oldTokenFile) !== path.resolve(newTokenFile)) {
+        safeRenameFile(oldTokenFile, newTokenFile);
+      }
+    } catch (err) {
+      console.warn(`Failed to rename oauth files from ${oldAccountId} to ${newAccountId}:`, err);
+    }
+
+    record.config.accountId = newAccountId;
+    this.pool.delete(oldAccountId);
+    this.pool.set(newAccountId, record);
+
+    try {
+      renameAccountInDb(oldAccountId, newAccountId);
+    } catch (err) {
+      console.warn(`Failed to update database account ID from ${oldAccountId} to ${newAccountId}:`, err);
+    }
+
+    return newAccountId;
+  }
+
+  public removeAccount(accountId: string): boolean {
+    const record = this.pool.get(accountId);
+    let removedAny = false;
+
+    if (record?.config.sourceFile && fs.existsSync(record.config.sourceFile)) {
+      try {
+        fs.unlinkSync(record.config.sourceFile);
+        removedAny = true;
+      } catch (err) {
+        console.warn(`Failed to unlink source credential file ${record.config.sourceFile}:`, err);
+      }
+    }
+
+    const tokenFile = path.join(this.oauthDir, `${accountId}.tokens.json`);
+    if (fs.existsSync(tokenFile)) {
+      try {
+        fs.unlinkSync(tokenFile);
+        removedAny = true;
+      } catch (err) {
+        console.warn(`Failed to unlink token file ${tokenFile}:`, err);
+      }
+    }
+
+    if (record) {
+      this.pool.delete(accountId);
+      removedAny = true;
+    }
+
+    return removedAny;
   }
 
   public getRecord(accountId: string): AccountAuthRecord | undefined {
@@ -221,7 +361,11 @@ class AuthPool {
     });
   }
 
-  public async handleCallback(accountId: string, code: string, redirectUri?: string): Promise<Credentials> {
+  public async handleCallback(
+    accountId: string,
+    code: string,
+    redirectUri?: string
+  ): Promise<{ tokens: Credentials; accountId: string }> {
     const record = this.pool.get(accountId);
     if (!record) {
       throw new Error(`Account ${accountId} not registered`);
@@ -241,10 +385,192 @@ class AuthPool {
     record.config.tokens = merged;
     record.authorized = true;
 
-    const tokenFilePath = path.join(this.oauthDir, `${accountId}.tokens.json`);
+    let targetAccountId = accountId;
+    const email = extractEmailFromIdToken(tokens.id_token);
+    if (email && email.toLowerCase() !== accountId.toLowerCase()) {
+      targetAccountId = this.renameAccount(accountId, email.toLowerCase());
+    }
+
+    const tokenFilePath = path.join(this.oauthDir, `${targetAccountId}.tokens.json`);
     fs.writeFileSync(tokenFilePath, JSON.stringify(merged, null, 2), 'utf8');
 
-    return merged;
+    return { tokens: merged, accountId: targetAccountId };
+  }
+
+  public async importCredentials(
+    rawFilename: string,
+    rawContent: string
+  ): Promise<{
+    success: boolean;
+    accountId?: string;
+    authorized?: boolean;
+    error?: string;
+  }> {
+    if (!rawContent || !rawContent.trim()) {
+      return { success: false, error: 'The uploaded file is empty.' };
+    }
+
+    const trimmed = rawContent.trim();
+    const isJson = rawFilename.toLowerCase().endsWith('.json') || trimmed.startsWith('{');
+    const ext = isJson ? '.json' : '.env';
+
+    let baseName = rawFilename;
+    if (baseName.toLowerCase().endsWith('.json')) {
+      baseName = baseName.slice(0, -5);
+    } else if (baseName.toLowerCase().endsWith('.env')) {
+      baseName = baseName.slice(0, -4);
+    }
+
+    baseName = baseName.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '');
+    if (!baseName || baseName === 'env') {
+      baseName = `account_${Date.now()}`;
+    }
+
+    if (isJson) {
+      let json: Record<string, any>;
+      try {
+        json = JSON.parse(rawContent);
+      } catch {
+        return { success: false, error: 'Invalid JSON format in uploaded file.' };
+      }
+
+      if (json.web && !json.installed) {
+        return {
+          success: false,
+          error: "The uploaded file has Application Type 'web'. Tsubasa requires credentials created with Application Type: 'Desktop app' (see docs/roadmap.md lines 170-173) to support loopback authentication without pre-registered redirect URIs.",
+        };
+      }
+
+      const target = json.installed || json;
+      const clientId = target.client_id;
+      const clientSecret = target.client_secret;
+
+      if (!clientId || !clientSecret) {
+        return {
+          success: false,
+          error: "Missing 'client_id' or 'client_secret' in credential JSON.",
+        };
+      }
+
+      if (!json.installed) {
+        const probe = await verifyDesktopAppClientId(clientId);
+        if (!probe.isDesktop) {
+          return { success: false, error: probe.error };
+        }
+      }
+    } else {
+      let env: Record<string, string>;
+      try {
+        env = dotenv.parse(rawContent);
+      } catch {
+        return { success: false, error: 'Failed to parse .env file format.' };
+      }
+
+      const clientId = env.GOOGLE_CLIENT_ID || env.CLIENT_ID;
+      const clientSecret = env.GOOGLE_CLIENT_SECRET || env.CLIENT_SECRET;
+
+      if (!clientId || !clientSecret) {
+        return {
+          success: false,
+          error: 'Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in .env file.',
+        };
+      }
+
+      const declaredType = (env.TYPE || env.APPLICATION_TYPE || env.CLIENT_TYPE || '').toLowerCase();
+      if (declaredType === 'web' || declaredType === 'web_app' || declaredType === 'web_application') {
+        return {
+          success: false,
+          error: "The .env file specifies Application Type: 'web'. Tsubasa requires a 'Desktop app' credential (see docs/roadmap.md lines 170-173).",
+        };
+      }
+
+      const envRedirect = env.GOOGLE_REDIRECT_URI || env.REDIRECT_URI;
+      if (envRedirect) {
+        try {
+          const u = new URL(envRedirect);
+          if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+            return {
+              success: false,
+              error: `The .env specifies a non-loopback redirect URI (${envRedirect}). Desktop apps must use loopback (http://localhost or http://127.0.0.1).`,
+            };
+          }
+        } catch {}
+      }
+
+      const probe = await verifyDesktopAppClientId(clientId);
+      if (!probe.isDesktop) {
+        return { success: false, error: probe.error };
+      }
+
+      if (env.ACCOUNT_ID || env.EMAIL) {
+        const preferredId = (env.ACCOUNT_ID || env.EMAIL).replace(/[^a-zA-Z0-9._-]/g, '_');
+        if (preferredId) baseName = preferredId;
+      }
+    }
+
+    if (!fs.existsSync(this.oauthDir)) {
+      fs.mkdirSync(this.oauthDir, { recursive: true });
+    }
+
+    const targetFilePath = path.join(this.oauthDir, `${baseName}${ext}`);
+    fs.writeFileSync(targetFilePath, rawContent, 'utf8');
+
+    this.scan();
+
+    const record = this.pool.get(baseName) || this.getAll().find((r) => r.config.sourceFile === targetFilePath);
+    const finalAccountId = record ? record.config.accountId : baseName;
+    return {
+      success: true,
+      accountId: finalAccountId,
+      authorized: record?.authorized ?? false,
+    };
+  }
+}
+
+export async function verifyDesktopAppClientId(clientId: string): Promise<{ isDesktop: boolean; error?: string }> {
+  const probeUri = 'http://127.0.0.1:54321/tsubasa-probe';
+  const probeUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(probeUri)}&response_type=code&scope=email`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const res = await fetch(probeUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+
+    const finalUrl = res.url || '';
+    const text = await res.text();
+
+    if (
+      finalUrl.includes('signin/oauth/error') ||
+      text.includes('redirect_uri_mismatch') ||
+      finalUrl.includes('authError=ChVyZWRpcmVjdF91cmlfbWlzbWF0Y2g')
+    ) {
+      return {
+        isDesktop: false,
+        error: "Google rejected the loopback redirect URI: this Client ID is registered as a 'Web application' in Google Cloud Console. Please create credentials with Application Type set to 'Desktop app' (see docs/roadmap.md lines 170-173).",
+      };
+    }
+
+    if (text.includes('invalid_client') || text.includes('deleted_client') || finalUrl.includes('error=invalid_client')) {
+      return {
+        isDesktop: false,
+        error: 'Google reported this Client ID is invalid or deleted. Please verify your client credentials.',
+      };
+    }
+
+    return { isDesktop: true };
+  } catch (err) {
+    console.warn('Google Desktop OAuth probe network check skipped:', err);
+    return { isDesktop: true };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -25,3 +25,39 @@ sqlite.pragma('busy_timeout = 5000');
 export const db = drizzle(sqlite, { schema });
 export type DatabaseInstance = typeof db;
 
+export function renameAccountInDb(oldId: string, newId: string): void {
+  if (!oldId || !newId || oldId.toLowerCase() === newId.toLowerCase()) {
+    return;
+  }
+
+  sqlite.transaction(() => {
+    sqlite.pragma('defer_foreign_keys = ON');
+
+    const existingWithOld = sqlite.prepare('SELECT id, email FROM accounts WHERE id = ?').get(oldId) as
+      | { id: string; email: string }
+      | undefined;
+    const existingWithNewId = sqlite.prepare('SELECT id, email FROM accounts WHERE id = ?').get(newId) as
+      | { id: string; email: string }
+      | undefined;
+    const existingWithNewEmail = sqlite
+      .prepare('SELECT id, email FROM accounts WHERE email = ? AND id != ?')
+      .get(newId, oldId) as { id: string; email: string } | undefined;
+
+    if (existingWithOld) {
+      if (existingWithNewId || existingWithNewEmail) {
+        sqlite.prepare('UPDATE files SET account_id = ? WHERE account_id = ?').run(newId, oldId);
+        sqlite.prepare('UPDATE transfer_logs SET account_id = ? WHERE account_id = ?').run(newId, oldId);
+        sqlite.prepare('DELETE FROM accounts WHERE id = ?').run(oldId);
+      } else {
+        sqlite.prepare('UPDATE accounts SET id = ?, email = ? WHERE id = ?').run(newId, newId, oldId);
+        sqlite.prepare('UPDATE files SET account_id = ? WHERE account_id = ?').run(newId, oldId);
+        sqlite.prepare('UPDATE transfer_logs SET account_id = ? WHERE account_id = ?').run(newId, oldId);
+      }
+    } else {
+      sqlite.prepare('UPDATE files SET account_id = ? WHERE account_id = ?').run(newId, oldId);
+      sqlite.prepare('UPDATE transfer_logs SET account_id = ? WHERE account_id = ?').run(newId, oldId);
+    }
+  })();
+}
+
+

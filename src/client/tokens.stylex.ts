@@ -22,12 +22,16 @@ export const colors = stylex.defineVars({
   headingText: '#111d18',
   secondaryText: '#2d453b',
   mutedText: '#2d453b',
-  dimText: '#567064',
+  dimText: '#3b5249',
   disabledText: '#768d83',
 
   // Brand & interactive states
   primary: '#111d18',
   primaryHover: '#233830',
+  brandAccent: '#1f7a6c',
+  brandAccentHover: '#175f54',
+  brandAccentText: '#ffffff',
+  brandAccentSurface: '#e1efe9',
   accentGold: '#deb76c',
   selectionBg: '#dcebe2',
   selectionBorder: '#deb76c',
@@ -38,6 +42,8 @@ export const colors = stylex.defineVars({
   border: '#8ea194',
   borderSubtle: '#c2d1c7',
   outline: '#8ea194',
+  progressTrack: '#b8cbc0',
+  poolGold: '#d98e04',
 
   // Status semantics (Strict WCAG AAA contrast against surface #f7faf5)
   success: '#116329',
@@ -45,7 +51,11 @@ export const colors = stylex.defineVars({
   warning: '#7a4400',
   warningSurface: '#fef3c7',
   danger: '#82071e',
-  dangerSurface: '#fce8e6',
+  dangerSurface: '#fdf2f2',
+  dangerBorder: '#f1b5bc',
+  dangerTextOnSurface: '#82071e',
+  dangerHover: '#6a0518',
+  dangerText: '#ffffff',
 });
 
 /**
@@ -57,18 +67,22 @@ export const darkColors = stylex.createTheme(colors, {
   canvas: '#0b1412',
   surface: '#12211d',
   surfaceContainer: '#12211d',
-  surfaceElevated: '#182b26',
+  surfaceElevated: '#28443b',
   surfaceAlt: '#162d26',
 
   primaryText: '#e5f2eb',
   headingText: '#e5f2eb',
   secondaryText: '#9bb8ab',
   mutedText: '#9bb8ab',
-  dimText: '#6f8b7f',
+  dimText: '#9db8ac',
   disabledText: '#4c6359',
 
   primary: '#e5f2eb',
   primaryHover: '#ffffff',
+  brandAccent: '#35c4a8',
+  brandAccentHover: '#55dcc0',
+  brandAccentText: '#111d18',
+  brandAccentSurface: '#12332c',
   accentGold: '#d4a13c',
   selectionBg: '#1b3b32',
   selectionBorder: '#d4a13c',
@@ -78,13 +92,19 @@ export const darkColors = stylex.createTheme(colors, {
   border: '#2d453b',
   borderSubtle: '#1e302a',
   outline: '#2d453b',
+  progressTrack: '#38584c',
+  poolGold: '#fbbf24',
 
-  success: '#7ee787',
-  successSurface: '#0f291e',
+  success: '#2dd4bf',
+  successSurface: '#0d2a24',
   warning: '#facc15',
   warningSurface: '#2d2407',
   danger: '#ff9492',
-  dangerSurface: '#341113',
+  dangerSurface: '#261615',
+  dangerBorder: '#5c1d24',
+  dangerTextOnSurface: '#ff9492',
+  dangerHover: '#ffa8a6',
+  dangerText: '#1c080a',
 });
 
 /**
@@ -169,17 +189,6 @@ export const typography = stylex.defineVars({
   fontSizeBadge: '10px',
   lineHeightBadge: '1.2',
   fontWeightBadge: '600',
-});
-
-/**
- * Box shadows and elevation levels.
- */
-export const elevation = stylex.defineVars({
-  level0: 'none',
-  cardShadow: '0 1px 3px rgba(17, 29, 24, 0.06)',
-  menuShadowLight: '0 4px 16px rgba(17, 29, 24, 0.12)',
-  menuShadowDark: '0 6px 20px rgba(0, 0, 0, 0.55)',
-  goldGlow: '0 0 0 2px #deb76c',
 });
 
 /**

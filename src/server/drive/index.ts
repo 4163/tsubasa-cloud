@@ -11,6 +11,7 @@ export * from './mirror.js';
 export * from './transfer.js';
 export * from './detector.js';
 export * from './rebalance.js';
+export * from './operations.js';
 
 export async function syncAllAccounts(): Promise<{
   hydrated: string[];
