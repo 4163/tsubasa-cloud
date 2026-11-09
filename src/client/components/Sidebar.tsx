@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconFolder, IconTrash, IconPlus, IconClock } from './Icons';
 import { AccountAvatar } from './AccountAvatar.js';
+import brandLogo from '../assets/brand-mono.png';
 
 export interface AccountTransferStats {
   accountId: string;
@@ -120,7 +121,33 @@ const styles = stylex.create({
   brandRow: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: spacing.space4,
+  },
+  brandLogoContainer: {
+    width: '40px',
+    height: '40px',
+    aspectRatio: '1 / 1',
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentGold,
+    position: 'relative',
+    flexShrink: 0,
+  },
+  brandLogoImage: {
+    position: 'absolute',
+    bottom: 0,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: '100%',
+    height: 'auto',
+    display: 'block',
+    pointerEvents: 'none',
+    userSelect: 'none',
+  },
+  brandTitleGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    minWidth: 0,
   },
   brandWordmark: {
     fontFamily: typography.fontFamilyBrand,
@@ -129,27 +156,13 @@ const styles = stylex.create({
     color: colors.primaryText,
     letterSpacing: '0.02em',
     margin: 0,
-    userSelect: 'none',
-  },
-  badgeRetro: {
-    fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
-    backgroundColor: colors.brandAccentSurface,
-    color: colors.brandAccent,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
+    lineHeight: '1.2',
   },
   brandSubtitle: {
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     fontFamily: typography.fontFamilyBody,
+    lineHeight: '1.3',
   },
   navSection: {
     paddingTop: spacing.space2,
@@ -975,10 +988,14 @@ export function Sidebar({
       <aside {...stylex.props(styles.sidebar, isMobileOpen && styles.sidebarOpen)}>
         <div {...stylex.props(styles.brandHeader)}>
           <div {...stylex.props(styles.brandRow)}>
-            <h1 {...stylex.props(styles.brandWordmark)}>Tsubasa~</h1>
-            <span {...stylex.props(styles.badgeRetro)}>v0.1.0</span>
+            <div {...stylex.props(styles.brandLogoContainer)}>
+              <img src={brandLogo} alt="Tsubasa" draggable={false} {...stylex.props(styles.brandLogoImage)} />
+            </div>
+            <div {...stylex.props(styles.brandTitleGroup)}>
+              <h1 {...stylex.props(styles.brandWordmark)}>Tsubasa~</h1>
+              <div {...stylex.props(styles.brandSubtitle)}>Pooled Google Drive Cluster</div>
+            </div>
           </div>
-          <div {...stylex.props(styles.brandSubtitle)}>Pooled Google Drive Cluster</div>
         </div>
 
         <nav aria-label="Main Navigation" {...stylex.props(styles.navSection)}>

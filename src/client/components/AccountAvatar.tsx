@@ -101,6 +101,8 @@ const styles = stylex.create({
     objectFit: 'cover',
     borderRadius: radius.pill,
     display: 'block',
+    userSelect: 'none',
+    pointerEvents: 'none',
   },
 });
 
@@ -128,6 +130,7 @@ export function AccountAvatar({
           src={avatarUrl!}
           alt={displayName || email || 'Account avatar'}
           {...stylex.props(styles.avatarImg)}
+          draggable={false}
           referrerPolicy="no-referrer"
           loading="lazy"
           onError={() => setImgError(true)}
