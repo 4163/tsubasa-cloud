@@ -215,15 +215,6 @@ export function IconRotateCcw({ size = 14, ...props }: IconProps) {
   );
 }
 
-export function IconArrowRight({ size = 14, ...props }: IconProps) {
-  return (
-    <svg width={size} height={size} {...baseProps} {...props}>
-      <line x1="5" y1="12" x2="19" y2="12" />
-      <polyline points="12 5 19 12 12 19" />
-    </svg>
-  );
-}
-
 export function IconGitHub({ size = 14, ...props }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...props}>

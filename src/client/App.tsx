@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
-import { colors, darkColors, layout, radius, typography } from './tokens.stylex.js';
+import { colors, darkColors, radius, typography } from './tokens.stylex.js';
 import { Header, type ThemeChoice } from './components/Header.js';
-import { Sidebar, type AccountItem } from './components/Sidebar.js';
+import { Sidebar, type AccountItem, type AccountTransferStats } from './components/Sidebar.js';
 import { ActionPortal, type ActionPortalClipboard } from './components/ActionPortal.js';
 import {
   FileTable,
@@ -18,28 +18,6 @@ import { NewFolderModal } from './components/NewFolderModal.js';
 import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
 import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js';
 import { RenameModal, type RenameTarget } from './components/RenameModal.js';
-
-interface HealthData {
-  status: string;
-  service: string;
-  timestamp: number;
-}
-
-export interface AccountTransferStats {
-  accountId: string;
-  rollingWindowMs: number;
-  uploadedBytes24h: number;
-  remainingUploadBytes24h: number;
-  dailyUploadLimitBytes: number;
-  isUploadRateLimited: boolean;
-  downloadedBytes24h: number;
-  oldestTransferTimestamp: number | null;
-  latestTransferTimestamp: number | null;
-  nextResetMs: number | null;
-  fullResetMs: number | null;
-  nextExpiringBytes: number | null;
-  activeTransferCount24h: number;
-}
 
 interface AccountSummary {
   id: string;
@@ -135,6 +113,9 @@ const styles = stylex.create({
   },
 });
 
+let lastDiscrepancyScanMs = 0;
+const DISCREPANCY_COOLDOWN_MS = 60_000;
+
 export function App() {
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => {
     if (typeof window !== 'undefined') {
@@ -195,7 +176,6 @@ export function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [themeChoice]);
-  const [health, setHealth] = useState<HealthData | null>(null);
   const [storage, setStorage] = useState<StorageOverview | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredAccount[]>([]);
   const [files, setFiles] = useState<ClientFileRecord[]>([]);
@@ -283,13 +263,13 @@ export function App() {
   const [transferringFileId, setTransferringFileId] = useState<string | null>(null);
   const [driveActionModal, setDriveActionModal] = useState<{
     isOpen: boolean;
-    action: 'disable' | 'remove';
+    action: 'remove';
     account: AccountItem | null;
     isLoading: boolean;
     errorMessage: string | null;
   }>({
     isOpen: false,
-    action: 'disable',
+    action: 'remove',
     account: null,
     isLoading: false,
     errorMessage: null,
@@ -384,12 +364,19 @@ export function App() {
     }, 4000);
   }, []);
 
-  const checkAccountDiscrepancies = useCallback(async (accountList: DiscoveredAccount[]) => {
+  const checkAccountDiscrepancies = useCallback(async (accountList: DiscoveredAccount[], force = false) => {
+    const now = Date.now();
+    if (!force && now - lastDiscrepancyScanMs < DISCREPANCY_COOLDOWN_MS) {
+      return;
+    }
+    lastDiscrepancyScanMs = now;
     const authAccounts = accountList.filter((a) => a.authorized);
     await Promise.all(
       authAccounts.map(async (acc) => {
         try {
-          const res = await fetch(`/api/sync/external-changes/${encodeURIComponent(acc.accountId)}`);
+          const res = await client.api.sync['external-changes'][':accountId'].$get({
+            param: { accountId: acc.accountId },
+          });
           if (res.ok) {
             const report = await res.json();
             const count =
@@ -411,11 +398,6 @@ export function App() {
 
   const loadClusterData = useCallback(async () => {
     try {
-      const healthRes = await client.api.health.$get();
-      if (healthRes.ok) {
-        setHealth(await healthRes.json());
-      }
-
       const storageRes = await client.api.storage.overview.$get();
       if (storageRes.ok) {
         setStorage(await storageRes.json());
@@ -425,12 +407,11 @@ export function App() {
       if (poolRes.ok) {
         const poolData = await poolRes.json();
         setDiscovered(poolData.accounts);
-        checkAccountDiscrepancies(poolData.accounts);
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : 'Cluster offline');
     }
-  }, [checkAccountDiscrepancies]);
+  }, []);
 
   const loadFiles = useCallback(async (path: string) => {
     try {
@@ -447,10 +428,10 @@ export function App() {
 
   const loadTrashFiles = useCallback(async () => {
     try {
-      const res = await fetch('/api/trash');
+      const res = await client.api.trash.$get();
       if (res.ok) {
         const data = await res.json();
-        setTrashedFiles(data.files || []);
+        setTrashedFiles((data.files as ClientFileRecord[]) || []);
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : 'Failed to query trash');
@@ -461,6 +442,12 @@ export function App() {
     loadClusterData();
     loadFiles(currentPath);
   }, [loadClusterData, loadFiles, currentPath]);
+
+  useEffect(() => {
+    if (discovered.length > 0) {
+      void checkAccountDiscrepancies(discovered, false);
+    }
+  }, [discovered, checkAccountDiscrepancies]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -657,6 +644,7 @@ export function App() {
         showToast(`Update complete: ${report.synced.length} drives checked.`);
         await loadClusterData();
         await loadFiles(currentPath);
+        await checkAccountDiscrepancies(discovered, true);
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : 'Fetch changes failed');
@@ -736,17 +724,15 @@ export function App() {
   async function handleCreateFolder(folderName: string) {
     const newPath = (currentPath === '/' ? '' : currentPath) + '/' + folderName;
     try {
-      const res = await fetch('/api/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ virtualPath: newPath, name: folderName }),
+      const res = await client.api.folders.$post({
+        json: { virtualPath: newPath, name: folderName },
       });
       if (res.ok) {
         showToast(`Created folder "${folderName}".`);
         await loadFiles(currentPath);
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Failed to create folder');
+        setErrorNotice(('error' in err ? err.error : null) || 'Failed to create folder');
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : String(err));
@@ -773,7 +759,9 @@ export function App() {
 
   async function handleRestoreFile(file: ClientFileRecord) {
     try {
-      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/restore`, { method: 'POST' });
+      const res = await client.api.files[':id'].restore.$post({
+        param: { id: file.id },
+      });
       if (res.ok) {
         showToast(`Restored "${file.name}".`);
         await loadTrashFiles();
@@ -781,7 +769,7 @@ export function App() {
         await loadClusterData();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Restore failed');
+        setErrorNotice(('error' in err ? err.error : null) || 'Restore failed');
       }
     } catch (err) {
       setErrorNotice(`Restore error: ${err instanceof Error ? err.message : String(err)}`);
@@ -790,7 +778,9 @@ export function App() {
 
   async function handlePermanentDelete(file: ClientFileRecord) {
     try {
-      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/permanent`, { method: 'DELETE' });
+      const res = await client.api.files[':id'].permanent.$delete({
+        param: { id: file.id },
+      });
       if (res.ok) {
         showToast(`Permanently deleted "${file.name}".`);
         setSelectedIds((prev) => {
@@ -802,7 +792,7 @@ export function App() {
         await loadClusterData();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Delete failed');
+        setErrorNotice(('error' in err ? err.error : null) || 'Delete failed');
       }
     } catch (err) {
       setErrorNotice(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
@@ -811,8 +801,8 @@ export function App() {
 
   async function handleDeleteFolder(folder: ClientFolder) {
     try {
-      const res = await fetch(`/api/folders?virtualPath=${encodeURIComponent(folder.virtualPath)}`, {
-        method: 'DELETE',
+      const res = await client.api.folders.$delete({
+        query: { virtualPath: folder.virtualPath },
       });
       if (res.ok) {
         showToast(`Deleted folder "${folder.name}".`);
@@ -831,7 +821,7 @@ export function App() {
         }
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Failed to delete folder');
+        setErrorNotice(('error' in err ? err.error : null) || 'Failed to delete folder');
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : String(err));
@@ -864,15 +854,14 @@ export function App() {
     async (itemsToMove: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
       if (itemsToMove.length === 0) return;
       try {
-        const res = await fetch('/api/items/move', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: itemsToMove, targetFolderPath }),
+        const res = await client.api.items.move.$post({
+          json: { items: itemsToMove, targetFolderPath },
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          const successCount = (data.results || []).filter((r: any) => r.success).length;
-          const failed = (data.results || []).filter((r: any) => !r.success);
+          const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
+          const successCount = results.filter((r: any) => r.success).length;
+          const failed = results.filter((r: any) => !r.success);
           if (failed.length > 0) {
             setErrorNotice(failed[0].error || 'Some items could not be moved');
           }
@@ -888,7 +877,7 @@ export function App() {
           setSelectedIds(new Set());
           await loadFiles(currentPath);
         } else {
-          setErrorNotice(data.error || 'Failed to move items');
+          setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to move items');
         }
       } catch (err) {
         setErrorNotice(err instanceof Error ? err.message : String(err));
@@ -902,15 +891,14 @@ export function App() {
       if (itemsToCopy.length === 0) return;
       try {
         showToast(`Copying ${itemsToCopy.length} ${itemsToCopy.length === 1 ? 'item' : 'items'}...`);
-        const res = await fetch('/api/items/copy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: itemsToCopy, targetFolderPath }),
+        const res = await client.api.items.copy.$post({
+          json: { items: itemsToCopy, targetFolderPath },
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          const successCount = (data.results || []).filter((r: any) => r.success).length;
-          const failed = (data.results || []).filter((r: any) => !r.success);
+          const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
+          const successCount = results.filter((r: any) => r.success).length;
+          const failed = results.filter((r: any) => !r.success);
           if (failed.length > 0) {
             setErrorNotice(failed[0].error || 'Some items could not be copied');
           }
@@ -920,7 +908,7 @@ export function App() {
           setSelectedIds(new Set());
           await Promise.all([loadFiles(currentPath), loadClusterData()]);
         } else {
-          setErrorNotice(data.error || 'Failed to copy items');
+          setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to copy items');
         }
       } catch (err) {
         setErrorNotice(err instanceof Error ? err.message : String(err));
@@ -986,17 +974,15 @@ export function App() {
   const handleRename = useCallback(
     async (kind: 'file' | 'folder', id: string, newName: string) => {
       try {
-        const res = await fetch('/api/items/rename', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind, id, name: newName, newName }),
+        const res = await client.api.items.rename.$post({
+          json: { kind, id, name: newName },
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           showToast(`Renamed to "${newName}".`);
           setRenameModalItem(null);
-          const oldFolderP = data.oldPath || data.oldVirtualPath;
-          const newFolderP = data.newPath || data.newVirtualPath;
+          const oldFolderP = ('oldPath' in data ? (data.oldPath as string) : null) || ('oldVirtualPath' in data ? (data.oldVirtualPath as string) : null);
+          const newFolderP = ('newPath' in data ? (data.newPath as string) : null) || ('newVirtualPath' in data ? (data.newVirtualPath as string) : null);
           if (
             kind === 'folder' &&
             oldFolderP &&
@@ -1010,7 +996,7 @@ export function App() {
             await loadFiles(currentPath);
           }
         } else {
-          const errMsg = data.error || 'Failed to rename item';
+          const errMsg = ('error' in data ? (data.error as string) : null) || 'Failed to rename item';
           setErrorNotice(errMsg);
           throw new Error(errMsg);
         }
@@ -1156,7 +1142,7 @@ export function App() {
 
   async function handleEmptyTrashExecute() {
     try {
-      const res = await fetch('/api/trash/empty', { method: 'DELETE' });
+      const res = await client.api.trash.empty.$delete();
       if (res.ok) {
         setConfirmEmptyTrash(false);
         showToast('Trash emptied. Storage permanently reclaimed.');
@@ -1164,7 +1150,7 @@ export function App() {
         await loadClusterData();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Empty trash failed');
+        setErrorNotice(('error' in err ? err.error : null) || 'Empty trash failed');
       }
     } catch (err) {
       setErrorNotice(`Empty trash error: ${err instanceof Error ? err.message : String(err)}`);
@@ -1242,10 +1228,8 @@ export function App() {
     const targetName = targetAcc?.displayName || targetAccountId;
     setTransferringFileId(fileId);
     try {
-      const res = await fetch('/api/sync/rebalance/file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileId, targetAccountId }),
+      const res = await client.api.sync.rebalance.file.$post({
+        json: { fileId, targetAccountId },
       });
       if (res.ok) {
         showToast(`Transferred "${file?.name || fileId}" to ${targetName}.`);
@@ -1253,7 +1237,7 @@ export function App() {
         await loadClusterData();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Failed to transfer file');
+        setErrorNotice(('error' in err ? err.error : null) || 'Failed to transfer file');
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : String(err));
@@ -1264,15 +1248,15 @@ export function App() {
 
   async function handleDisableAccount(accountId: string) {
     try {
-      const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/disable`, {
-        method: 'POST',
+      const res = await client.api.accounts[':id'].disable.$post({
+        param: { id: accountId },
       });
       if (res.ok) {
         showToast('Drive disabled. Excluded from storage pool.');
         await loadClusterData();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Failed to disable drive');
+        setErrorNotice(('error' in err ? err.error : null) || 'Failed to disable drive');
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : String(err));
@@ -1281,22 +1265,22 @@ export function App() {
 
   async function handleEnableAccount(accountId: string) {
     try {
-      const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/enable`, {
-        method: 'POST',
+      const res = await client.api.accounts[':id'].enable.$post({
+        param: { id: accountId },
       });
       if (res.ok) {
         showToast('Drive re-enabled in storage pool.');
         await loadClusterData();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorNotice(err.error || 'Failed to enable drive');
+        setErrorNotice(('error' in err ? err.error : null) || 'Failed to enable drive');
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : String(err));
     }
   }
 
-  function handleOpenDriveAction(account: AccountItem, action: 'disable' | 'remove') {
+  function handleOpenDriveAction(account: AccountItem, action: 'remove') {
     setDriveActionModal({
       isOpen: true,
       action,
@@ -1313,13 +1297,13 @@ export function App() {
     setDriveActionModal((prev) => ({ ...prev, isLoading: true, errorMessage: null }));
 
     try {
-      const res = await fetch(`/api/accounts/${encodeURIComponent(account.id)}`, {
-        method: 'DELETE',
+      const res = await client.api.accounts[':id'].$delete({
+        param: { id: account.id },
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setDriveActionModal((prev) => ({ ...prev, isOpen: false, isLoading: false }));
-        const filesMoved = data.filesMoved ?? 0;
+        const filesMoved = ('filesMoved' in data ? (data.filesMoved as number) : 0) ?? 0;
         showToast(`Drive removed. Evacuated ${filesMoved} ${filesMoved === 1 ? 'file' : 'files'}.`);
         await loadClusterData();
         await loadFiles(currentPath);
@@ -1327,7 +1311,7 @@ export function App() {
         setDriveActionModal((prev) => ({
           ...prev,
           isLoading: false,
-          errorMessage: data.error || 'Failed to remove drive',
+          errorMessage: ('error' in data ? (data.error as string) : null) || 'Failed to remove drive',
         }));
       }
     } catch (err) {

@@ -1,14 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconAlertTriangle, IconTrash, IconFolder } from './Icons.js';
+import { IconClose, IconAlertTriangle, IconTrash } from './Icons.js';
+import { formatBytes } from '../utils/format.js';
 import type { AccountItem } from './Sidebar.js';
 
 interface ConfirmDriveActionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void> | void;
-  action: 'disable' | 'remove';
+  action: 'remove';
   account: AccountItem | null;
   filesCount: number;
   totalBytes: number;
@@ -208,7 +209,7 @@ const styles = stylex.create({
     borderStyle: 'solid',
     borderColor: colors.brandAccent,
     backgroundColor: colors.brandAccent,
-    color: '#111d18',
+    color: colors.brandAccentText,
     fontSize: typography.fontSizeMeta,
     fontWeight: typography.fontWeightTitle,
     cursor: 'pointer',
@@ -227,20 +228,12 @@ const styles = stylex.create({
   confirmBtnDanger: {
     backgroundColor: colors.danger,
     borderColor: colors.danger,
-    color: '#ffffff',
+    color: colors.dangerText,
     ':hover': {
       filter: 'brightness(1.1)',
     },
   },
 });
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-}
 
 export function ConfirmDriveActionModal({
   isOpen,
@@ -277,13 +270,7 @@ export function ConfirmDriveActionModal({
 
   if (!isOpen || !account) return null;
 
-  const isRemove = action === 'remove';
-  const titleText = isRemove ? 'Remove drive' : 'Disable drive';
-  const actionLabel = isLoading
-    ? 'Evacuating files...'
-    : isRemove
-    ? 'Evacuate & remove drive'
-    : 'Evacuate & disable drive';
+  const actionLabel = isLoading ? 'Evacuating files...' : 'Evacuate & remove drive';
 
   return (
     <div
@@ -301,13 +288,9 @@ export function ConfirmDriveActionModal({
       >
         <div {...stylex.props(styles.header)}>
           <div {...stylex.props(styles.titleGroup)}>
-            {isRemove ? (
-              <IconTrash size={16} strokeWidth={2} {...stylex.props(styles.warningIcon)} />
-            ) : (
-              <IconFolder size={16} strokeWidth={2} />
-            )}
+            <IconTrash size={16} strokeWidth={2} {...stylex.props(styles.warningIcon)} />
             <h2 id="drive-action-modal-title" {...stylex.props(styles.title)}>
-              {titleText}
+              Remove drive
             </h2>
           </div>
           <button
@@ -332,9 +315,7 @@ export function ConfirmDriveActionModal({
           </div>
 
           <p {...stylex.props(styles.explanationText)}>
-            {isRemove
-              ? 'Removing this drive will automatically migrate its files to other active drives in the pool using the Folder-Cohesion algorithm, and delete its OAuth credentials from Tsubasa~.'
-              : 'Disabling this drive will exclude it from the storage pool. You can re-enable it at any time.'}
+            Removing this drive will automatically migrate its files to other active drives in the pool using the Folder-Cohesion algorithm, and delete its OAuth credentials from Tsubasa~.
           </p>
 
           <div {...stylex.props(styles.statsBox)}>
@@ -364,7 +345,7 @@ export function ConfirmDriveActionModal({
           <button
             ref={confirmBtnRef}
             type="button"
-            {...stylex.props(styles.confirmBtn, isRemove && styles.confirmBtnDanger)}
+            {...stylex.props(styles.confirmBtn, styles.confirmBtnDanger)}
             onClick={() => onConfirm()}
             disabled={isLoading}
           >

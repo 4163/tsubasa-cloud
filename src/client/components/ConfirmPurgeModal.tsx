@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconTrash, IconClose, IconAlertTriangle } from './Icons';
+import { IconTrash, IconClose, IconAlertTriangle } from './Icons.js';
+import { formatBytes } from '../utils/format.js';
 
 interface ConfirmPurgeModalProps {
   isOpen: boolean;
@@ -180,14 +181,6 @@ const styles = stylex.create({
     },
   },
 });
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}
 
 export function ConfirmPurgeModal({
   isOpen,

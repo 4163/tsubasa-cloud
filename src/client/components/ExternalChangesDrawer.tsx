@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons';
+import { IconClose, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons.js';
+import { formatBytes } from '../utils/format.js';
 
 export interface ExternalDiscrepancyItem {
   driveFileId: string;
@@ -302,7 +304,7 @@ const styles = stylex.create({
     paddingRight: spacing.space3,
     borderRadius: radius.button,
     backgroundColor: colors.danger,
-    color: '#ffffff',
+    color: colors.dangerText,
     borderWidth: '0px',
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
@@ -316,6 +318,48 @@ const styles = stylex.create({
       opacity: 0.5,
       cursor: 'not-allowed',
     },
+  },
+  statusNoticeBanner: {
+    padding: `${spacing.space4} ${spacing.space5}`,
+    borderRadius: radius.compact,
+    backgroundColor: colors.dangerSurface,
+    color: colors.danger,
+    fontSize: typography.fontSizeMeta,
+  },
+  cardList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing.space4,
+    marginTop: spacing.space4,
+  },
+  fileTitleCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    flex: 1,
+    gap: spacing.space1,
+  },
+  fileVirtualPath: {
+    fontSize: typography.fontSizeMeta,
+    color: colors.dimText,
+    fontFamily: typography.fontFamilyMono,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  rebalanceTitle: {
+    fontSize: typography.fontSizeBody,
+    fontWeight: '600',
+    color: colors.primaryText,
+  },
+  scanningNoticeText: {
+    fontSize: typography.fontSizeBody,
+    color: colors.dimText,
+  },
+  emptyNoticeTitle: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: colors.primaryText,
   },
   rebalanceBanner: {
     padding: `${spacing.space3} ${spacing.space4}`,
@@ -347,14 +391,6 @@ const styles = stylex.create({
     gap: spacing.space2,
   },
 });
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-}
 
 export function ExternalChangesDrawer({
   isOpen,
@@ -399,18 +435,20 @@ export function ExternalChangesDrawer({
     setStatusNotice(null);
 
     try {
-      const res = await fetch(`/api/sync/external-changes/${encodeURIComponent(accId)}`);
+      const res = await client.api.sync['external-changes'][':accountId'].$get({
+        param: { accountId: accId },
+      });
       if (activeScanRef.current !== accId) return;
 
       if (res.ok) {
-        const data: DiscrepancyReport = await res.json();
+        const data = await res.json();
         if (activeScanRef.current === accId) {
-          setReport(data);
+          setReport(data as DiscrepancyReport);
         }
       } else {
         const errData = await res.json().catch(() => ({}));
         if (activeScanRef.current === accId) {
-          setStatusNotice(errData.error || `Scan failed (${res.status})`);
+          setStatusNotice(('error' in errData ? errData.error : null) || `Scan failed (${res.status})`);
         }
       }
     } catch (err) {
@@ -436,14 +474,12 @@ export function ExternalChangesDrawer({
   const handleAccept = async (item: ExternalDiscrepancyItem) => {
     setActiveActionId(item.driveFileId);
     try {
-      const res = await fetch('/api/sync/resolve/accept', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await client.api.sync.resolve.accept.$post({
+        json: {
           accountId: item.accountId,
           driveFileId: item.driveFileId,
           targetVirtualPath: item.virtualPath,
-        }),
+        },
       });
 
       if (res.ok) {
@@ -451,7 +487,7 @@ export function ExternalChangesDrawer({
         await onResolved();
       } else {
         const err = await res.json().catch(() => ({}));
-        setStatusNotice(err.error || 'Failed to accept file');
+        setStatusNotice(('error' in err ? err.error : null) || 'Failed to accept file');
       }
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));
@@ -463,13 +499,11 @@ export function ExternalChangesDrawer({
   const handleMoveToRoot = async (item: ExternalDiscrepancyItem) => {
     setActiveActionId(item.driveFileId);
     try {
-      const res = await fetch('/api/sync/resolve/move-to-root', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await client.api.sync.resolve['move-to-root'].$post({
+        json: {
           accountId: item.accountId,
           driveFileId: item.driveFileId,
-        }),
+        },
       });
 
       if (res.ok) {
@@ -477,7 +511,7 @@ export function ExternalChangesDrawer({
         await onResolved();
       } else {
         const err = await res.json().catch(() => ({}));
-        setStatusNotice(err.error || 'Failed to eject file');
+        setStatusNotice(('error' in err ? err.error : null) || 'Failed to eject file');
       }
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));
@@ -490,13 +524,11 @@ export function ExternalChangesDrawer({
     setActiveActionId(item.driveFileId);
     setStatusNotice(null);
     try {
-      const res = await fetch('/api/sync/resolve/remove-missing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await client.api.sync.resolve['remove-missing'].$post({
+        json: {
           accountId: item.accountId,
           driveFileId: item.driveFileId,
-        }),
+        },
       });
 
       if (res.ok) {
@@ -504,7 +536,7 @@ export function ExternalChangesDrawer({
         await onResolved();
       } else {
         const err = await res.json().catch(() => ({}));
-        setStatusNotice(err.error || 'Failed to remove missing file');
+        setStatusNotice(('error' in err ? err.error : null) || 'Failed to remove missing file');
       }
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));
@@ -517,19 +549,19 @@ export function ExternalChangesDrawer({
     if (!selectedAccount) return;
     setActiveActionId('rebalance');
     try {
-      const res = await fetch(`/api/sync/rebalance/auto/${encodeURIComponent(selectedAccount)}`, {
-        method: 'POST',
+      const res = await client.api.sync.rebalance.auto[':accountId'].$post({
+        param: { accountId: selectedAccount },
       });
 
       if (res.ok) {
         const data = await res.json();
-        const count = data.results?.length ?? 0;
+        const count = ('results' in data && Array.isArray(data.results)) ? data.results.length : 0;
         setStatusNotice(`Rebalance complete. ${count} files migrated.`);
         await scanAccount(selectedAccount);
         await onResolved();
       } else {
         const err = await res.json().catch(() => ({}));
-        setStatusNotice(err.error || 'Auto-rebalance failed');
+        setStatusNotice(('error' in err ? err.error : null) || 'Auto-rebalance failed');
       }
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));
@@ -597,7 +629,7 @@ export function ExternalChangesDrawer({
 
         <div {...stylex.props(styles.contentScroll)}>
           {statusNotice && (
-            <div style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: colors.dangerSurface, color: colors.danger, fontSize: '12px' }}>
+            <div {...stylex.props(styles.statusNoticeBanner)}>
               {statusNotice}
             </div>
           )}
@@ -612,25 +644,18 @@ export function ExternalChangesDrawer({
               <p {...stylex.props(styles.cardDesc)}>
                 Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside Tsubasa Storage/ to preserve incoming email delivery.
               </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              <div {...stylex.props(styles.cardList)}>
                 {report.overCeiling.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardOverCeiling)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                        <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
                           </span>
                           <span
-                            style={{
-                              fontSize: '11px',
-                              color: colors.dimText,
-                              fontFamily: typography.fontFamilyMono,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
+                            {...stylex.props(styles.fileVirtualPath)}
                             title={item.virtualPath}
                           >
                             {item.virtualPath}
@@ -670,25 +695,18 @@ export function ExternalChangesDrawer({
               <h3 {...stylex.props(styles.sectionTitle)}>
                 Unindexed files added in Google Drive
               </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              <div {...stylex.props(styles.cardList)}>
                 {report.unindexed.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                        <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
                           </span>
                           <span
-                            style={{
-                              fontSize: '11px',
-                              color: colors.dimText,
-                              fontFamily: typography.fontFamilyMono,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
+                            {...stylex.props(styles.fileVirtualPath)}
                             title={item.virtualPath}
                           >
                             {item.virtualPath}
@@ -726,25 +744,18 @@ export function ExternalChangesDrawer({
           {report?.modified && report.modified.length > 0 && (
             <div>
               <h3 {...stylex.props(styles.sectionTitle)}>Modified files</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              <div {...stylex.props(styles.cardList)}>
                 {report.modified.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
                         <IconFile size={16} />
-                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                        <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
                           </span>
                           <span
-                            style={{
-                              fontSize: '11px',
-                              color: colors.dimText,
-                              fontFamily: typography.fontFamilyMono,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
+                            {...stylex.props(styles.fileVirtualPath)}
                             title={item.virtualPath}
                           >
                             {item.virtualPath}
@@ -780,7 +791,7 @@ export function ExternalChangesDrawer({
               <p {...stylex.props(styles.cardDesc)}>
                 These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
               </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              <div {...stylex.props(styles.cardList)}>
                 {report.missingRemote.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
@@ -811,7 +822,7 @@ export function ExternalChangesDrawer({
           {/* Rebalance section */}
           {showRebalance && (
             <div {...stylex.props(styles.rebalanceBanner)}>
-              <div style={{ fontSize: '13px', fontWeight: '600', color: colors.primaryText }}>
+              <div {...stylex.props(styles.rebalanceTitle)}>
                 Auto-rebalance files
               </div>
               <p {...stylex.props(styles.cardDesc)}>
@@ -833,7 +844,7 @@ export function ExternalChangesDrawer({
           {/* Scanning indicator */}
           {isScanning && (
             <div {...stylex.props(styles.scanningNotice)}>
-              <div style={{ fontSize: '13px', color: colors.dimText }}>
+              <div {...stylex.props(styles.scanningNoticeText)}>
                 Scanning Drive for external changes...
               </div>
             </div>
@@ -843,7 +854,7 @@ export function ExternalChangesDrawer({
           {!isScanning && accounts.length === 0 && (
             <div {...stylex.props(styles.emptyNotice)}>
               <IconCheck size={28} color={colors.success} />
-              <div style={{ fontSize: '14px', fontWeight: '600', color: colors.primaryText }}>
+              <div {...stylex.props(styles.emptyNoticeTitle)}>
                 All accounts in sync
               </div>
               <p {...stylex.props(styles.cardDesc)}>
@@ -856,7 +867,7 @@ export function ExternalChangesDrawer({
           {!isScanning && report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
             <div {...stylex.props(styles.emptyNotice)}>
               <IconCheck size={28} color={colors.success} />
-              <div style={{ fontSize: '14px', fontWeight: '600', color: colors.primaryText }}>
+              <div {...stylex.props(styles.emptyNoticeTitle)}>
                 Account in sync
               </div>
               <p {...stylex.props(styles.cardDesc)}>

@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { client } from '../api.js';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolder, IconTrash, IconPlus, IconClock } from './Icons';
+import { IconFolder, IconTrash, IconPlus, IconClock } from './Icons.js';
 import { AccountAvatar } from './AccountAvatar.js';
 import brandLogo from '../assets/brand-mono.png';
 
@@ -414,11 +415,6 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
   },
-  quotaMeterText: {
-    fontSize: typography.fontSizeBadge,
-    color: colors.secondaryText,
-    fontVariantNumeric: 'tabular-nums',
-  },
   progressBarContainer: {
     width: '100%',
     height: '4px',
@@ -437,9 +433,6 @@ const styles = stylex.create({
     backgroundColor: colors.poolGold,
     borderRadius: radius.pill,
     transition: 'width 0.3s ease',
-  },
-  progressBarWarning: {
-    backgroundColor: colors.warning,
   },
   progressBarBreach: {
     backgroundColor: colors.danger,
@@ -744,11 +737,16 @@ const styles = stylex.create({
     borderRadius: radius.pill,
     transition: 'width 0.3s ease',
   },
-  transferProgressBarWarning: {
-    backgroundColor: colors.warning,
-  },
   transferProgressBarBreach: {
     backgroundColor: colors.danger,
+  },
+  hiddenInput: {
+    display: 'none',
+  },
+  accountStatusGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
   },
 });
 
@@ -920,10 +918,11 @@ export function Sidebar({
   useEffect(() => {
     for (const acc of accounts) {
       if (!acc.authorized && !authUrls[acc.id]) {
-        fetch(`/api/accounts/auth-url/${encodeURIComponent(acc.id)}`)
+        client.api.accounts['auth-url'][':id']
+          .$get({ param: { id: acc.id }, query: {} })
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
-            if (data?.url) {
+            if (data && 'url' in data && data.url) {
               setAuthUrls((prev) => ({ ...prev, [acc.id]: data.url }));
             }
           })
@@ -936,11 +935,16 @@ export function Sidebar({
     let url = authUrls[accountId];
     if (!url) {
       try {
-        const res = await fetch(`/api/accounts/auth-url/${encodeURIComponent(accountId)}`);
+        const res = await client.api.accounts['auth-url'][':id'].$get({
+          param: { id: accountId },
+          query: {},
+        });
         if (res.ok) {
           const data = await res.json();
-          url = data.url;
-          setAuthUrls((prev) => ({ ...prev, [accountId]: data.url }));
+          if ('url' in data) {
+            url = data.url;
+            setAuthUrls((prev) => ({ ...prev, [accountId]: data.url }));
+          }
         }
       } catch {}
     }
@@ -1056,7 +1060,7 @@ export function Sidebar({
               ref={fileInputRef}
               type="file"
               accept=".json,application/json"
-              style={{ display: 'none' }}
+              {...stylex.props(styles.hiddenInput)}
               onChange={handleFileChange}
             />
           </div>
@@ -1110,7 +1114,7 @@ export function Sidebar({
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div {...stylex.props(styles.accountStatusGroup)}>
                     {acc.isDisabled ? (
                       <span {...stylex.props(styles.disabledPill)} title="Excluded from cluster storage pool">
                         Disabled

@@ -12,6 +12,7 @@ import {
   IconClipboard,
   IconFolder,
 } from './Icons.js';
+import { formatBytes } from '../utils/format.js';
 
 export interface ActionPortalClipboard {
   mode: 'cut' | 'copy';
@@ -101,6 +102,11 @@ const styles = stylex.create({
     color: colors.primaryText,
     fontWeight: typography.fontWeightTitle,
     cursor: 'default',
+  },
+  crumbActiveTrash: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space3,
   },
   crumbDragOver: {
     backgroundColor: colors.brandAccentSurface,
@@ -274,14 +280,6 @@ const styles = stylex.create({
   },
 });
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}
-
 export function ActionPortal({
   currentPath,
   onNavigatePath,
@@ -386,8 +384,7 @@ export function ActionPortal({
           <>
             <span {...stylex.props(styles.crumbSeparator)}>›</span>
             <span
-              {...stylex.props(styles.crumbActive)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              {...stylex.props(styles.crumbActive, styles.crumbActiveTrash)}
             >
               <IconTrash size={14} />
               Trash ({trashedCount} item{trashedCount === 1 ? '' : 's'})

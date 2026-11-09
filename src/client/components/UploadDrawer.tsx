@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconUpload, IconFile, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder } from './Icons';
+import { IconClose, IconUpload, IconFile, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder } from './Icons.js';
+import { formatBytes } from '../utils/format.js';
 import type { AccountItem } from './Sidebar.js';
 
 export interface StagedItem {
@@ -458,15 +460,34 @@ const styles = stylex.create({
       cursor: 'not-allowed',
     },
   },
+  planErrorNotice: {
+    fontSize: typography.fontSizeMeta,
+    fontWeight: '600',
+    color: colors.danger,
+  },
+  fileTitleCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    flex: 1,
+    gap: spacing.space1,
+  },
+  fileVirtualPath: {
+    fontSize: typography.fontSizeMeta,
+    color: colors.dimText,
+    fontFamily: typography.fontFamilyMono,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  fileCeilingWarning: {
+    fontSize: typography.fontSizeMeta,
+    color: colors.danger,
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+  },
 });
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-}
 
 export function UploadDrawer({
   isOpen,
@@ -549,17 +570,16 @@ export function UploadDrawer({
       return;
     }
 
-    fetch('/api/storage/placement/batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        items: eligibleItems.map((e) => ({ virtualPath: e.virtualPath, sizeBytes: e.sizeBytes })),
-      }),
-    })
+    client.api.storage.placement.batch
+      .$post({
+        json: {
+          items: eligibleItems.map((e) => ({ virtualPath: e.virtualPath, sizeBytes: e.sizeBytes })),
+        },
+      })
       .then(async (res) => {
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `Planning error ${res.status}`);
+          throw new Error(('error' in errData ? errData.error : null) || `Planning error ${res.status}`);
         }
         return res.json();
       })
@@ -624,10 +644,8 @@ export function UploadDrawer({
       for (const folderPath of stagedEmptyFolders) {
         try {
           const name = folderPath.split('/').filter(Boolean).pop() || folderPath;
-          await fetch('/api/folders', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ virtualPath: folderPath, name }),
+          await client.api.folders.$post({
+            json: { virtualPath: folderPath, name },
           });
         } catch {
           // Continue if already exists
@@ -800,7 +818,7 @@ export function UploadDrawer({
         <div {...stylex.props(styles.fileList)}>
           {planError && (
             <div {...stylex.props(styles.fileCard, styles.fileCardRejected)}>
-              <span style={{ fontSize: '12px', fontWeight: '600', color: colors.danger }}>
+              <span {...stylex.props(styles.planErrorNotice)}>
                 Placement calculation notice: {planError}
               </span>
             </div>
@@ -823,19 +841,12 @@ export function UploadDrawer({
                 <div {...stylex.props(styles.fileCardHeader)}>
                   <div {...stylex.props(styles.fileInfoGroup)}>
                     <IconFile size={16} {...stylex.props(styles.fileIcon)} />
-                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: '2px' }}>
+                    <div {...stylex.props(styles.fileTitleCol)}>
                       <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                         {item.file.name}
                       </span>
                       <span
-                        style={{
-                          fontSize: '11px',
-                          color: colors.dimText,
-                          fontFamily: typography.fontFamilyMono,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
+                        {...stylex.props(styles.fileVirtualPath)}
                         title={item.virtualPath}
                       >
                         {item.virtualPath}
@@ -861,7 +872,7 @@ export function UploadDrawer({
                 </div>
 
                 {isRejected && (
-                  <div style={{ fontSize: '11px', color: colors.danger, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div {...stylex.props(styles.fileCeilingWarning)}>
                     <IconAlertTriangle size={12} />
                     Single file ceiling exceeded. Files must fit within 14.25 GB to preserve 750 MB reserve.
                   </div>

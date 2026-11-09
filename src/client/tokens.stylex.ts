@@ -22,7 +22,7 @@ export const colors = stylex.defineVars({
   headingText: '#111d18',
   secondaryText: '#2d453b',
   mutedText: '#2d453b',
-  dimText: '#567064',
+  dimText: '#3b5249',
   disabledText: '#768d83',
 
   // Brand & interactive states
@@ -50,11 +50,11 @@ export const colors = stylex.defineVars({
   successSurface: '#e6f4ea',
   warning: '#7a4400',
   warningSurface: '#fef3c7',
-  danger: '#9e4c3a',
-  dangerSurface: '#fbf2ee',
-  dangerBorder: '#e8beb3',
-  dangerTextOnSurface: '#7a3222',
-  dangerHover: '#873b2a',
+  danger: '#82071e',
+  dangerSurface: '#fdf2f2',
+  dangerBorder: '#f1b5bc',
+  dangerTextOnSurface: '#82071e',
+  dangerHover: '#6a0518',
   dangerText: '#ffffff',
 });
 
@@ -74,14 +74,14 @@ export const darkColors = stylex.createTheme(colors, {
   headingText: '#e5f2eb',
   secondaryText: '#9bb8ab',
   mutedText: '#9bb8ab',
-  dimText: '#6f8b7f',
+  dimText: '#9db8ac',
   disabledText: '#4c6359',
 
   primary: '#e5f2eb',
   primaryHover: '#ffffff',
   brandAccent: '#35c4a8',
   brandAccentHover: '#55dcc0',
-  brandAccentText: '#0b1412',
+  brandAccentText: '#111d18',
   brandAccentSurface: '#12332c',
   accentGold: '#d4a13c',
   selectionBg: '#1b3b32',
@@ -99,12 +99,12 @@ export const darkColors = stylex.createTheme(colors, {
   successSurface: '#0d2a24',
   warning: '#facc15',
   warningSurface: '#2d2407',
-  danger: '#e58882',
+  danger: '#ff9492',
   dangerSurface: '#261615',
-  dangerBorder: '#542826',
-  dangerTextOnSurface: '#f1a39f',
-  dangerHover: '#f09892',
-  dangerText: '#0b1412',
+  dangerBorder: '#5c1d24',
+  dangerTextOnSurface: '#ff9492',
+  dangerHover: '#ffa8a6',
+  dangerText: '#1c080a',
 });
 
 /**
@@ -189,17 +189,6 @@ export const typography = stylex.defineVars({
   fontSizeBadge: '10px',
   lineHeightBadge: '1.2',
   fontWeightBadge: '600',
-});
-
-/**
- * Box shadows and elevation levels.
- */
-export const elevation = stylex.defineVars({
-  level0: 'none',
-  cardShadow: '0 1px 3px rgba(17, 29, 24, 0.06)',
-  menuShadowLight: '0 4px 16px rgba(17, 29, 24, 0.12)',
-  menuShadowDark: '0 6px 20px rgba(0, 0, 0, 0.55)',
-  goldGlow: '0 0 0 2px #deb76c',
 });
 
 /**

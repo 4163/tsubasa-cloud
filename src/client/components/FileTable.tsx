@@ -7,7 +7,6 @@ import {
   IconFile,
   IconDownload,
   IconTrash,
-  IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
   IconChevronDown,
@@ -15,8 +14,9 @@ import {
   IconUpload,
   IconCheck,
   IconMinus,
-} from './Icons';
-import type { FileRecord, Folder } from '../../server/db/schema.js';
+} from './Icons.js';
+import { formatBytes } from '../utils/format.js';
+import type { FileRecord, FolderRecord } from '../api.js';
 import type { AccountItem } from './Sidebar.js';
 
 export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'trashedAt'> & {
@@ -25,7 +25,7 @@ export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'tra
   trashedAt?: string | Date | null;
 };
 
-export type ClientFolder = Omit<Folder, 'createdAt' | 'updatedAt'> & {
+export type ClientFolder = Omit<FolderRecord, 'createdAt' | 'updatedAt'> & {
   createdAt: string | Date;
   updatedAt: string | Date;
 };
@@ -568,14 +568,6 @@ function getParentDir(path: string): string {
   return '/' + parts.slice(0, -1).join('/');
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}
-
 function formatGbCompact(bytes: number): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(1);
 }
@@ -828,18 +820,58 @@ export function FileTable({
   const focusIndexRef = useRef<number>(-1);
 
   const folderSizeMap = useMemo(() => {
+    const folderIdsByPath = new Map<string, string[]>();
     const map = new Map<string, number>();
+
     for (const folder of folders) {
-      let total = 0;
-      const prefix = folder.virtualPath.endsWith('/') ? folder.virtualPath : folder.virtualPath + '/';
-      for (const file of files) {
-        if (file.isTrashed) continue;
-        if (file.folderId === folder.id || file.virtualPath.startsWith(prefix)) {
-          total += file.sizeBytes || 0;
+      map.set(folder.id, 0);
+      const canonical = folder.virtualPath === '/'
+        ? '/'
+        : folder.virtualPath.endsWith('/')
+          ? folder.virtualPath.slice(0, -1)
+          : folder.virtualPath;
+      const existing = folderIdsByPath.get(canonical);
+      if (existing) {
+        existing.push(folder.id);
+      } else {
+        folderIdsByPath.set(canonical, [folder.id]);
+      }
+    }
+
+    for (const file of files) {
+      if (file.isTrashed) continue;
+      const size = file.sizeBytes || 0;
+      if (size === 0) continue;
+
+      const vPath = file.virtualPath.startsWith('/') ? file.virtualPath : '/' + file.virtualPath;
+      const touchedFolderIds = new Set<string>();
+
+      const rootIds = folderIdsByPath.get('/');
+      if (rootIds) {
+        for (const id of rootIds) {
+          map.set(id, (map.get(id) || 0) + size);
+          touchedFolderIds.add(id);
         }
       }
-      map.set(folder.id, total);
+
+      let slashIdx = vPath.indexOf('/', 1);
+      while (slashIdx !== -1) {
+        const subPath = vPath.slice(0, slashIdx);
+        const ids = folderIdsByPath.get(subPath);
+        if (ids) {
+          for (const id of ids) {
+            map.set(id, (map.get(id) || 0) + size);
+            touchedFolderIds.add(id);
+          }
+        }
+        slashIdx = vPath.indexOf('/', slashIdx + 1);
+      }
+
+      if (file.folderId && !touchedFolderIds.has(file.folderId) && map.has(file.folderId)) {
+        map.set(file.folderId, (map.get(file.folderId) || 0) + size);
+      }
     }
+
     return map;
   }, [folders, files]);
 
