@@ -8,6 +8,7 @@ import { getDriveClient, ensureRootFolder } from './client.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
 import {
   selectPlacementForFile,
+  validateTargetPlacement,
   MAX_SINGLE_FILE_BYTES,
   FileExceedsCeilingError,
   recordTransfer,
@@ -18,6 +19,7 @@ export interface UploadOptions {
   sizeBytes: number;
   mimeType?: string;
   hash?: string;
+  targetAccountId?: string;
 }
 
 export interface ResumableSessionInfo {
@@ -71,8 +73,14 @@ export async function initiateResumableUpload(
     throw new FileExceedsCeilingError(sizeBytes);
   }
 
-  const decision = await selectPlacementForFile({ virtualPath, sizeBytes });
-  const accountId = decision.accountId;
+  let accountId: string;
+  if (options.targetAccountId) {
+    await validateTargetPlacement(options.targetAccountId, sizeBytes);
+    accountId = options.targetAccountId;
+  } else {
+    const decision = await selectPlacementForFile({ virtualPath, sizeBytes });
+    accountId = decision.accountId;
+  }
 
   const rootFolderId = await getAccountRootFolderId(accountId);
   const drive = getDriveClient(accountId);

@@ -60,7 +60,7 @@ export async function getEligibleAccounts(nowMs = Date.now()): Promise<Candidate
   const allAccounts = await db
     .select()
     .from(accounts)
-    .where(not(eq(accounts.syncState, 'error')));
+    .where(and(not(eq(accounts.syncState, 'error')), eq(accounts.isDisabled, false)));
 
   const candidates: CandidateAccount[] = [];
 
@@ -404,4 +404,56 @@ export async function planBatchPlacement(
     accountAllocations,
   };
 }
+
+/**
+ * Validates whether a specific target account can accept a file of sizeBytes.
+ * Enforces the strict 750 MB reserve ceiling and 24-hour rolling transfer window.
+ */
+export async function validateTargetPlacement(
+  accountId: string,
+  sizeBytes: number,
+  nowMs = Date.now()
+): Promise<CandidateAccount> {
+  const account = await db.query.accounts.findFirst({
+    where: eq(accounts.id, accountId),
+  });
+
+  if (!account) {
+    throw new Error(`Target account ${accountId} not found in database`);
+  }
+
+  if (account.isDisabled) {
+    throw new InsufficientStorageError(
+      `Drive "${account.displayName || accountId}" is disabled and cannot accept uploads`
+    );
+  }
+
+  if (account.syncState === 'error') {
+    throw new InsufficientStorageError(
+      `Drive "${account.displayName || accountId}" is in an error state`
+    );
+  }
+
+  const headroom = calculateHeadroom(account.quotaLimitBytes, account.quotaUsedBytes);
+  if (headroom < sizeBytes) {
+    throw new InsufficientStorageError(
+      `Drive "${account.displayName || accountId}" has insufficient headroom (${(headroom / (1024 * 1024 * 1024)).toFixed(2)} GB available, needs ${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB to preserve 750 MB reserve ceiling)`
+    );
+  }
+
+  const transferStats = await getAccountTransferStats(accountId, nowMs);
+  if (transferStats.remainingUploadBytes24h < sizeBytes) {
+    throw new InsufficientStorageError(
+      `Drive "${account.displayName || accountId}" has exhausted its Google 750 GB daily transfer quota (${(transferStats.remainingUploadBytes24h / (1024 * 1024 * 1024)).toFixed(2)} GB remaining)`
+    );
+  }
+
+  return {
+    id: account.id,
+    email: account.email,
+    headroomBytes: headroom,
+    transferStats,
+  };
+}
+
 

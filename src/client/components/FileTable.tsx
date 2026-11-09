@@ -15,6 +15,7 @@ import {
   IconMinus,
 } from './Icons';
 import type { FileRecord, Folder } from '../../server/db/schema.js';
+import type { AccountItem } from './Sidebar.js';
 
 export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'trashedAt'> & {
   createdAt: string | Date;
@@ -44,6 +45,9 @@ interface FileTableProps {
   onRestore?: (file: ClientFileRecord) => void;
   onPermanentDelete?: (file: ClientFileRecord) => void;
   onDropFiles?: (files: File[]) => void;
+  accounts?: AccountItem[];
+  onTransferFile?: (fileId: string, targetAccountId: string) => Promise<void>;
+  transferringFileId?: string | null;
 }
 
 type TableItem =
@@ -257,6 +261,44 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  accountSelect: {
+    fontSize: typography.fontSizeBadge,
+    fontFamily: typography.fontFamilyMono,
+    height: '22px',
+    lineHeight: '18px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    backgroundColor: colors.brandAccentSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    color: colors.brandAccent,
+    maxWidth: '130px',
+    outline: 'none',
+    cursor: 'pointer',
+    boxSizing: 'border-box',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    transition: motion.transitionFast,
+    ':hover': {
+      borderColor: colors.accentGold,
+      backgroundColor: colors.surfaceAlt,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.accentGold,
+      outlineOffset: '1px',
+    },
+  },
+  accountSelectTransferring: {
+    opacity: 0.5,
+    cursor: 'wait',
+    pointerEvents: 'none',
+  },
   tabularCell: {
     fontVariantNumeric: 'tabular-nums',
     fontSize: typography.fontSizeMeta,
@@ -410,6 +452,10 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
+function formatGbCompact(bytes: number): string {
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1);
+}
+
 function formatDate(dateValue: Date | number | string | null | undefined): string {
   if (!dateValue) return '—';
   const d = dateValue instanceof Date ? dateValue : new Date(dateValue);
@@ -439,6 +485,9 @@ export function FileTable({
   onRestore,
   onPermanentDelete,
   onDropFiles,
+  accounts = [],
+  onTransferFile,
+  transferringFileId = null,
 }: FileTableProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const dragCounter = useRef(0);
@@ -1080,9 +1129,62 @@ export function FileTable({
                     </div>
 
                     <div>
-                      <span {...stylex.props(styles.accountPill)}>
-                        {file.accountId}
-                      </span>
+                      {accounts && accounts.length > 1 && onTransferFile ? (
+                        <select
+                          aria-label={`Transfer ${file.name} to another account`}
+                          value={file.accountId}
+                          disabled={transferringFileId === file.id}
+                          {...stylex.props(
+                            styles.accountSelect,
+                            transferringFileId === file.id && styles.accountSelectTransferring
+                          )}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            const targetId = e.target.value;
+                            if (targetId && targetId !== file.accountId) {
+                              onTransferFile(file.id, targetId);
+                            }
+                          }}
+                        >
+                          {accounts.map((acc) => {
+                            const isCurrent = acc.id === file.accountId;
+                            const isDriveDisabled = Boolean(acc.isDisabled);
+                            const hasHeadroom = acc.headroomBytes >= file.sizeBytes;
+                            const remainingBudget =
+                              acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
+                            const hasTransferBudget = remainingBudget >= file.sizeBytes;
+                            const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
+                            const isMuted = !isCurrent && !canHold;
+
+                            let labelSuffix = '';
+                            if (isCurrent) {
+                              labelSuffix = ' (Current)';
+                            } else if (isDriveDisabled) {
+                              labelSuffix = ' (Disabled)';
+                            } else if (!acc.authorized) {
+                              labelSuffix = ' (Unauthorized)';
+                            } else if (!hasHeadroom) {
+                              labelSuffix = ` (No headroom: needs ${formatGbCompact(file.sizeBytes)} GB)`;
+                            } else if (!hasTransferBudget) {
+                              labelSuffix = ' (24h transfer limit reached)';
+                            } else {
+                              labelSuffix = ` (${formatGbCompact(acc.headroomBytes)} GB free)`;
+                            }
+
+                            return (
+                              <option key={acc.id} value={acc.id} disabled={isMuted}>
+                                {(acc.displayName || acc.id) + labelSuffix}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      ) : (
+                        <span {...stylex.props(styles.accountPill)}>
+                          {file.accountId}
+                        </span>
+                      )}
                     </div>
 
                     <div {...stylex.props(styles.colRight, styles.tabularCell)}>

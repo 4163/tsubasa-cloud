@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconUpload, IconFile, IconCheck, IconAlertTriangle } from './Icons';
+import { IconClose, IconUpload, IconFile, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder } from './Icons';
+import type { AccountItem } from './Sidebar.js';
 
 export interface StagedItem {
   file: File;
@@ -22,6 +23,7 @@ interface UploadDrawerProps {
   onClose: () => void;
   stagedFiles: File[];
   currentPath: string;
+  accounts?: AccountItem[];
   onUploadComplete: () => Promise<void>;
   onClearFiles: () => void;
 }
@@ -43,7 +45,7 @@ const styles = stylex.create({
     bottom: 0,
     width: '420px',
     maxWidth: '100vw',
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: colors.surface,
     borderLeftWidth: '1px',
     borderLeftStyle: 'solid',
     borderLeftColor: colors.borderSubtle,
@@ -99,39 +101,109 @@ const styles = stylex.create({
       color: colors.primaryText,
     },
   },
-  summaryCard: {
-    padding: spacing.space5,
+  summaryBar: {
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.surface,
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.space3,
+    gap: spacing.space2,
     flexShrink: 0,
   },
-  summaryRow: {
+  summaryMainRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.space3,
+  },
+  destinationGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+    flex: 1,
+  },
+  destinationLabel: {
+    fontSize: typography.fontSizeMeta,
+    color: colors.dimText,
+    fontWeight: '500',
+    flexShrink: 0,
+  },
+  destinationPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space1,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    backgroundColor: colors.surface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    fontFamily: typography.fontFamilyMono,
+    fontSize: typography.fontSizeBadge,
+    color: colors.primaryText,
+    maxWidth: '220px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  stagedStats: {
+    fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
+    fontWeight: '500',
     fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
-  summaryValue: {
-    fontWeight: '600',
-    color: colors.primaryText,
+  summarySubRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
+    fontSize: typography.fontSizeMeta,
+    color: colors.dimText,
+  },
+  statusIndicator: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    fontSize: typography.fontSizeMeta,
+    color: colors.secondaryText,
+    fontWeight: '500',
+  },
+  statusDot: {
+    width: '6px',
+    height: '6px',
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentGold,
+    flexShrink: 0,
+  },
+  statusDotActive: {
+    backgroundColor: colors.brandAccent,
+  },
+  statusDotComplete: {
+    backgroundColor: colors.success,
   },
   progressBarContainer: {
     width: '100%',
-    height: '6px',
+    height: '3px',
     borderRadius: radius.pill,
     backgroundColor: colors.progressTrack,
     overflow: 'hidden',
+    marginTop: spacing.space1,
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: colors.accentGold,
+    backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
     transition: 'width 0.2s ease',
   },
@@ -156,12 +228,17 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
+    transition: motion.transitionFast,
+    ':hover': {
+      borderColor: colors.border,
+      backgroundColor: colors.rowHover,
+    },
   },
   fileCardRejected: {
     borderColor: colors.danger,
     backgroundColor: colors.dangerSurface,
   },
-  fileCardRow: {
+  fileCardHeader: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -170,32 +247,126 @@ const styles = stylex.create({
   fileInfoGroup: {
     display: 'flex',
     alignItems: 'center',
-    gap: spacing.space3,
+    gap: spacing.space2,
     minWidth: 0,
     flex: 1,
   },
   fileIcon: {
-    color: colors.secondaryText,
+    color: colors.brandAccent,
     flexShrink: 0,
   },
-  fileTextGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
-    minWidth: 0,
-  },
   fileName: {
+    fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
-    fontWeight: '500',
+    fontWeight: '600',
     color: colors.primaryText,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
   fileMeta: {
+    fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
+    fontWeight: '500',
+    flexShrink: 0,
+  },
+  driveAllocationRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
+    paddingTop: '6px',
+    borderTopWidth: '1px',
+    borderTopStyle: 'solid',
+    borderTopColor: colors.borderSubtle,
+  },
+  driveSelectorGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+    flex: 1,
+  },
+  driveLabel: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: '10px',
+    fontWeight: '600',
+    color: colors.dimText,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    flexShrink: 0,
+  },
+  selectWrapper: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    minWidth: 0,
+    flex: 1,
+    maxWidth: '260px',
+  },
+  accountSelect: {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    width: '100%',
+    height: '24px',
+    lineHeight: '20px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    paddingLeft: spacing.space2,
+    paddingRight: '22px',
+    borderRadius: radius.compact,
+    backgroundColor: colors.surface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    color: colors.primaryText,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '500',
+    outline: 'none',
+    cursor: 'pointer',
+    boxSizing: 'border-box',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    transition: motion.transitionFast,
+    ':hover': {
+      borderColor: colors.brandAccent,
+      backgroundColor: colors.surface,
+    },
+    ':focus': {
+      borderColor: colors.brandAccent,
+      boxShadow: `0 0 0 1px ${colors.brandAccent}`,
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
+    },
+  },
+  selectChevron: {
+    position: 'absolute',
+    right: '6px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    pointerEvents: 'none',
+    color: colors.dimText,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  allocationTag: {
+    fontSize: '10px',
+    fontFamily: typography.fontFamilyBody,
+    fontWeight: '500',
+    color: colors.dimText,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+  },
+  allocationTagManual: {
+    color: colors.brandAccent,
+    fontWeight: '600',
   },
   badge: {
     fontSize: typography.fontSizeBadge,
@@ -320,12 +491,14 @@ export function UploadDrawer({
   onClose,
   stagedFiles,
   currentPath,
+  accounts = [],
   onUploadComplete,
   onClearFiles,
 }: UploadDrawerProps) {
   const [previews, setPreviews] = useState<PlacementItemPreview[]>([]);
   const [isPlanning, setIsPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [selectedAccounts, setSelectedAccounts] = useState<Record<string, string>>({});
 
   const [isUploading, setIsUploading] = useState(false);
   const [fileProgress, setFileProgress] = useState<
@@ -346,6 +519,7 @@ export function UploadDrawer({
       setPreviews([]);
       setPlanError(null);
       setFileProgress({});
+      setSelectedAccounts({});
       return;
     }
 
@@ -396,10 +570,10 @@ export function UploadDrawer({
           );
           const reasonLabel =
             matched?.reason === 'folder_affinity'
-              ? 'Folder path affinity'
+              ? 'Path affinity'
               : matched?.reason === 'best_fit'
-              ? 'Folder-cohesion best fit'
-              : matched?.reason || 'Folder-cohesion best fit';
+              ? 'Best fit'
+              : matched?.reason || 'Best fit';
 
           return {
             ...orig,
@@ -457,6 +631,10 @@ export function UploadDrawer({
       if (file.size > CEILING_14_25_GB) continue;
 
       const virtualPath = (currentPath === '/' ? '' : currentPath) + '/' + file.name;
+      const chosenAccountId =
+        selectedAccounts[file.name] ||
+        previews.find((p) => p.virtualPath.endsWith('/' + file.name))?.targetAccountId;
+      const accountParam = chosenAccountId ? `&accountId=${encodeURIComponent(chosenAccountId)}` : '';
 
       setFileProgress((prev) => ({
         ...prev,
@@ -466,7 +644,7 @@ export function UploadDrawer({
       try {
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(virtualPath)}&sizeBytes=${file.size}&mimeType=${encodeURIComponent(file.type || 'application/octet-stream')}`;
+          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(virtualPath)}&sizeBytes=${file.size}&mimeType=${encodeURIComponent(file.type || 'application/octet-stream')}${accountParam}`;
 
           xhr.open('POST', uploadUrl, true);
           xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
@@ -519,7 +697,15 @@ export function UploadDrawer({
 
     setIsUploading(false);
     await onUploadComplete();
-  }, [isUploading, stagedFiles, currentPath, onUploadComplete]);
+  }, [isUploading, stagedFiles, currentPath, onUploadComplete, selectedAccounts, previews]);
+
+  const hasUnallocatedFiles = stagedFiles.some((f) => {
+    if (f.size > CEILING_14_25_GB) return false;
+    const chosen =
+      selectedAccounts[f.name] ||
+      previews.find((p) => p.virtualPath.endsWith('/' + f.name))?.targetAccountId;
+    return !chosen;
+  });
 
   if (!isOpen) return null;
 
@@ -543,39 +729,54 @@ export function UploadDrawer({
           </button>
         </div>
 
-        <div {...stylex.props(styles.summaryCard)}>
-          <div {...stylex.props(styles.summaryRow)}>
-            <span>Target path:</span>
-            <span {...stylex.props(styles.summaryValue)}>{currentPath}</span>
-          </div>
-          <div {...stylex.props(styles.summaryRow)}>
-            <span>Staged files:</span>
-            <span {...stylex.props(styles.summaryValue)}>
-              {stagedFiles.length} file{stagedFiles.length > 1 ? 's' : ''} ({formatBytes(totalBytes)})
-            </span>
-          </div>
-          <div {...stylex.props(styles.summaryRow)}>
-            <span>Status:</span>
-            <span {...stylex.props(styles.summaryValue)}>
-              {isPlanning
-                ? 'Calculating best-fit placement...'
-                : isUploading
-                ? `Uploading (${overallProgress.completedCount}/${stagedFiles.length})`
-                : overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0
-                ? 'All transfers complete'
-                : 'Ready for placement'}
+        <div {...stylex.props(styles.summaryBar)}>
+          <div {...stylex.props(styles.summaryMainRow)}>
+            <div {...stylex.props(styles.destinationGroup)}>
+              <span {...stylex.props(styles.destinationLabel)}>Destination:</span>
+              <span {...stylex.props(styles.destinationPill)} title={currentPath}>
+                <IconFolder size={12} />
+                <span>{currentPath === '/' ? 'Root (/)' : currentPath}</span>
+              </span>
+            </div>
+            <span {...stylex.props(styles.stagedStats)}>
+              {stagedFiles.length} {stagedFiles.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)}
             </span>
           </div>
 
-          <div {...stylex.props(styles.progressBarContainer)}>
-            <div
-              {...stylex.props(
-                styles.progressBarFill,
-                overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0 && styles.progressBarComplete
-              )}
-              style={{ width: `${overallProgress.percent}%` }}
-            />
+          <div {...stylex.props(styles.summarySubRow)}>
+            <div {...stylex.props(styles.statusIndicator)}>
+              <div
+                {...stylex.props(
+                  styles.statusDot,
+                  (isUploading || isPlanning) && styles.statusDotActive,
+                  overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0 && styles.statusDotComplete
+                )}
+              />
+              <span>
+                {isPlanning
+                  ? 'Calculating placement...'
+                  : isUploading
+                  ? `Uploading ${Math.min(overallProgress.completedCount + 1, stagedFiles.length)} of ${stagedFiles.length} (${overallProgress.percent}%)`
+                  : overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0
+                  ? 'All transfers complete'
+                  : allRejected
+                  ? 'All files exceed ceiling'
+                  : 'Ready to upload'}
+              </span>
+            </div>
           </div>
+
+          {(isUploading || (overallProgress.completedCount > 0 && overallProgress.completedCount === stagedFiles.length)) && (
+            <div {...stylex.props(styles.progressBarContainer)}>
+              <div
+                {...stylex.props(
+                  styles.progressBarFill,
+                  overallProgress.completedCount === stagedFiles.length && stagedFiles.length > 0 && styles.progressBarComplete
+                )}
+                style={{ width: `${overallProgress.percent}%` }}
+              />
+            </div>
+          )}
         </div>
 
         <div {...stylex.props(styles.fileList)}>
@@ -592,21 +793,21 @@ export function UploadDrawer({
             const prog = fileProgress[file.name];
             const isRejected = file.size > CEILING_14_25_GB || preview?.rejected;
             const pct = prog && prog.total > 0 ? Math.round((prog.loaded / prog.total) * 100) : 0;
+            const chosenAccountId = selectedAccounts[file.name] || preview?.targetAccountId || '';
+            const isManualSelection = Boolean(selectedAccounts[file.name]);
 
             return (
               <div
                 key={file.name}
                 {...stylex.props(styles.fileCard, isRejected && styles.fileCardRejected)}
               >
-                <div {...stylex.props(styles.fileCardRow)}>
+                {/* Header row: file name + size or completion status */}
+                <div {...stylex.props(styles.fileCardHeader)}>
                   <div {...stylex.props(styles.fileInfoGroup)}>
                     <IconFile size={16} {...stylex.props(styles.fileIcon)} />
-                    <div {...stylex.props(styles.fileTextGroup)}>
-                      <span {...stylex.props(styles.fileName)}>
-                        {file.name}
-                      </span>
-                      <span {...stylex.props(styles.fileMeta)}>{formatBytes(file.size)}</span>
-                    </div>
+                    <span {...stylex.props(styles.fileName)} title={file.name}>
+                      {file.name}
+                    </span>
                   </div>
 
                   {isRejected ? (
@@ -621,16 +822,8 @@ export function UploadDrawer({
                     <span {...stylex.props(styles.badge, styles.badgeError)} title={prog.error}>
                       Failed
                     </span>
-                  ) : preview?.targetAccountId ? (
-                    <span {...stylex.props(styles.badge)}>
-                      {preview.targetAccountId}
-                    </span>
-                  ) : planError ? (
-                    <span {...stylex.props(styles.badge, styles.badgeError)} title={planError}>
-                      Unallocated
-                    </span>
                   ) : (
-                    <span {...stylex.props(styles.badge)}>Calculating...</span>
+                    <span {...stylex.props(styles.fileMeta)}>{formatBytes(file.size)}</span>
                   )}
                 </div>
 
@@ -641,9 +834,83 @@ export function UploadDrawer({
                   </div>
                 )}
 
-                {!isRejected && preview?.reason && (
-                  <div {...stylex.props(styles.allocationReason)}>
-                    Placement: {preview.reason}
+                {/* Allocation row: drive selector dropdown + placement reason */}
+                {!isRejected && (
+                  <div {...stylex.props(styles.driveAllocationRow)}>
+                    <div {...stylex.props(styles.driveSelectorGroup)}>
+                      <span {...stylex.props(styles.driveLabel)}>Drive:</span>
+                      {accounts && accounts.length > 0 ? (
+                        <div {...stylex.props(styles.selectWrapper)}>
+                          <select
+                            aria-label={`Select target drive for ${file.name}`}
+                            value={chosenAccountId}
+                            disabled={isUploading || prog?.status === 'complete'}
+                            {...stylex.props(styles.accountSelect)}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedAccounts((prev) => ({ ...prev, [file.name]: val }));
+                            }}
+                          >
+                            {!chosenAccountId && (
+                              <option value="" disabled>
+                                {isPlanning ? 'Calculating...' : 'Select drive...'}
+                              </option>
+                            )}
+                            {accounts.map((acc) => {
+                              const isDriveDisabled = Boolean(acc.isDisabled);
+                              const hasHeadroom = acc.headroomBytes >= file.size;
+                              const remainingBudget =
+                                acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
+                              const hasTransferBudget = remainingBudget >= file.size;
+                              const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
+
+                              let labelSuffix = '';
+                              if (isDriveDisabled) {
+                                labelSuffix = ' (Disabled)';
+                              } else if (!acc.authorized) {
+                                labelSuffix = ' (Unauthorized)';
+                              } else if (!hasHeadroom) {
+                                labelSuffix = ' (No headroom)';
+                              } else if (!hasTransferBudget) {
+                                labelSuffix = ' (24h limit reached)';
+                              } else if (acc.id === preview?.targetAccountId && !selectedAccounts[file.name]) {
+                                labelSuffix = ' (Auto)';
+                              }
+
+                              return (
+                                <option key={acc.id} value={acc.id} disabled={!canHold}>
+                                  {acc.displayName || acc.id} ({acc.email || acc.id}){labelSuffix}
+                                </option>
+                              );
+                            })}
+                          </select>
+                          <div {...stylex.props(styles.selectChevron)}>
+                            <IconChevronDown size={11} strokeWidth={2.5} />
+                          </div>
+                        </div>
+                      ) : preview?.targetAccountId ? (
+                        <span {...stylex.props(styles.badge)}>
+                          {preview.targetAccountId}
+                        </span>
+                      ) : planError ? (
+                        <span {...stylex.props(styles.badge, styles.badgeError)} title={planError}>
+                          Unallocated
+                        </span>
+                      ) : (
+                        <span {...stylex.props(styles.badge)}>Calculating...</span>
+                      )}
+                    </div>
+
+                    <span
+                      {...stylex.props(
+                        styles.allocationTag,
+                        isManualSelection && styles.allocationTagManual
+                      )}
+                    >
+                      {isManualSelection
+                        ? 'Manual'
+                        : preview?.reason || (isPlanning ? 'Calculating...' : 'Best fit')}
+                    </span>
                   </div>
                 )}
 
@@ -682,7 +949,13 @@ export function UploadDrawer({
             type="button"
             {...stylex.props(styles.primaryBtn)}
             onClick={handleStartUpload}
-            disabled={isUploading || isPlanning || allRejected || stagedFiles.length === 0}
+            disabled={
+              isUploading ||
+              (isPlanning && !stagedFiles.every((f) => selectedAccounts[f.name])) ||
+              allRejected ||
+              stagedFiles.length === 0 ||
+              hasUnallocatedFiles
+            }
           >
             <IconUpload size={16} strokeWidth={2.5} />
             {isUploading ? 'Uploading...' : 'Start upload'}

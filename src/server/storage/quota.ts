@@ -48,6 +48,7 @@ export interface AccountStorageSummary {
   headroomBytes: number;
   tsubasaUsedBytes: number;
   syncState: string;
+  isDisabled: boolean;
   transferStats: AccountTransferStats;
 }
 
@@ -244,7 +245,9 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
 
     const usableLimit = calculateUsableLimit(acc.quotaLimitBytes);
     const headroom = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
-    totalHeadroom += headroom;
+    if (!acc.isDisabled && acc.syncState !== 'error') {
+      totalHeadroom += headroom;
+    }
 
     const transferStats = await getAccountTransferStats(acc.id, nowMs);
     const tsubasaUsed = tsubasaUsedByAccount.get(acc.id) || 0;
@@ -266,6 +269,7 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
       headroomBytes: headroom,
       tsubasaUsedBytes: tsubasaUsed,
       syncState: acc.syncState,
+      isDisabled: acc.isDisabled ?? false,
       transferStats,
     });
   }

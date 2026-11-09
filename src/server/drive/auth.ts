@@ -297,6 +297,37 @@ class AuthPool {
     return newAccountId;
   }
 
+  public removeAccount(accountId: string): boolean {
+    const record = this.pool.get(accountId);
+    let removedAny = false;
+
+    if (record?.config.sourceFile && fs.existsSync(record.config.sourceFile)) {
+      try {
+        fs.unlinkSync(record.config.sourceFile);
+        removedAny = true;
+      } catch (err) {
+        console.warn(`Failed to unlink source credential file ${record.config.sourceFile}:`, err);
+      }
+    }
+
+    const tokenFile = path.join(this.oauthDir, `${accountId}.tokens.json`);
+    if (fs.existsSync(tokenFile)) {
+      try {
+        fs.unlinkSync(tokenFile);
+        removedAny = true;
+      } catch (err) {
+        console.warn(`Failed to unlink token file ${tokenFile}:`, err);
+      }
+    }
+
+    if (record) {
+      this.pool.delete(accountId);
+      removedAny = true;
+    }
+
+    return removedAny;
+  }
+
   public getRecord(accountId: string): AccountAuthRecord | undefined {
     return this.pool.get(accountId);
   }

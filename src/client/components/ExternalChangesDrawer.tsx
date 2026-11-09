@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconRefreshCw, IconAlertTriangle, IconFile, IconCheck } from './Icons';
+import { IconClose, IconRefreshCw, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons';
 
 export interface ExternalDiscrepancyItem {
   driveFileId: string;
@@ -50,7 +50,7 @@ const styles = stylex.create({
     bottom: 0,
     width: '460px',
     maxWidth: '100vw',
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: colors.surface,
     borderLeftWidth: '1px',
     borderLeftStyle: 'solid',
     borderLeftColor: colors.borderSubtle,
@@ -107,44 +107,83 @@ const styles = stylex.create({
     },
   },
   accountSelectorBar: {
-    padding: spacing.space4,
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.surface,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.space3,
     flexShrink: 0,
   },
+  selectWrapper: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    minWidth: 0,
+    flex: 1,
+  },
   select: {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    width: '100%',
+    height: '32px',
+    lineHeight: '28px',
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space3,
+    paddingRight: '28px',
+    borderRadius: radius.compact,
     backgroundColor: colors.surface,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.border,
-    borderRadius: radius.compact,
+    borderColor: colors.borderSubtle,
     color: colors.primaryText,
     fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    paddingTop: spacing.space2,
-    paddingBottom: spacing.space2,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: '500',
     outline: 'none',
     cursor: 'pointer',
-    flex: 1,
+    boxSizing: 'border-box',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    transition: motion.transitionFast,
+    ':hover': {
+      borderColor: colors.brandAccent,
+      backgroundColor: colors.surface,
+    },
+    ':focus': {
+      borderColor: colors.brandAccent,
+      boxShadow: `0 0 0 1px ${colors.brandAccent}`,
+    },
+  },
+  selectChevron: {
+    position: 'absolute',
+    right: '8px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    pointerEvents: 'none',
+    color: colors.dimText,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   scanBtn: {
     height: '32px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
     borderRadius: radius.button,
     backgroundColor: colors.surface,
     color: colors.primaryText,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.border,
+    borderColor: colors.borderSubtle,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     fontWeight: '500',
@@ -155,6 +194,7 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
+      borderColor: colors.border,
     },
     ':disabled': {
       opacity: 0.5,
@@ -179,18 +219,18 @@ const styles = stylex.create({
     gap: spacing.space2,
   },
   card: {
-    padding: spacing.space4,
+    padding: `${spacing.space3} ${spacing.space4}`,
     borderRadius: radius.card,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceAlt,
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.space3,
+    gap: spacing.space2,
   },
   cardOverCeiling: {
-    borderColor: colors.danger,
+    borderColor: colors.dangerBorder,
     backgroundColor: colors.dangerSurface,
   },
   fileHeaderRow: {
@@ -233,12 +273,12 @@ const styles = stylex.create({
     marginTop: spacing.space1,
   },
   btnPrimary: {
-    height: '30px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: colors.primary,
-    color: colors.surface,
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.button,
+    backgroundColor: colors.brandAccent,
+    color: colors.brandAccentText,
     borderWidth: '0px',
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
@@ -246,7 +286,7 @@ const styles = stylex.create({
     cursor: 'pointer',
     transition: motion.transitionFast,
     ':hover': {
-      backgroundColor: colors.primaryHover,
+      backgroundColor: colors.brandAccentHover,
     },
     ':disabled': {
       opacity: 0.5,
@@ -254,15 +294,15 @@ const styles = stylex.create({
     },
   },
   btnSecondary: {
-    height: '30px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: 'transparent',
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.button,
+    backgroundColor: colors.surface,
     color: colors.primaryText,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.border,
+    borderColor: colors.borderSubtle,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     fontWeight: '500',
@@ -270,6 +310,7 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
+      borderColor: colors.border,
     },
     ':disabled': {
       opacity: 0.5,
@@ -277,10 +318,10 @@ const styles = stylex.create({
     },
   },
   btnDanger: {
-    height: '30px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.compact,
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.button,
     backgroundColor: colors.danger,
     color: '#ffffff',
     borderWidth: '0px',
@@ -290,7 +331,7 @@ const styles = stylex.create({
     cursor: 'pointer',
     transition: motion.transitionFast,
     ':hover': {
-      opacity: 0.9,
+      backgroundColor: colors.dangerHover,
     },
     ':disabled': {
       opacity: 0.5,
@@ -298,11 +339,11 @@ const styles = stylex.create({
     },
   },
   rebalanceBanner: {
-    padding: spacing.space4,
+    padding: `${spacing.space3} ${spacing.space4}`,
     borderRadius: radius.card,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.accentGold,
+    borderColor: colors.borderSubtle,
     backgroundColor: colors.surfaceAlt,
     display: 'flex',
     flexDirection: 'column',
@@ -343,10 +384,15 @@ export function ExternalChangesDrawer({
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (initialAccountId) {
+    if (initialAccountId && accounts.some((a) => a.id === initialAccountId)) {
       setSelectedAccount(initialAccountId);
-    } else if (accounts.length > 0 && !selectedAccount) {
-      setSelectedAccount(accounts[0].id);
+    } else if (accounts.length > 0) {
+      if (!accounts.some((a) => a.id === selectedAccount)) {
+        setSelectedAccount(accounts[0].id);
+      }
+    } else {
+      setSelectedAccount('');
+      setReport(null);
     }
   }, [initialAccountId, accounts, selectedAccount]);
 
@@ -505,23 +551,36 @@ export function ExternalChangesDrawer({
         </div>
 
         <div {...stylex.props(styles.accountSelectorBar)}>
-          <select
-            {...stylex.props(styles.select)}
-            value={selectedAccount}
-            onChange={(e) => setSelectedAccount(e.target.value)}
-          >
-            {accounts.map((acc) => (
-              <option key={acc.id} value={acc.id}>
-                {acc.displayName || acc.id} ({acc.email || acc.id})
-              </option>
-            ))}
-          </select>
+          <div {...stylex.props(styles.selectWrapper)}>
+            <select
+              aria-label="Select connected account"
+              {...stylex.props(styles.select)}
+              value={selectedAccount}
+              onChange={(e) => setSelectedAccount(e.target.value)}
+              disabled={accounts.length === 0 || isScanning}
+            >
+              {accounts.length === 0 ? (
+                <option value="" disabled>
+                  No accounts with external changes
+                </option>
+              ) : (
+                accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.displayName || acc.id} ({acc.email || acc.id})
+                  </option>
+                ))
+              )}
+            </select>
+            <div {...stylex.props(styles.selectChevron)}>
+              <IconChevronDown size={11} strokeWidth={2.5} />
+            </div>
+          </div>
 
           <button
             type="button"
             {...stylex.props(styles.scanBtn)}
             onClick={() => scanAccount(selectedAccount)}
-            disabled={isScanning}
+            disabled={!selectedAccount || isScanning}
           >
             <IconRefreshCw size={14} />
             {isScanning ? 'Scanning...' : 'Scan'}
@@ -708,8 +767,21 @@ export function ExternalChangesDrawer({
             </div>
           </div>
 
-          {/* Empty state */}
-          {!isScanning && totalDiscrepancies === 0 && (
+          {/* Empty state when no accounts have changes */}
+          {!isScanning && accounts.length === 0 && (
+            <div {...stylex.props(styles.emptyNotice)}>
+              <IconCheck size={28} color={colors.success} />
+              <div style={{ fontSize: '14px', fontWeight: '600', color: colors.primaryText }}>
+                All accounts in sync
+              </div>
+              <p {...stylex.props(styles.cardDesc)}>
+                No external modifications or over-ceiling files detected across any connected drives.
+              </p>
+            </div>
+          )}
+
+          {/* Empty state for the selected account */}
+          {!isScanning && accounts.length > 0 && totalDiscrepancies === 0 && (
             <div {...stylex.props(styles.emptyNotice)}>
               <IconCheck size={28} color={colors.success} />
               <div style={{ fontSize: '14px', fontWeight: '600', color: colors.primaryText }}>

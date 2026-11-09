@@ -38,8 +38,10 @@ export interface AccountItem {
   headroomBytes: number;
   tsubasaUsedBytes?: number;
   syncState: string;
+  isDisabled?: boolean;
   authorized: boolean;
   transferStats?: AccountTransferStats;
+  hasPendingChanges?: boolean;
 }
 
 interface SidebarProps {
@@ -54,6 +56,9 @@ interface SidebarProps {
   onOpenExternalChanges?: (id: string) => void;
   onImportOAuth?: (file: File) => void;
   onRefreshStorage?: () => void;
+  onDisableAccount?: (account: AccountItem) => void;
+  onEnableAccount?: (accountId: string) => void;
+  onRemoveAccount?: (account: AccountItem) => void;
   isImporting?: boolean;
   isSyncing: boolean;
   isMobileOpen?: boolean;
@@ -443,8 +448,42 @@ const styles = stylex.create({
   accountActionsRow: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
     marginTop: '2px',
+  },
+  accountActionsLeft: {
+    display: 'flex',
+    alignItems: 'center',
+  },
+  accountActionsRight: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.space2,
+    marginLeft: 'auto',
+  },
+  miniChangesBtnRed: {
+    backgroundColor: 'transparent',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.danger,
+    borderRadius: radius.compact,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    fontSize: typography.fontSizeBadge,
+    lineHeight: typography.lineHeightBadge,
+    color: colors.danger,
+    cursor: 'pointer',
+    flexShrink: 0,
+    fontWeight: '600',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.dangerSurface,
+      borderColor: colors.danger,
+    },
   },
   miniSyncBtn: {
     backgroundColor: 'transparent',
@@ -461,11 +500,59 @@ const styles = stylex.create({
     color: colors.secondaryText,
     cursor: 'pointer',
     flexShrink: 0,
+    transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.surface,
       borderColor: colors.brandAccent,
       color: colors.brandAccent,
     },
+  },
+  miniEnableBtn: {
+    backgroundColor: 'transparent',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.compact,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    fontSize: typography.fontSizeBadge,
+    lineHeight: typography.lineHeightBadge,
+    color: colors.success,
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.successSurface,
+      borderColor: colors.success,
+    },
+  },
+  miniDangerBtn: {
+    backgroundColor: 'transparent',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.compact,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    fontSize: typography.fontSizeBadge,
+    lineHeight: typography.lineHeightBadge,
+    color: colors.danger,
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.dangerSurface,
+      borderColor: colors.danger,
+    },
+  },
+  disabledPill: {
+    fontSize: typography.fontSizeBadge,
+    color: colors.danger,
+    fontWeight: '600',
   },
   authPill: {
     fontSize: typography.fontSizeBadge,
@@ -643,121 +730,48 @@ const styles = stylex.create({
   transferProgressBarBreach: {
     backgroundColor: colors.danger,
   },
-  transferTimerRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space2,
-    fontSize: '10px',
-    color: colors.dimText,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  transferTimerText: {
-    fontSize: '10px',
-    color: colors.dimText,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    minWidth: 0,
-    flex: 1,
-  },
-  transferTimerActive: {
-    color: colors.secondaryText,
-    fontWeight: '500',
-  },
-  transferTimerRateLimited: {
-    color: colors.danger,
-    fontWeight: '600',
-  },
 });
 
-function formatCountdown(ms: number): string {
-  if (ms <= 0) return '0s';
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${seconds}s`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
-function formatBytesCompact(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  const val = bytes / Math.pow(k, i);
-  return `${val >= 10 || i === 0 ? Math.round(val) : val.toFixed(1)} ${sizes[i]}`;
-}
-
-export function hasActiveTransferStats(stats?: AccountTransferStats, now: number = Date.now()): boolean {
+export function hasActiveTransferStats(stats?: AccountTransferStats): boolean {
   if (!stats) return false;
   const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
   const uploaded = stats.uploadedBytes24h ?? 0;
   const remaining = stats.remainingUploadBytes24h ?? DAILY_LIMIT;
   const isRateLimited = stats.isUploadRateLimited || remaining <= 0;
-  const oldestTs = stats.oldestTransferTimestamp ?? null;
-  const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
-  const nextResetMs = oldestTs ? Math.max(0, oldestTs + ROLLING_WINDOW_MS - now) : 0;
-  return uploaded > 0 && (isRateLimited || nextResetMs > 0);
+  return uploaded > 0 || isRateLimited;
 }
 
 interface AccountTransferGaugeProps {
   stats?: AccountTransferStats;
   onTimerExpired?: () => void;
-  action?: React.ReactNode;
 }
 
-export function AccountTransferGauge({ stats, onTimerExpired, action }: AccountTransferGaugeProps) {
-  const [now, setNow] = useState<number>(Date.now());
-  const timerExpiredRef = useRef<boolean>(false);
-
-  // 750 GB in bytes
+export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferGaugeProps) {
   const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
   const uploaded = stats?.uploadedBytes24h ?? 0;
   const remaining = stats?.remainingUploadBytes24h ?? DAILY_LIMIT;
   const isRateLimited = stats?.isUploadRateLimited || remaining <= 0;
   const oldestTs = stats?.oldestTransferTimestamp ?? null;
-  const latestTs = stats?.latestTransferTimestamp ?? null;
-  const nextExpiringBytes = stats?.nextExpiringBytes ?? 0;
-  const activeCount = stats?.activeTransferCount24h ?? 0;
 
   const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
 
   useEffect(() => {
-    if (!oldestTs && uploaded === 0) return;
+    if (!oldestTs || uploaded === 0) return;
 
-    timerExpiredRef.current = false;
-    const interval = setInterval(() => {
-      const currentNow = Date.now();
-      setNow(currentNow);
+    const delayMs = Math.max(1000, oldestTs + ROLLING_WINDOW_MS - Date.now());
+    const timer = setTimeout(() => {
+      if (onTimerExpired) onTimerExpired();
+    }, delayMs);
 
-      if (oldestTs && currentNow >= oldestTs + ROLLING_WINDOW_MS && !timerExpiredRef.current) {
-        timerExpiredRef.current = true;
-        if (onTimerExpired) onTimerExpired();
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
+    return () => clearTimeout(timer);
   }, [oldestTs, uploaded, onTimerExpired]);
 
-  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_LIMIT) * 100)));
-  const nextResetMs = oldestTs ? Math.max(0, oldestTs + ROLLING_WINDOW_MS - now) : 0;
-  const fullResetMs = latestTs ? Math.max(0, latestTs + ROLLING_WINDOW_MS - now) : 0;
-
-  // The 24h transfer section only appears if an account is actively counting down
-  if (!hasActiveTransferStats(stats, now)) {
+  if (!hasActiveTransferStats(stats)) {
     return null;
   }
 
+  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_LIMIT) * 100)));
   const uploadedGb = (uploaded / (1024 * 1024 * 1024)).toFixed(1);
-  const remainingGb = (remaining / (1024 * 1024 * 1024)).toFixed(1);
 
   return (
     <div {...stylex.props(styles.transferSection)}>
@@ -779,23 +793,6 @@ export function AccountTransferGauge({ stats, onTimerExpired, action }: AccountT
           )}
           style={{ width: `${isRateLimited ? 100 : pct}%` }}
         />
-      </div>
-
-      <div {...stylex.props(styles.transferTimerRow)}>
-        {isRateLimited ? (
-          <span {...stylex.props(styles.transferTimerText, styles.transferTimerRateLimited)}>
-            Limit reached (750 GB) • Quota frees in {formatCountdown(nextResetMs)}
-          </span>
-        ) : uploaded > 0 && nextResetMs > 0 ? (
-          <span {...stylex.props(styles.transferTimerText, styles.transferTimerActive)}>
-            +{formatBytesCompact(nextExpiringBytes)} releases in {formatCountdown(nextResetMs)}
-          </span>
-        ) : (
-          <span {...stylex.props(styles.transferTimerText)}>
-            750 GB available • Window idle
-          </span>
-        )}
-        {action}
       </div>
     </div>
   );
@@ -887,6 +884,9 @@ export function Sidebar({
   onOpenExternalChanges,
   onImportOAuth,
   onRefreshStorage,
+  onDisableAccount,
+  onEnableAccount,
+  onRemoveAccount,
   isImporting = false,
   isSyncing,
   isMobileOpen = false,
@@ -1055,23 +1055,12 @@ export function Sidebar({
             const nonTsubasaGb = formatGb(nonTsubasaBytes);
             const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024; // > 10 MB
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
-            const hasTransferGauge = hasActiveTransferStats(acc.transferStats);
+            const hasActionableChanges = Boolean(isBreached || acc.hasPendingChanges);
             const usedPct = isBreached
               ? 100
               : accountCapacityBytes > 0
                 ? Math.min(100, Math.max(0, Math.round((tsubasaUsedBytes / accountCapacityBytes) * 100)))
                 : 0;
-
-            const changesButton = onOpenExternalChanges ? (
-              <button
-                type="button"
-                {...stylex.props(styles.miniSyncBtn)}
-                onClick={() => onOpenExternalChanges(acc.id)}
-                title="Check external modifications"
-              >
-                Changes
-              </button>
-            ) : null;
 
             return (
               <div key={acc.id} {...stylex.props(styles.accountCard)}>
@@ -1091,39 +1080,60 @@ export function Sidebar({
                     </div>
                   </div>
 
-                  {acc.authorized && (
-                    <span {...stylex.props(styles.authPill)}>Active</span>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {acc.isDisabled ? (
+                      <span {...stylex.props(styles.disabledPill)}>Disabled</span>
+                    ) : acc.authorized ? (
+                      <span {...stylex.props(styles.authPill)}>Active</span>
+                    ) : null}
+                  </div>
                 </div>
 
                 {!acc.authorized && (
-                  <div {...stylex.props(styles.authLinkContainer)}>
-                    <div {...stylex.props(styles.authLinkLabelRow)}>
-                      <span {...stylex.props(styles.authLinkLabel)}>Authorize link</span>
-                      <span {...stylex.props(styles.authLinkHelp)}>Click to copy</span>
-                    </div>
-                    <button
-                      type="button"
-                      {...stylex.props(
-                        styles.authLinkBox,
-                        copiedId === acc.id && styles.authLinkBoxCopied
-                      )}
-                      onClick={() => handleCopyAuthUrl(acc.id)}
-                      aria-label="Copy authorize link"
-                    >
-                      <span {...stylex.props(styles.authLinkText)}>
-                        {authUrls[acc.id] || 'Generating authorize link...'}
-                      </span>
-                      <span
+                  <>
+                    <div {...stylex.props(styles.authLinkContainer)}>
+                      <div {...stylex.props(styles.authLinkLabelRow)}>
+                        <span {...stylex.props(styles.authLinkLabel)}>Authorize link</span>
+                        <span {...stylex.props(styles.authLinkHelp)}>Click to copy</span>
+                      </div>
+                      <button
+                        type="button"
                         {...stylex.props(
-                          styles.authLinkCopyTag,
-                          copiedId === acc.id && styles.authLinkCopyTagSuccess
+                          styles.authLinkBox,
+                          copiedId === acc.id && styles.authLinkBoxCopied
                         )}
+                        onClick={() => handleCopyAuthUrl(acc.id)}
+                        aria-label="Copy authorize link"
                       >
-                        {copiedId === acc.id ? 'Copied' : 'Copy'}
-                      </span>
-                    </button>
-                  </div>
+                        <span {...stylex.props(styles.authLinkText)}>
+                          {authUrls[acc.id] || 'Generating authorize link...'}
+                        </span>
+                        <span
+                          {...stylex.props(
+                            styles.authLinkCopyTag,
+                            copiedId === acc.id && styles.authLinkCopyTagSuccess
+                          )}
+                        >
+                          {copiedId === acc.id ? 'Copied' : 'Copy'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {onRemoveAccount && (
+                      <div {...stylex.props(styles.accountActionsRow)}>
+                        <div {...stylex.props(styles.accountActionsRight)}>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniDangerBtn)}
+                            onClick={() => onRemoveAccount(acc)}
+                            title="Remove credential file"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {acc.authorized && (
@@ -1157,7 +1167,6 @@ export function Sidebar({
                           <span {...stylex.props(styles.externalDriveText)}>
                             ({nonTsubasaGb} GB already used in Drive)
                           </span>
-                          {!hasTransferGauge && changesButton}
                         </div>
                       )}
                     </div>
@@ -1165,14 +1174,54 @@ export function Sidebar({
                     <AccountTransferGauge
                       stats={acc.transferStats}
                       onTimerExpired={onRefreshStorage}
-                      action={changesButton}
                     />
 
-                    {!hasTransferGauge && !hasNonTsubasaData && changesButton && (
-                      <div {...stylex.props(styles.accountActionsRow)}>
-                        {changesButton}
+                    <div {...stylex.props(styles.accountActionsRow)}>
+                      <div {...stylex.props(styles.accountActionsLeft)}>
+                        {hasActionableChanges && onOpenExternalChanges && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniChangesBtnRed)}
+                            onClick={() => onOpenExternalChanges(acc.id)}
+                            title="Resolve external modifications or over-ceiling usage"
+                          >
+                            Changes
+                          </button>
+                        )}
                       </div>
-                    )}
+                      <div {...stylex.props(styles.accountActionsRight)}>
+                        {acc.isDisabled && onEnableAccount && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniEnableBtn)}
+                            onClick={() => onEnableAccount(acc.id)}
+                            title="Re-enable drive in storage pool"
+                          >
+                            Enable
+                          </button>
+                        )}
+                        {acc.authorized && !acc.isDisabled && onDisableAccount && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniSyncBtn)}
+                            onClick={() => onDisableAccount(acc)}
+                            title="Disable drive and exclude from storage pool"
+                          >
+                            Disable
+                          </button>
+                        )}
+                        {onRemoveAccount && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniDangerBtn)}
+                            onClick={() => onRemoveAccount(acc)}
+                            title="Permanently remove drive and credentials"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
                     {isBreached && (
                       <div {...stylex.props(styles.breachNotice)}>

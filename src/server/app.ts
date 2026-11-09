@@ -24,6 +24,9 @@ import {
   removeMissingFile,
   rebalanceFile,
   executeAutoRebalance,
+  disableDriveAccount,
+  enableDriveAccount,
+  removeDriveAccount,
 } from './drive/index.js';
 import {
   getPooledStorageOverview,
@@ -116,16 +119,53 @@ const app = new Hono()
       }
     }
   )
-  .get('/api/accounts/pool', (c) => {
+  .get('/api/accounts/pool', async (c) => {
     authPool.scan();
     const records = authPool.getAll();
+    const dbAccounts = await db.select().from(accounts);
+    const dbMap = new Map(dbAccounts.map((a) => [a.id, a]));
+
     const list = records.map((r) => ({
       accountId: r.config.accountId,
       clientId: r.config.clientId,
       authorized: r.authorized,
       sourceFile: r.config.sourceFile,
+      isDisabled: dbMap.get(r.config.accountId)?.isDisabled ?? false,
     }));
     return c.json({ accounts: list });
+  })
+  .post('/api/accounts/:id/disable', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const result = await disableDriveAccount(accountId);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof InsufficientStorageError) {
+        return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post('/api/accounts/:id/enable', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const result = await enableDriveAccount(accountId);
+      return c.json(result);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .delete('/api/accounts/:id', async (c) => {
+    const accountId = c.req.param('id');
+    try {
+      const result = await removeDriveAccount(accountId);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof InsufficientStorageError) {
+        return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
   })
   .post(
     '/api/accounts/oauth/import',
@@ -329,6 +369,7 @@ const app = new Hono()
         sizeBytes: body.sizeBytes,
         mimeType: typeof body.mimeType === 'string' ? body.mimeType : undefined,
         hash: typeof body.hash === 'string' ? body.hash : undefined,
+        targetAccountId: typeof body.targetAccountId === 'string' ? body.targetAccountId : undefined,
       };
     }),
     async (c) => {
@@ -352,6 +393,7 @@ const app = new Hono()
     const sizeHeader = c.req.query('sizeBytes') || c.req.header('x-file-size') || c.req.header('content-length');
     const mimeType = c.req.query('mimeType') || c.req.header('content-type') || 'application/octet-stream';
     const hash = c.req.query('hash') || c.req.header('x-file-hash');
+    const targetAccountId = c.req.query('accountId') || c.req.header('x-account-id');
 
     if (!virtualPath || !sizeHeader) {
       return c.json({ error: 'virtualPath and sizeBytes (or Content-Length) required' }, 400);
@@ -368,7 +410,13 @@ const app = new Hono()
 
     try {
       const record = await executeStreamingUpload(
-        { virtualPath, sizeBytes, mimeType, hash: hash || undefined },
+        {
+          virtualPath,
+          sizeBytes,
+          mimeType,
+          hash: hash || undefined,
+          targetAccountId: targetAccountId || undefined,
+        },
         c.req.raw.body
       );
       return c.json(record);

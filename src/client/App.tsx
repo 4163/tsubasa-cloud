@@ -11,6 +11,7 @@ import { UploadDrawer } from './components/UploadDrawer.js';
 import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
 import { NewFolderModal } from './components/NewFolderModal.js';
 import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
+import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js';
 
 interface HealthData {
   status: string;
@@ -45,6 +46,7 @@ interface AccountSummary {
   headroomBytes: number;
   tsubasaUsedBytes?: number;
   syncState: string;
+  isDisabled?: boolean;
   transferStats?: AccountTransferStats;
 }
 
@@ -72,6 +74,7 @@ interface DiscoveredAccount {
   clientId: string;
   authorized: boolean;
   sourceFile: string;
+  isDisabled?: boolean;
 }
 
 const styles = stylex.create({
@@ -232,6 +235,20 @@ export function App() {
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [isMobileOpen, setIsMobileOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [transferringFileId, setTransferringFileId] = useState<string | null>(null);
+  const [driveActionModal, setDriveActionModal] = useState<{
+    isOpen: boolean;
+    action: 'disable' | 'remove';
+    account: AccountItem | null;
+    isLoading: boolean;
+    errorMessage: string | null;
+  }>({
+    isOpen: false,
+    action: 'disable',
+    account: null,
+    isLoading: false,
+    errorMessage: null,
+  });
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
@@ -277,12 +294,38 @@ export function App() {
   const [trashedFiles, setTrashedFiles] = useState<ClientFileRecord[]>([]);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState<boolean>(false);
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
+  const [pendingDiscrepancies, setPendingDiscrepancies] = useState<Record<string, boolean>>({});
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 4000);
+  }, []);
+
+  const checkAccountDiscrepancies = useCallback(async (accountList: DiscoveredAccount[]) => {
+    const authAccounts = accountList.filter((a) => a.authorized);
+    await Promise.all(
+      authAccounts.map(async (acc) => {
+        try {
+          const res = await fetch(`/api/sync/external-changes/${encodeURIComponent(acc.accountId)}`);
+          if (res.ok) {
+            const report = await res.json();
+            const count =
+              (report?.overCeiling?.length ?? 0) +
+              (report?.unindexed?.length ?? 0) +
+              (report?.modified?.length ?? 0) +
+              (report?.missingRemote?.length ?? 0);
+            setPendingDiscrepancies((prev) => ({
+              ...prev,
+              [acc.accountId]: count > 0,
+            }));
+          }
+        } catch {
+          // Silently skip if network or scan is unavailable
+        }
+      })
+    );
   }, []);
 
   const loadClusterData = useCallback(async () => {
@@ -301,11 +344,12 @@ export function App() {
       if (poolRes.ok) {
         const poolData = await poolRes.json();
         setDiscovered(poolData.accounts);
+        checkAccountDiscrepancies(poolData.accounts);
       }
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : 'Cluster offline');
     }
-  }, []);
+  }, [checkAccountDiscrepancies]);
 
   const loadFiles = useCallback(async (path: string) => {
     try {
@@ -658,21 +702,136 @@ export function App() {
   // Aggregate account list merging discovered with storage overview
   const accountItems: AccountItem[] = discovered.map((d) => {
     const summary = storage?.accounts.find((a) => a.id === d.accountId);
+    const quotaUsed = summary?.quotaUsedBytes ?? 0;
+    const usableLimit = summary?.usableLimitBytes ?? (d.authorized ? 15356127360 : 0);
+    const isBreached = quotaUsed > usableLimit;
+    const hasDiscrepancy = Boolean(pendingDiscrepancies[d.accountId]);
+    const hasPendingChanges = isBreached || hasDiscrepancy;
+
     return {
       id: d.accountId,
       email: summary?.email || d.accountId,
       displayName: summary?.displayName || d.accountId,
       avatarUrl: summary?.avatarUrl,
       quotaLimitBytes: summary?.quotaLimitBytes ?? (d.authorized ? 16106127360 : 0),
-      quotaUsedBytes: summary?.quotaUsedBytes ?? 0,
-      usableLimitBytes: summary?.usableLimitBytes ?? (d.authorized ? 15356127360 : 0),
+      quotaUsedBytes: quotaUsed,
+      usableLimitBytes: usableLimit,
       headroomBytes: summary?.headroomBytes ?? (d.authorized ? 15356127360 : 0),
       tsubasaUsedBytes: summary?.tsubasaUsedBytes ?? 0,
       syncState: summary?.syncState || 'idle',
+      isDisabled: summary?.isDisabled ?? d.isDisabled ?? false,
       authorized: d.authorized,
       transferStats: summary?.transferStats,
+      hasPendingChanges,
     };
   });
+
+  async function handleTransferFile(fileId: string, targetAccountId: string) {
+    const file = files.find((f) => f.id === fileId);
+    const targetAcc = accountItems.find((a) => a.id === targetAccountId);
+    const targetName = targetAcc?.displayName || targetAccountId;
+    setTransferringFileId(fileId);
+    try {
+      const res = await fetch('/api/sync/rebalance/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileId, targetAccountId }),
+      });
+      if (res.ok) {
+        showToast(`Transferred "${file?.name || fileId}" to ${targetName}.`);
+        await loadFiles(currentPath);
+        await loadClusterData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Failed to transfer file');
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTransferringFileId(null);
+    }
+  }
+
+  async function handleDisableAccount(accountId: string) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/disable`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        showToast('Drive disabled. Excluded from storage pool.');
+        await loadClusterData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Failed to disable drive');
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleEnableAccount(accountId: string) {
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/enable`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        showToast('Drive re-enabled in storage pool.');
+        await loadClusterData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorNotice(err.error || 'Failed to enable drive');
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function handleOpenDriveAction(account: AccountItem, action: 'disable' | 'remove') {
+    setDriveActionModal({
+      isOpen: true,
+      action,
+      account,
+      isLoading: false,
+      errorMessage: null,
+    });
+  }
+
+  async function handleExecuteDriveAction() {
+    const { account } = driveActionModal;
+    if (!account) return;
+
+    setDriveActionModal((prev) => ({ ...prev, isLoading: true, errorMessage: null }));
+
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(account.id)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setDriveActionModal((prev) => ({ ...prev, isOpen: false, isLoading: false }));
+        const filesMoved = data.filesMoved ?? 0;
+        showToast(`Drive removed. Evacuated ${filesMoved} ${filesMoved === 1 ? 'file' : 'files'}.`);
+        await loadClusterData();
+        await loadFiles(currentPath);
+      } else {
+        setDriveActionModal((prev) => ({
+          ...prev,
+          isLoading: false,
+          errorMessage: data.error || 'Failed to remove drive',
+        }));
+      }
+    } catch (err) {
+      setDriveActionModal((prev) => ({
+        ...prev,
+        isLoading: false,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }
+
+  const driveFiles = files.filter((f) => f.accountId === driveActionModal.account?.id);
+  const driveFilesCount = driveFiles.length;
+  const driveTotalBytes = driveFiles.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
 
   const breachedAccounts = accountItems.filter((a) => a.quotaUsedBytes > a.usableLimitBytes);
 
@@ -705,6 +864,9 @@ export function App() {
           setIsExternalChangesOpen(true);
         }}
         onImportOAuth={handleImportOAuth}
+        onDisableAccount={(acc) => handleDisableAccount(acc.id)}
+        onEnableAccount={handleEnableAccount}
+        onRemoveAccount={(acc) => handleOpenDriveAction(acc, 'remove')}
         isImporting={isImporting}
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
@@ -784,6 +946,9 @@ export function App() {
               setIsUploadDrawerOpen(true);
             }
           }}
+          accounts={accountItems}
+          onTransferFile={handleTransferFile}
+          transferringFileId={transferringFileId}
         />
       </div>
 
@@ -792,6 +957,7 @@ export function App() {
         onClose={() => setIsUploadDrawerOpen(false)}
         stagedFiles={stagedFiles}
         currentPath={currentPath}
+        accounts={accountItems}
         onUploadComplete={async () => {
           await loadClusterData();
           await loadFiles(currentPath);
@@ -802,8 +968,13 @@ export function App() {
 
       <ExternalChangesDrawer
         isOpen={isExternalChangesOpen}
-        onClose={() => setIsExternalChangesOpen(false)}
-        accounts={accountItems.map((a) => ({ id: a.id, displayName: a.displayName, email: a.email }))}
+        onClose={() => {
+          setIsExternalChangesOpen(false);
+          setExternalChangesAccountId(undefined);
+        }}
+        accounts={accountItems
+          .filter((a) => a.hasPendingChanges || (externalChangesAccountId && a.id === externalChangesAccountId && pendingDiscrepancies[a.id] !== false))
+          .map((a) => ({ id: a.id, displayName: a.displayName, email: a.email }))}
         initialAccountId={externalChangesAccountId}
         onResolved={async () => {
           await loadClusterData();
@@ -825,6 +996,22 @@ export function App() {
         onConfirm={handleEmptyTrashExecute}
         itemCount={trashedFiles.length}
         totalBytes={trashedTotalBytes}
+      />
+
+      <ConfirmDriveActionModal
+        isOpen={driveActionModal.isOpen}
+        onClose={() => {
+          if (!driveActionModal.isLoading) {
+            setDriveActionModal((prev) => ({ ...prev, isOpen: false }));
+          }
+        }}
+        onConfirm={handleExecuteDriveAction}
+        action={driveActionModal.action}
+        account={driveActionModal.account}
+        filesCount={driveFilesCount}
+        totalBytes={driveTotalBytes}
+        isLoading={driveActionModal.isLoading}
+        errorMessage={driveActionModal.errorMessage}
       />
 
       {toastMessage && (
