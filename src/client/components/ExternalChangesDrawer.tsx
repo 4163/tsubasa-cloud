@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconRefreshCw, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons';
+import { IconClose, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons';
 
 export interface ExternalDiscrepancyItem {
   driveFileId: string;
@@ -30,7 +30,14 @@ export interface DiscrepancyReport {
 interface ExternalChangesDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  accounts: Array<{ id: string; displayName: string; email: string }>;
+  accounts: Array<{
+    id: string;
+    displayName: string;
+    email: string;
+    quotaUsedBytes?: number;
+    usableLimitBytes?: number;
+    tsubasaUsedBytes?: number;
+  }>;
   initialAccountId?: string;
   onResolved: () => Promise<void>;
 }
@@ -173,33 +180,6 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  scanBtn: {
-    height: '32px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.surface,
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '500',
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.border,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
   },
   contentScroll: {
     flex: 1,
@@ -358,6 +338,15 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
   },
+  scanningNotice: {
+    textAlign: 'center',
+    padding: spacing.space10,
+    color: colors.dimText,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: spacing.space2,
+  },
 });
 
 function formatBytes(bytes: number): string {
@@ -375,45 +364,64 @@ export function ExternalChangesDrawer({
   initialAccountId,
   onResolved,
 }: ExternalChangesDrawerProps) {
-  const [selectedAccount, setSelectedAccount] = useState<string>(
-    initialAccountId || accounts[0]?.id || ''
-  );
+  const [selectedAccount, setSelectedAccount] = useState<string>(() => {
+    if (initialAccountId && accounts.some((a) => a.id === initialAccountId)) {
+      return initialAccountId;
+    }
+    return accounts[0]?.id || '';
+  });
   const [report, setReport] = useState<DiscrepancyReport | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
 
+  const activeScanRef = useRef<string | null>(null);
+
+  const currentAccount = accounts.find((a) => a.id === selectedAccount);
+  const isBreached = currentAccount
+    ? (currentAccount.quotaUsedBytes ?? 0) > (currentAccount.usableLimitBytes ?? 0)
+    : false;
+  const hasPoolFiles = (currentAccount?.tsubasaUsedBytes ?? 0) > 0;
+  const showRebalance = isBreached && hasPoolFiles;
+
   useEffect(() => {
     if (initialAccountId && accounts.some((a) => a.id === initialAccountId)) {
       setSelectedAccount(initialAccountId);
-    } else if (accounts.length > 0) {
-      if (!accounts.some((a) => a.id === selectedAccount)) {
-        setSelectedAccount(accounts[0].id);
-      }
-    } else {
-      setSelectedAccount('');
-      setReport(null);
+    } else if (accounts.length > 0 && (!selectedAccount || !accounts.some((a) => a.id === selectedAccount))) {
+      setSelectedAccount(accounts[0].id);
     }
-  }, [initialAccountId, accounts, selectedAccount]);
+  }, [initialAccountId, accounts]);
 
   const scanAccount = useCallback(async (accId: string) => {
     if (!accId) return;
+    activeScanRef.current = accId;
     setIsScanning(true);
+    setReport(null);
     setStatusNotice(null);
 
     try {
       const res = await fetch(`/api/sync/external-changes/${encodeURIComponent(accId)}`);
+      if (activeScanRef.current !== accId) return;
+
       if (res.ok) {
         const data: DiscrepancyReport = await res.json();
-        setReport(data);
+        if (activeScanRef.current === accId) {
+          setReport(data);
+        }
       } else {
         const errData = await res.json().catch(() => ({}));
-        setStatusNotice(errData.error || `Scan failed (${res.status})`);
+        if (activeScanRef.current === accId) {
+          setStatusNotice(errData.error || `Scan failed (${res.status})`);
+        }
       }
     } catch (err) {
-      setStatusNotice(err instanceof Error ? err.message : String(err));
+      if (activeScanRef.current === accId) {
+        setStatusNotice(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setIsScanning(false);
+      if (activeScanRef.current === accId) {
+        setIsScanning(false);
+      }
     }
   }, []);
 
@@ -421,6 +429,9 @@ export function ExternalChangesDrawer({
     if (isOpen && selectedAccount) {
       scanAccount(selectedAccount);
     }
+    return () => {
+      activeScanRef.current = null;
+    };
   }, [isOpen, selectedAccount, scanAccount]);
 
   const handleAccept = async (item: ExternalDiscrepancyItem) => {
@@ -575,16 +586,6 @@ export function ExternalChangesDrawer({
               <IconChevronDown size={11} strokeWidth={2.5} />
             </div>
           </div>
-
-          <button
-            type="button"
-            {...stylex.props(styles.scanBtn)}
-            onClick={() => scanAccount(selectedAccount)}
-            disabled={!selectedAccount || isScanning}
-          >
-            <IconRefreshCw size={14} />
-            {isScanning ? 'Scanning...' : 'Scan'}
-          </button>
         </div>
 
         <div {...stylex.props(styles.contentScroll)}>
@@ -748,24 +749,35 @@ export function ExternalChangesDrawer({
           )}
 
           {/* Rebalance section */}
-          <div {...stylex.props(styles.rebalanceBanner)}>
-            <div style={{ fontSize: '13px', fontWeight: '600', color: colors.primaryText }}>
-              Auto-rebalance account
+          {showRebalance && (
+            <div {...stylex.props(styles.rebalanceBanner)}>
+              <div style={{ fontSize: '13px', fontWeight: '600', color: colors.primaryText }}>
+                Auto-rebalance files
+              </div>
+              <p {...stylex.props(styles.cardDesc)}>
+                This account breached its 750 MB safety buffer. Auto-rebalance moves Tsubasa files to an emptier account in your pool to restore safe headroom.
+              </p>
+              <div>
+                <button
+                  type="button"
+                  {...stylex.props(styles.btnSecondary)}
+                  onClick={handleAutoRebalance}
+                  disabled={activeActionId === 'rebalance'}
+                >
+                  {activeActionId === 'rebalance' ? 'Rebalancing...' : 'Auto-rebalance'}
+                </button>
+              </div>
             </div>
-            <p {...stylex.props(styles.cardDesc)}>
-              If external files added directly in Google Drive push this account beyond safe headroom limits, auto-rebalance moves Tsubasa files to an emptier account using Google server-side copies.
-            </p>
-            <div>
-              <button
-                type="button"
-                {...stylex.props(styles.btnSecondary)}
-                onClick={handleAutoRebalance}
-                disabled={activeActionId === 'rebalance'}
-              >
-                {activeActionId === 'rebalance' ? 'Rebalancing...' : 'Execute auto-rebalance'}
-              </button>
+          )}
+
+          {/* Scanning indicator */}
+          {isScanning && (
+            <div {...stylex.props(styles.scanningNotice)}>
+              <div style={{ fontSize: '13px', color: colors.dimText }}>
+                Scanning Drive for external changes...
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Empty state when no accounts have changes */}
           {!isScanning && accounts.length === 0 && (
@@ -781,7 +793,7 @@ export function ExternalChangesDrawer({
           )}
 
           {/* Empty state for the selected account */}
-          {!isScanning && accounts.length > 0 && totalDiscrepancies === 0 && (
+          {!isScanning && report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
             <div {...stylex.props(styles.emptyNotice)}>
               <IconCheck size={28} color={colors.success} />
               <div style={{ fontSize: '14px', fontWeight: '600', color: colors.primaryText }}>

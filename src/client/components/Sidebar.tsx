@@ -43,6 +43,8 @@ export interface AccountItem {
   authorized: boolean;
   transferStats?: AccountTransferStats;
   hasPendingChanges?: boolean;
+  hasDiscrepancy?: boolean;
+  mtimeMs?: number;
 }
 
 interface SidebarProps {
@@ -567,6 +569,11 @@ const styles = stylex.create({
     color: colors.danger,
     fontWeight: '600',
   },
+  fullPill: {
+    fontSize: typography.fontSizeBadge,
+    color: colors.danger,
+    fontWeight: '600',
+  },
   authPill: {
     fontSize: typography.fontSizeBadge,
     color: colors.success,
@@ -1072,7 +1079,9 @@ export function Sidebar({
             const nonTsubasaGb = formatGb(nonTsubasaBytes);
             const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024; // > 10 MB
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
-            const hasActionableChanges = Boolean(isBreached || acc.hasPendingChanges);
+            const hasPoolFiles = tsubasaUsedBytes > 0;
+            const canRebalance = isBreached && hasPoolFiles;
+            const hasActionableChanges = Boolean(canRebalance || acc.hasPendingChanges);
             const usedPct = isBreached
               ? 100
               : accountCapacityBytes > 0
@@ -1100,6 +1109,8 @@ export function Sidebar({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     {acc.isDisabled ? (
                       <span {...stylex.props(styles.disabledPill)}>Disabled</span>
+                    ) : isBreached ? (
+                      <span {...stylex.props(styles.fullPill)}>Full</span>
                     ) : acc.authorized ? (
                       <span {...stylex.props(styles.authPill)}>Active</span>
                     ) : null}
@@ -1240,9 +1251,9 @@ export function Sidebar({
                       </div>
                     </div>
 
-                    {isBreached && (
+                    {isBreached && hasPoolFiles && (
                       <div {...stylex.props(styles.breachNotice)}>
-                        750 MB buffer breached ({driveUsedGb} GB). Writes locked.
+                        750 MB buffer breached ({driveUsedGb} GB).
                       </div>
                     )}
                   </>

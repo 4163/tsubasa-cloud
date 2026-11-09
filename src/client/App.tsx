@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
 import { colors, darkColors, layout, radius, typography } from './tokens.stylex.js';
@@ -75,6 +75,7 @@ interface DiscoveredAccount {
   authorized: boolean;
   sourceFile: string;
   isDisabled?: boolean;
+  mtimeMs?: number;
 }
 
 const styles = stylex.create({
@@ -94,37 +95,6 @@ const styles = stylex.create({
     minWidth: 0,
     overflow: 'hidden',
     position: 'relative',
-  },
-  alertBanner: {
-    backgroundColor: colors.dangerSurface,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.danger,
-    color: colors.danger,
-    paddingTop: '6px',
-    paddingBottom: '6px',
-    paddingLeft: '16px',
-    paddingRight: '16px',
-    fontSize: '12px',
-    fontWeight: '600',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexShrink: 0,
-    gap: '12px',
-  },
-  bannerActionBtn: {
-    height: '24px',
-    paddingLeft: '10px',
-    paddingRight: '10px',
-    borderRadius: '4px',
-    backgroundColor: colors.danger,
-    color: '#ffffff',
-    borderWidth: '0px',
-    fontSize: '11px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    flexShrink: 0,
   },
   statusToast: {
     position: 'fixed',
@@ -700,31 +670,69 @@ export function App() {
   }
 
   // Aggregate account list merging discovered with storage overview
-  const accountItems: AccountItem[] = discovered.map((d) => {
-    const summary = storage?.accounts.find((a) => a.id === d.accountId);
-    const quotaUsed = summary?.quotaUsedBytes ?? 0;
-    const usableLimit = summary?.usableLimitBytes ?? (d.authorized ? 15356127360 : 0);
-    const isBreached = quotaUsed > usableLimit;
-    const hasDiscrepancy = Boolean(pendingDiscrepancies[d.accountId]);
-    const hasPendingChanges = isBreached || hasDiscrepancy;
+  const accountItems: AccountItem[] = useMemo(() => {
+    const items = discovered.map((d) => {
+      const summary = storage?.accounts.find((a) => a.id === d.accountId);
+      const quotaUsed = summary?.quotaUsedBytes ?? 0;
+      const usableLimit = summary?.usableLimitBytes ?? (d.authorized ? 15356127360 : 0);
+      const isBreached = quotaUsed > usableLimit;
+      const tsubasaUsed = summary?.tsubasaUsedBytes ?? 0;
+      const canRebalance = isBreached && tsubasaUsed > 0;
+      const hasDiscrepancy = Boolean(pendingDiscrepancies[d.accountId]);
+      const hasPendingChanges = canRebalance || hasDiscrepancy;
 
-    return {
-      id: d.accountId,
-      email: summary?.email || d.accountId,
-      displayName: summary?.displayName || d.accountId,
-      avatarUrl: summary?.avatarUrl,
-      quotaLimitBytes: summary?.quotaLimitBytes ?? (d.authorized ? 16106127360 : 0),
-      quotaUsedBytes: quotaUsed,
-      usableLimitBytes: usableLimit,
-      headroomBytes: summary?.headroomBytes ?? (d.authorized ? 15356127360 : 0),
-      tsubasaUsedBytes: summary?.tsubasaUsedBytes ?? 0,
-      syncState: summary?.syncState || 'idle',
-      isDisabled: summary?.isDisabled ?? d.isDisabled ?? false,
-      authorized: d.authorized,
-      transferStats: summary?.transferStats,
-      hasPendingChanges,
-    };
-  });
+      return {
+        id: d.accountId,
+        email: summary?.email || d.accountId,
+        displayName: summary?.displayName || d.accountId,
+        avatarUrl: summary?.avatarUrl,
+        quotaLimitBytes: summary?.quotaLimitBytes ?? (d.authorized ? 16106127360 : 0),
+        quotaUsedBytes: quotaUsed,
+        usableLimitBytes: usableLimit,
+        headroomBytes: summary?.headroomBytes ?? (d.authorized ? 15356127360 : 0),
+        tsubasaUsedBytes: summary?.tsubasaUsedBytes ?? 0,
+        syncState: summary?.syncState || 'idle',
+        isDisabled: summary?.isDisabled ?? d.isDisabled ?? false,
+        authorized: d.authorized,
+        transferStats: summary?.transferStats,
+        hasPendingChanges,
+        hasDiscrepancy,
+        mtimeMs: d.mtimeMs,
+      };
+    });
+
+    return items.sort((a, b) => {
+      // 1. OAuth accounts that are not authorized yet
+      if (!a.authorized && b.authorized) return -1;
+      if (a.authorized && !b.authorized) return 1;
+
+      // Both are unauthorized (imported / pending auth):
+      // Put the newest imported account at the very top
+      if (!a.authorized && !b.authorized) {
+        const mtimeA = a.mtimeMs ?? 0;
+        const mtimeB = b.mtimeMs ?? 0;
+        if (mtimeA !== mtimeB) {
+          return mtimeB - mtimeA;
+        }
+        return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' });
+      }
+
+      // 2. Accounts that have changes and should be pinned to the top:
+      // Active accounts with any changes (external files or auto-rebalance),
+      // OR disabled accounts that have detected external modifications.
+      // If a disabled account has no external changes apart from "Auto-rebalance files", it is not pinned.
+      const aIsPinned = Boolean(a.hasPendingChanges) && (!a.isDisabled || Boolean(a.hasDiscrepancy));
+      const bIsPinned = Boolean(b.hasPendingChanges) && (!b.isDisabled || Boolean(b.hasDiscrepancy));
+      if (aIsPinned && !bIsPinned) return -1;
+      if (!aIsPinned && bIsPinned) return 1;
+
+      // 3. Normal accounts (and among accounts with changes):
+      // Alphabetical strictly based on Gmail address (email), fallback to id
+      const emailA = (a.email || a.id).toLowerCase();
+      const emailB = (b.email || b.id).toLowerCase();
+      return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [discovered, storage, pendingDiscrepancies]);
 
   async function handleTransferFile(fileId: string, targetAccountId: string) {
     const file = files.find((f) => f.id === fileId);
@@ -833,7 +841,22 @@ export function App() {
   const driveFilesCount = driveFiles.length;
   const driveTotalBytes = driveFiles.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
 
-  const breachedAccounts = accountItems.filter((a) => a.quotaUsedBytes > a.usableLimitBytes);
+  const externalChangesAccounts = useMemo(() => {
+    return accountItems
+      .filter(
+        (a) =>
+          a.hasPendingChanges ||
+          (externalChangesAccountId && a.id === externalChangesAccountId)
+      )
+      .map((a) => ({
+        id: a.id,
+        displayName: a.displayName,
+        email: a.email,
+        quotaUsedBytes: a.quotaUsedBytes,
+        usableLimitBytes: a.usableLimitBytes,
+        tsubasaUsedBytes: a.tsubasaUsedBytes,
+      }));
+  }, [accountItems, externalChangesAccountId]);
 
   const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => selectedIds.has(f.id));
   const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
@@ -883,24 +906,6 @@ export function App() {
           onThemeChange={handleThemeChange}
           onToggleMobileMenu={() => setIsMobileOpen((o) => !o)}
         />
-
-        {breachedAccounts.length > 0 && (
-          <div {...stylex.props(styles.alertBanner)}>
-            <span>
-              Warning: {breachedAccounts.length} account has breached the 750 MB reserve ceiling (&gt;14.25 GB). Incoming Gmail may fail.
-            </span>
-            <button
-              type="button"
-              {...stylex.props(styles.bannerActionBtn)}
-              onClick={() => {
-                setExternalChangesAccountId(breachedAccounts[0].id);
-                setIsExternalChangesOpen(true);
-              }}
-            >
-              Resolve external modifications
-            </button>
-          </div>
-        )}
 
         <ActionPortal
           currentPath={currentPath}
@@ -966,22 +971,22 @@ export function App() {
         onClearFiles={() => setStagedFiles([])}
       />
 
-      <ExternalChangesDrawer
-        isOpen={isExternalChangesOpen}
-        onClose={() => {
-          setIsExternalChangesOpen(false);
-          setExternalChangesAccountId(undefined);
-        }}
-        accounts={accountItems
-          .filter((a) => a.hasPendingChanges || (externalChangesAccountId && a.id === externalChangesAccountId && pendingDiscrepancies[a.id] !== false))
-          .map((a) => ({ id: a.id, displayName: a.displayName, email: a.email }))}
-        initialAccountId={externalChangesAccountId}
-        onResolved={async () => {
-          await loadClusterData();
-          await loadFiles(currentPath);
-          showToast('Discrepancies updated.');
-        }}
-      />
+      {isExternalChangesOpen && (
+        <ExternalChangesDrawer
+          isOpen={isExternalChangesOpen}
+          onClose={() => {
+            setIsExternalChangesOpen(false);
+            setExternalChangesAccountId(undefined);
+          }}
+          accounts={externalChangesAccounts}
+          initialAccountId={externalChangesAccountId}
+          onResolved={async () => {
+            await loadClusterData();
+            await loadFiles(currentPath);
+            showToast('Discrepancies updated.');
+          }}
+        />
+      )}
 
       <NewFolderModal
         isOpen={isNewFolderOpen}

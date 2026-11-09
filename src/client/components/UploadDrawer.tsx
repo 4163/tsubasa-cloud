@@ -304,7 +304,6 @@ const styles = stylex.create({
     alignItems: 'center',
     minWidth: 0,
     flex: 1,
-    maxWidth: '260px',
   },
   accountSelect: {
     appearance: 'none',
@@ -356,18 +355,6 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  allocationTag: {
-    fontSize: '10px',
-    fontFamily: typography.fontFamilyBody,
-    fontWeight: '500',
-    color: colors.dimText,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  },
-  allocationTagManual: {
-    color: colors.brandAccent,
-    fontWeight: '600',
-  },
   badge: {
     fontSize: typography.fontSizeBadge,
     fontFamily: typography.fontFamilyMono,
@@ -397,11 +384,6 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '3px',
-  },
-  allocationReason: {
-    fontSize: '11px',
-    color: colors.dimText,
-    fontStyle: 'italic',
   },
   miniProgressContainer: {
     width: '100%',
@@ -794,7 +776,6 @@ export function UploadDrawer({
             const isRejected = file.size > CEILING_14_25_GB || preview?.rejected;
             const pct = prog && prog.total > 0 ? Math.round((prog.loaded / prog.total) * 100) : 0;
             const chosenAccountId = selectedAccounts[file.name] || preview?.targetAccountId || '';
-            const isManualSelection = Boolean(selectedAccounts[file.name]);
 
             return (
               <div
@@ -834,7 +815,7 @@ export function UploadDrawer({
                   </div>
                 )}
 
-                {/* Allocation row: drive selector dropdown + placement reason */}
+                {/* Allocation row: drive selector dropdown */}
                 {!isRejected && (
                   <div {...stylex.props(styles.driveAllocationRow)}>
                     <div {...stylex.props(styles.driveSelectorGroup)}>
@@ -900,17 +881,6 @@ export function UploadDrawer({
                         <span {...stylex.props(styles.badge)}>Calculating...</span>
                       )}
                     </div>
-
-                    <span
-                      {...stylex.props(
-                        styles.allocationTag,
-                        isManualSelection && styles.allocationTagManual
-                      )}
-                    >
-                      {isManualSelection
-                        ? 'Manual'
-                        : preview?.reason || (isPlanning ? 'Calculating...' : 'Best fit')}
-                    </span>
                   </div>
                 )}
 
