@@ -232,6 +232,39 @@ export function App() {
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [isMobileOpen, setIsMobileOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mql = window.matchMedia('(max-width: 768px)');
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      if (!e.matches) {
+        setIsMobileOpen(false);
+      }
+    };
+    if (mql.addEventListener) {
+      mql.addEventListener('change', handleMediaChange);
+      return () => mql.removeEventListener('change', handleMediaChange);
+    } else if (mql.addListener) {
+      mql.addListener(handleMediaChange);
+      return () => mql.removeListener(handleMediaChange);
+    }
+  }, []);
+
+  useEffect(() => {
+    let resizeTimer: ReturnType<typeof setTimeout>;
+    const handleResize = () => {
+      document.body.classList.add('resize-animation-stopper');
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        document.body.classList.remove('resize-animation-stopper');
+      }, 150);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(resizeTimer);
+    };
+  }, []);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   // Drawers and modals state

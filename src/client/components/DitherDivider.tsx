@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { colors, layout } from '../tokens.stylex.js';
+import { layout } from '../tokens.stylex.js';
 
 interface DitherDividerProps {
   orientation?: 'vertical' | 'horizontal';
@@ -15,6 +15,9 @@ const styles = stylex.create({
     position: 'relative',
     userSelect: 'none',
     pointerEvents: 'none',
+    '@media (max-width: 768px)': {
+      display: 'none',
+    },
   },
   horizontal: {
     height: layout.ditherStripHeight,
@@ -23,26 +26,56 @@ const styles = stylex.create({
     position: 'relative',
     userSelect: 'none',
     pointerEvents: 'none',
+    '@media (max-width: 768px)': {
+      display: 'none',
+    },
   },
   canvas: {
     display: 'block',
     width: '100%',
     height: '100%',
     imageRendering: 'pixelated',
+    '@media (max-width: 768px)': {
+      display: 'none',
+    },
   },
 });
 
-const BAYER_4X4 = [
-  [0, 8, 2, 10],
-  [12, 4, 14, 6],
-  [3, 11, 1, 9],
-  [15, 7, 13, 5],
+// 6x4 dither transition pattern matching the provided image
+const PATTERN_6X4 = [
+  [1, 1, 1, 0, 0, 0],
+  [1, 1, 0, 1, 0, 1],
+  [1, 1, 1, 0, 0, 0],
+  [1, 1, 0, 1, 0, 1],
 ];
 
 export function DitherDivider({ orientation = 'vertical', isDark = false }: DitherDividerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(max-width: 768px)').matches;
+    }
+    return false;
+  });
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mql = window.matchMedia('(max-width: 768px)');
+    const onChange = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches);
+    };
+
+    if (mql.addEventListener) {
+      mql.addEventListener('change', onChange);
+      return () => mql.removeEventListener('change', onChange);
+    } else if (mql.addListener) {
+      mql.addListener(onChange);
+      return () => mql.removeListener(onChange);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isMobile) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -55,17 +88,17 @@ export function DitherDivider({ orientation = 'vertical', isDark = false }: Dith
     canvas.width = width;
     canvas.height = height;
 
-    // Palette values for dither interpolation
-    // Light mode: surface (#f7faf5) -> canvas (#eef2ec)
-    // Dark mode: surface (#12211d) -> canvas (#0b1412)
-    const [c1, c2] = isDark
+    // Palette values:
+    // Light mode: in-between border (#c2d1c7) and surface (#f7faf5) -> [220, 230, 222]
+    // Dark mode: in-between border (#1e302a) and surface (#12211d) -> [24, 40, 36]
+    const [cDark, cLight] = isDark
       ? [
-          [18, 33, 29], // #12211d
-          [11, 20, 18], // #0b1412
+          [24, 40, 36], // in-between border #1e302a and surface #12211d
+          [18, 33, 29], // surface #12211d
         ]
       : [
-          [247, 250, 245], // #f7faf5
-          [238, 242, 236], // #eef2ec
+          [220, 230, 222], // in-between border #c2d1c7 and surface #f7faf5
+          [247, 250, 245], // surface #f7faf5
         ];
 
     const imgData = ctx.createImageData(width, height);
@@ -73,11 +106,11 @@ export function DitherDivider({ orientation = 'vertical', isDark = false }: Dith
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        const factor = orientation === 'vertical' ? x / Math.max(1, width - 1) : y / Math.max(1, height - 1);
-        const threshold = (BAYER_4X4[y % 4][x % 4] + 0.5) / 16;
-        const pickC2 = factor > threshold;
-
-        const color = pickC2 ? c2 : c1;
+        const isDarkCell =
+          orientation === 'vertical'
+            ? PATTERN_6X4[y % 4][x % 6] === 1
+            : PATTERN_6X4[x % 4][y % 6] === 1;
+        const color = isDarkCell ? cDark : cLight;
         const idx = (y * width + x) * 4;
 
         data[idx] = color[0];
@@ -88,7 +121,11 @@ export function DitherDivider({ orientation = 'vertical', isDark = false }: Dith
     }
 
     ctx.putImageData(imgData, 0, 0);
-  }, [orientation, isDark]);
+  }, [orientation, isDark, isMobile]);
+
+  if (isMobile) {
+    return null;
+  }
 
   return (
     <div {...stylex.props(orientation === 'vertical' ? styles.vertical : styles.horizontal)}>

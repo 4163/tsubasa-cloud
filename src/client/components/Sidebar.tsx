@@ -71,7 +71,7 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     boxSizing: 'border-box',
-    overflowY: 'auto',
+    overflow: 'hidden',
     flexShrink: 0,
     zIndex: 20,
     '@media (max-width: 768px)': {
@@ -110,6 +110,7 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space1,
+    flexShrink: 0,
   },
   brandRow: {
     display: 'flex',
@@ -156,6 +157,7 @@ const styles = stylex.create({
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
+    flexShrink: 0,
   },
   navItem: {
     display: 'flex',
@@ -296,13 +298,20 @@ const styles = stylex.create({
     marginBottom: spacing.space2,
     fontStyle: 'italic',
   },
+  accountsScrollArea: {
+    flex: 1,
+    overflowY: 'auto',
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+  },
   accountsList: {
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
     paddingLeft: spacing.space4,
     paddingRight: spacing.space4,
-    flex: 1,
+    paddingBottom: spacing.space3,
   },
   accountCard: {
     padding: spacing.space3,
@@ -557,6 +566,7 @@ const styles = stylex.create({
     flexDirection: 'column',
     gap: spacing.space2,
     marginTop: 'auto',
+    flexShrink: 0,
   },
   footerTitle: {
     fontSize: typography.fontSizeBadge,
@@ -991,9 +1001,10 @@ export function Sidebar({
           </button>
         </nav>
 
-        <div {...stylex.props(styles.sectionHeading)}>
-          Connected accounts ({authorizedCount})
-        </div>
+        <div {...stylex.props(styles.accountsScrollArea)}>
+          <div {...stylex.props(styles.sectionHeading)}>
+            Connected accounts ({authorizedCount})
+          </div>
 
         {onImportOAuth && (
           <div {...stylex.props(styles.addAccountWrapper)}>
@@ -1173,6 +1184,7 @@ export function Sidebar({
               </div>
             );
           })}
+        </div>
         </div>
 
         <div {...stylex.props(styles.footer)}>
