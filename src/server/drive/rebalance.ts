@@ -3,6 +3,7 @@ import { db } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { getDriveClient } from './client.js';
+import { copyDriveFileCrossAccount, deleteDriveFileIgnoreNotFound } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
 import { authPool } from './auth.js';
 import {
@@ -78,121 +79,82 @@ export async function rebalanceFile(
     );
   }
 
-  const driveSource = getDriveClient(sourceAccountId);
   const driveTarget = getDriveClient(targetAccountId);
+  const parentDir = path.posix.dirname(file.virtualPath);
+  const targetFolderId = await ensureRemoteFolderHierarchy(
+    driveTarget,
+    targetAccount.rootFolderId,
+    parentDir
+  );
 
-  // Share source file with target account to allow server-side copy
-  const shareRes = await driveSource.permissions.create({
-    fileId: file.driveFileId,
-    requestBody: {
-      role: 'reader',
-      type: 'user',
-      emailAddress: targetAccount.email,
+  const newDriveFileId = await copyDriveFileCrossAccount({
+    sourceAccountId,
+    sourceDriveFileId: file.driveFileId,
+    targetAccountId,
+    targetAccountEmail: targetAccount.email,
+    targetRemoteFolderId: targetFolderId,
+    destFileName: file.name,
+    appProperties: {
+      tsubasa_managed: 'true',
+      tsubasa_virtual_path: file.virtualPath,
+      tsubasa_virtual_id: file.id,
+      tsubasa_checksum: file.hash || '',
     },
-    supportsAllDrives: false,
+    fields: 'id, name, size, mimeType, md5Checksum',
   });
 
-  const permissionId = shareRes.data.id;
-
-  try {
-    const parentDir = path.posix.dirname(file.virtualPath);
-    const targetFolderId = await ensureRemoteFolderHierarchy(
-      driveTarget,
-      targetAccount.rootFolderId,
-      parentDir
-    );
-
-    // Google server-side copy creates copy without downloading to local disk
-    const copyRes = await driveTarget.files.copy({
-      fileId: file.driveFileId,
-      requestBody: {
-        name: file.name,
-        parents: [targetFolderId],
-        appProperties: {
-          tsubasa_managed: 'true',
-          tsubasa_virtual_path: file.virtualPath,
-          tsubasa_virtual_id: file.id,
-          tsubasa_checksum: file.hash || '',
-        },
-      },
-      fields: 'id, name, size, mimeType, md5Checksum',
-      supportsAllDrives: false,
-    });
-
-    const newDriveFileId = copyRes.data.id;
-    if (!newDriveFileId) {
-      throw new Error('Google Drive server-side copy failed to return new file ID');
-    }
-
-    if (file.isTrashed) {
-      try {
-        await driveTarget.files.update({
-          fileId: newDriveFileId,
-          requestBody: { trashed: true },
-          supportsAllDrives: false,
-        });
-      } catch (err) {
-        console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
-      }
-    }
-
-    // Delete original file from source account
-    await driveSource.files.delete({
-      fileId: file.driveFileId,
-      supportsAllDrives: false,
-    });
-
-    // Update SQLite index and accounts quota usage
-    await db
-      .update(files)
-      .set({
-        accountId: targetAccountId,
-        driveFileId: newDriveFileId,
-        updatedAt: new Date(),
-      })
-      .where(eq(files.id, file.id));
-
-    await db
-      .update(accounts)
-      .set({
-        quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${file.sizeBytes})`,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, sourceAccountId));
-
-    await db
-      .update(accounts)
-      .set({
-        quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${file.sizeBytes}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, targetAccountId));
-
-    // Server-side copy consumes target account's 750 GB daily upload/copy limit
-    await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
-
-    return {
-      fileId: file.id,
-      virtualPath: file.virtualPath,
-      sourceAccountId,
-      targetAccountId,
-      newDriveFileId,
-      bytesMoved: file.sizeBytes,
-    };
-  } finally {
-    // Clean up temporary permission if file still exists on source
-    if (permissionId) {
-      try {
-        await driveSource.permissions.delete({
-          fileId: file.driveFileId,
-          permissionId,
-          supportsAllDrives: false,
-        });
-      } catch {
-        // Ignored if source file was already deleted
-      }
+  if (file.isTrashed) {
+    try {
+      await driveTarget.files.update({
+        fileId: newDriveFileId,
+        requestBody: { trashed: true },
+        supportsAllDrives: false,
+      });
+    } catch (err) {
+      console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
     }
   }
+
+  // Delete original file from source account
+  await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId);
+
+  // Update SQLite index and accounts quota usage
+  await db
+    .update(files)
+    .set({
+      accountId: targetAccountId,
+      driveFileId: newDriveFileId,
+      updatedAt: new Date(),
+    })
+    .where(eq(files.id, file.id));
+
+  await db
+    .update(accounts)
+    .set({
+      quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${file.sizeBytes})`,
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.id, sourceAccountId));
+
+  await db
+    .update(accounts)
+    .set({
+      quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${file.sizeBytes}`,
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.id, targetAccountId));
+
+  // Server-side copy consumes target account's 750 GB daily upload/copy limit
+  await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
+
+  return {
+    fileId: file.id,
+    virtualPath: file.virtualPath,
+    sourceAccountId,
+    targetAccountId,
+    newDriveFileId,
+    bytesMoved: file.sizeBytes,
+  };
 }
 
 export async function planAccountRebalance(
@@ -290,7 +252,7 @@ export async function executeAutoRebalance(
   return results;
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];

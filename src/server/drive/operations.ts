@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { db, sqlite } from '../db/index.js';
 import { accounts, files, folders, type FileRecord, type Folder } from '../db/schema.js';
 import { eq, or, like, and, sql } from 'drizzle-orm';
-import { getDriveClient, ensureRootFolder, resolveRemoteFolderTree } from './client.js';
+import { getDriveClient, getAccountRootFolderId, resolveRemoteFolderTree } from './client.js';
+import { copyDriveFileCrossAccount } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath, clearRemoteFolderCache } from './mirror.js';
 import { ensureLocalFolderHierarchy } from './sync.js';
 import {
@@ -14,32 +15,71 @@ import {
   InsufficientStorageError,
 } from '../storage/index.js';
 
-async function getAccountRootFolderId(accountId: string): Promise<string> {
-  const accountRecord = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
-
-  if (accountRecord?.rootFolderId) {
-    return accountRecord.rootFolderId;
-  }
-
-  const drive = getDriveClient(accountId);
-  const rootId = await ensureRootFolder(drive);
-
-  await db
-    .update(accounts)
-    .set({ rootFolderId: rootId, updatedAt: new Date() })
-    .where(eq(accounts.id, accountId));
-
-  return rootId;
-}
-
 interface RemoteSyncFileItem {
   id: string;
   virtual_path: string;
   name: string;
   account_id: string;
   drive_file_id: string;
+}
+
+async function syncDescendantFolderPropertiesOnDrive(
+  drive: ReturnType<typeof getDriveClient>,
+  folders: Array<{ id: string; virtualPath: string }>,
+  oldFolderPath: string,
+  newFolderPath: string
+): Promise<void> {
+  for (const sub of folders) {
+    if (sub.virtualPath.startsWith(oldFolderPath + '/')) {
+      const subNewPath = newFolderPath + sub.virtualPath.slice(oldFolderPath.length);
+      await drive.files.update({
+        fileId: sub.id,
+        requestBody: {
+          appProperties: {
+            tsubasa_managed: 'true',
+            tsubasa_folder_path: subNewPath,
+          },
+        },
+        supportsAllDrives: false,
+      });
+    }
+  }
+}
+
+async function syncDescendantFilePathsOnDrive(
+  oldFolderPath: string,
+  newFolderPath: string,
+  descendantFiles: RemoteSyncFileItem[]
+): Promise<void> {
+  const CONCURRENCY = 10;
+  let fileIndex = 0;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, descendantFiles.length) }, async () => {
+    while (fileIndex < descendantFiles.length) {
+      const f = descendantFiles[fileIndex++];
+      if (!f || !f.drive_file_id || !f.account_id) continue;
+      const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
+        ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
+        : path.posix.join(newFolderPath, f.name);
+
+      try {
+        const drive = getDriveClient(f.account_id);
+        await drive.files.update({
+          fileId: f.drive_file_id,
+          requestBody: {
+            appProperties: {
+              tsubasa_managed: 'true',
+              tsubasa_virtual_path: fileNewPath,
+            },
+          },
+          supportsAllDrives: false,
+        });
+      } catch (err) {
+        console.warn(`Remote file path update error for file ${f.id} (${f.drive_file_id}):`, err);
+      }
+    }
+  });
+
+  await Promise.all(workers);
 }
 
 async function syncRemoteFolderRename(
@@ -73,56 +113,14 @@ async function syncRemoteFolderRename(
           });
         }
 
-        for (const sub of tree.folders) {
-          if (sub.virtualPath.startsWith(oldFolderPath + '/')) {
-            const subNewPath = newFolderPath + sub.virtualPath.slice(oldFolderPath.length);
-            await drive.files.update({
-              fileId: sub.id,
-              requestBody: {
-                appProperties: {
-                  tsubasa_managed: 'true',
-                  tsubasa_folder_path: subNewPath,
-                },
-              },
-              supportsAllDrives: false,
-            });
-          }
-        }
+        await syncDescendantFolderPropertiesOnDrive(drive, tree.folders, oldFolderPath, newFolderPath);
       } catch (err) {
         console.warn(`Remote folder rename error on account ${acc.id}:`, err);
       }
     })
   );
 
-  const CONCURRENCY = 10;
-  let fileIndex = 0;
-  const workers = Array.from({ length: Math.min(CONCURRENCY, descendantFiles.length) }, async () => {
-    while (fileIndex < descendantFiles.length) {
-      const f = descendantFiles[fileIndex++];
-      if (!f || !f.drive_file_id || !f.account_id) continue;
-      const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
-        ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
-        : path.posix.join(newFolderPath, f.name);
-
-      try {
-        const drive = getDriveClient(f.account_id);
-        await drive.files.update({
-          fileId: f.drive_file_id,
-          requestBody: {
-            appProperties: {
-              tsubasa_managed: 'true',
-              tsubasa_virtual_path: fileNewPath,
-            },
-          },
-          supportsAllDrives: false,
-        });
-      } catch (err) {
-        console.warn(`Remote file path update error for file ${f.id} (${f.drive_file_id}):`, err);
-      }
-    }
-  });
-
-  await Promise.all(workers);
+  await syncDescendantFilePathsOnDrive(oldFolderPath, newFolderPath, descendantFiles);
   clearRemoteFolderCache();
 }
 
@@ -171,67 +169,27 @@ async function syncRemoteFolderMove(
           });
         }
 
-        for (const sub of tree.folders) {
-          if (sub.virtualPath.startsWith(oldFolderPath + '/')) {
-            const subNewPath = newFolderPath + sub.virtualPath.slice(oldFolderPath.length);
-            await drive.files.update({
-              fileId: sub.id,
-              requestBody: {
-                appProperties: {
-                  tsubasa_managed: 'true',
-                  tsubasa_folder_path: subNewPath,
-                },
-              },
-              supportsAllDrives: false,
-            });
-          }
-        }
+        await syncDescendantFolderPropertiesOnDrive(drive, tree.folders, oldFolderPath, newFolderPath);
       } catch (err) {
         console.warn(`Remote folder move error on account ${acc.id}:`, err);
       }
     })
   );
 
-  const CONCURRENCY = 10;
-  let fileIndex = 0;
-  const workers = Array.from({ length: Math.min(CONCURRENCY, descendantFiles.length) }, async () => {
-    while (fileIndex < descendantFiles.length) {
-      const f = descendantFiles[fileIndex++];
-      if (!f || !f.drive_file_id || !f.account_id) continue;
-      const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
-        ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
-        : path.posix.join(newFolderPath, f.name);
-
-      try {
-        const drive = getDriveClient(f.account_id);
-        await drive.files.update({
-          fileId: f.drive_file_id,
-          requestBody: {
-            appProperties: {
-              tsubasa_managed: 'true',
-              tsubasa_virtual_path: fileNewPath,
-            },
-          },
-          supportsAllDrives: false,
-        });
-      } catch (err) {
-        console.warn(`Remote file path update error for file ${f.id} (${f.drive_file_id}):`, err);
-      }
-    }
-  });
-
-  await Promise.all(workers);
+  await syncDescendantFilePathsOnDrive(oldFolderPath, newFolderPath, descendantFiles);
   clearRemoteFolderCache();
 }
 
 export interface MoveItemInput {
-  kind: 'file' | 'folder';
+  kind?: 'file' | 'folder';
+  type?: 'file' | 'folder';
   id: string;
 }
 
 export interface MoveResult {
   id: string;
   kind: 'file' | 'folder';
+  type?: 'file' | 'folder';
   oldPath: string;
   newPath: string;
   success: boolean;
@@ -250,7 +208,15 @@ export async function moveItems(
   const results: MoveResult[] = [];
 
   for (const item of items) {
-    if (item.kind === 'file') {
+    let resolvedKind = item.kind || item.type;
+    if (!resolvedKind) {
+      const folderExists = await db.query.folders.findFirst({
+        where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
+      });
+      resolvedKind = folderExists ? 'folder' : 'file';
+    }
+
+    if (resolvedKind === 'file') {
       const file = await db.query.files.findFirst({
         where: or(eq(files.id, item.id), eq(files.virtualPath, item.id)),
       });
@@ -259,6 +225,7 @@ export async function moveItems(
         results.push({
           id: item.id,
           kind: 'file',
+          type: 'file',
           oldPath: item.id,
           newPath: '',
           success: false,
@@ -272,6 +239,7 @@ export async function moveItems(
         results.push({
           id: file.id,
           kind: 'file',
+          type: 'file',
           oldPath: file.virtualPath,
           newPath: newVirtualPath,
           success: true,
@@ -287,6 +255,7 @@ export async function moveItems(
         results.push({
           id: file.id,
           kind: 'file',
+          type: 'file',
           oldPath: file.virtualPath,
           newPath: newVirtualPath,
           success: false,
@@ -302,22 +271,17 @@ export async function moveItems(
         ensureLocalFolderHierarchy(folderId);
       }
 
-      sqlite.pragma('foreign_keys = OFF');
-      try {
-        await db
-          .update(files)
-          .set({
-            virtualPath: newVirtualPath,
-            folderId,
-            updatedAt: new Date(),
-          })
-          .where(eq(files.id, file.id));
-      } finally {
-        sqlite.pragma('foreign_keys = ON');
-      }
+      sqlite.transaction(() => {
+        sqlite.pragma('defer_foreign_keys = ON');
+        sqlite
+          .prepare(
+            'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+          )
+          .run(newVirtualPath, folderId, file.id);
+      })();
 
-      // Synchronously update remote Google Drive parent & metadata
-      try {
+      // Asynchronously update remote Google Drive parent & metadata in the background
+      (async () => {
         const drive = getDriveClient(file.accountId);
         const rootFolderId = await getAccountRootFolderId(file.accountId);
         const targetRemoteFolderId = await ensureRemoteFolderHierarchy(
@@ -347,18 +311,19 @@ export async function moveItems(
           },
           supportsAllDrives: false,
         });
-      } catch (driveErr) {
-        console.warn(`Drive remote move deferred for file ${file.id}:`, driveErr);
-      }
+      })().catch((driveErr) => {
+        console.error(`Background Drive remote move failed for file ${file.id}:`, driveErr);
+      });
 
       results.push({
         id: file.id,
         kind: 'file',
+        type: 'file',
         oldPath: file.virtualPath,
         newPath: newVirtualPath,
         success: true,
       });
-    } else if (item.kind === 'folder') {
+    } else if (resolvedKind === 'folder') {
       const folder = await db.query.folders.findFirst({
         where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
       });
@@ -367,6 +332,7 @@ export async function moveItems(
         results.push({
           id: item.id,
           kind: 'folder',
+          type: 'folder',
           oldPath: item.id,
           newPath: '',
           success: false,
@@ -380,6 +346,7 @@ export async function moveItems(
         results.push({
           id: folder.id,
           kind: 'folder',
+          type: 'folder',
           oldPath: oldFolderPath,
           newPath: '',
           success: false,
@@ -393,6 +360,7 @@ export async function moveItems(
         results.push({
           id: folder.id,
           kind: 'folder',
+          type: 'folder',
           oldPath: oldFolderPath,
           newPath: newFolderPath,
           success: true,
@@ -408,6 +376,7 @@ export async function moveItems(
         results.push({
           id: folder.id,
           kind: 'folder',
+          type: 'folder',
           oldPath: oldFolderPath,
           newPath: newFolderPath,
           success: false,
@@ -428,57 +397,68 @@ export async function moveItems(
           drive_file_id: string;
         }>;
 
-      sqlite.pragma('foreign_keys = OFF');
-      try {
-        sqlite.transaction(() => {
-          // 1. Move root folder itself
-          const parentId = destFolder === '/' ? null : destFolder;
+      sqlite.transaction(() => {
+        sqlite.pragma('defer_foreign_keys = ON');
+
+        // 1. Move root folder itself
+        const parentId = destFolder === '/' ? null : destFolder;
+        sqlite
+          .prepare(
+            'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+          )
+          .run(newFolderPath, newFolderPath, parentId, folder.id);
+
+        // 2. Move descendant folders
+        const allDescendantFolders = sqlite
+          .prepare('SELECT id, virtual_path, name FROM folders WHERE virtual_path LIKE ?')
+          .all(`${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string; name: string }>;
+
+        for (const sub of allDescendantFolders) {
+          const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
+          const subParent = path.posix.dirname(subNewPath);
           sqlite
             .prepare(
               'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
             )
-            .run(newFolderPath, newFolderPath, parentId, folder.id);
+            .run(subNewPath, subNewPath, subParent === '/' ? null : subParent, sub.id);
+        }
 
-          // 2. Move descendant folders
-          const allDescendantFolders = sqlite
-            .prepare('SELECT id, virtual_path, name FROM folders WHERE virtual_path LIKE ?')
-            .all(`${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string; name: string }>;
+        // 3. Move all descendant files
+        for (const f of allDescendantFiles) {
+          const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
+            ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
+            : f.virtual_path;
+          const fileParent = path.posix.dirname(fileNewPath);
+          sqlite
+            .prepare(
+              'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+            )
+            .run(fileNewPath, fileParent === '/' ? null : fileParent, f.id);
+        }
+      })();
 
-          for (const sub of allDescendantFolders) {
-            const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
-            const subParent = path.posix.dirname(subNewPath);
-            sqlite
-              .prepare(
-                'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
-              )
-              .run(subNewPath, subNewPath, subParent === '/' ? null : subParent, sub.id);
-          }
-
-          // 3. Move all descendant files
-          for (const f of allDescendantFiles) {
-            const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
-              ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
-              : f.virtual_path;
-            const fileParent = path.posix.dirname(fileNewPath);
-            sqlite
-              .prepare(
-                'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
-              )
-              .run(fileNewPath, fileParent === '/' ? null : fileParent, f.id);
-          }
-        })();
-      } finally {
-        sqlite.pragma('foreign_keys = ON');
-      }
-
-      await syncRemoteFolderMove(oldFolderPath, newFolderPath, destFolder, allDescendantFiles);
+      // Asynchronously update remote Google Drive hierarchy in the background
+      syncRemoteFolderMove(oldFolderPath, newFolderPath, destFolder, allDescendantFiles).catch((err) => {
+        console.error('Background syncRemoteFolderMove failed:', err);
+      });
 
       results.push({
         id: folder.id,
         kind: 'folder',
+        type: 'folder',
         oldPath: oldFolderPath,
         newPath: newFolderPath,
         success: true,
+      });
+    } else {
+      results.push({
+        id: item.id,
+        kind: 'file',
+        type: 'file',
+        oldPath: item.id,
+        newPath: '',
+        success: false,
+        error: `Item not found or invalid kind: ${item.id}`,
       });
     }
   }
@@ -489,6 +469,7 @@ export async function moveItems(
 export interface CopyResult {
   id: string;
   kind: 'file' | 'folder';
+  type?: 'file' | 'folder';
   sourcePath: string;
   destPath: string;
   success: boolean;
@@ -538,7 +519,15 @@ export async function copyItems(
   const results: CopyResult[] = [];
 
   for (const item of items) {
-    if (item.kind === 'file') {
+    let resolvedKind = item.kind || item.type;
+    if (!resolvedKind) {
+      const folderExists = await db.query.folders.findFirst({
+        where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
+      });
+      resolvedKind = folderExists ? 'folder' : 'file';
+    }
+
+    if (resolvedKind === 'file') {
       const file = await db.query.files.findFirst({
         where: or(eq(files.id, item.id), eq(files.virtualPath, item.id)),
       });
@@ -607,47 +596,21 @@ export async function copyItems(
           }
           newDriveFileId = copyRes.data.id;
         } else {
-          // Cross-account copy via temporary reader permission
-          const driveSource = getDriveClient(file.accountId);
-          const shareRes = await driveSource.permissions.create({
-            fileId: file.driveFileId,
-            requestBody: {
-              role: 'reader',
-              type: 'user',
-              emailAddress: targetAccount.email,
+          newDriveFileId = await copyDriveFileCrossAccount({
+            sourceAccountId: file.accountId,
+            sourceDriveFileId: file.driveFileId,
+            targetAccountId,
+            targetAccountEmail: targetAccount.email,
+            targetRemoteFolderId,
+            destFileName,
+            appProperties: {
+              tsubasa_managed: 'true',
+              tsubasa_virtual_path: destVirtualPath,
+              tsubasa_virtual_id: newFileId,
+              tsubasa_checksum: file.hash || '',
             },
-            supportsAllDrives: false,
+            fields: 'id, name, size',
           });
-
-          const permissionId = shareRes.data.id;
-          try {
-            const copyRes = await driveTarget.files.copy({
-              fileId: file.driveFileId,
-              requestBody: {
-                name: destFileName,
-                parents: [targetRemoteFolderId],
-                appProperties: {
-                  tsubasa_managed: 'true',
-                  tsubasa_virtual_path: destVirtualPath,
-                  tsubasa_virtual_id: newFileId,
-                  tsubasa_checksum: file.hash || '',
-                },
-              },
-              fields: 'id, name, size',
-              supportsAllDrives: false,
-            });
-
-            if (!copyRes.data.id) {
-              throw new Error('Google Drive cross-account copy returned empty file ID');
-            }
-            newDriveFileId = copyRes.data.id;
-          } finally {
-            if (permissionId) {
-              driveSource.permissions
-                .delete({ fileId: file.driveFileId, permissionId, supportsAllDrives: false })
-                .catch(() => {});
-            }
-          }
         }
 
         const parentDir = path.posix.dirname(destVirtualPath);
@@ -679,6 +642,7 @@ export async function copyItems(
         results.push({
           id: newFileId,
           kind: 'file',
+          type: 'file',
           sourcePath: file.virtualPath,
           destPath: destVirtualPath,
           success: true,
@@ -687,13 +651,14 @@ export async function copyItems(
         results.push({
           id: file.id,
           kind: 'file',
+          type: 'file',
           sourcePath: file.virtualPath,
           destPath: '',
           success: false,
           error: err instanceof Error ? err.message : String(err),
         });
       }
-    } else if (item.kind === 'folder') {
+    } else if (resolvedKind === 'folder') {
       const folder = await db.query.folders.findFirst({
         where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
       });
@@ -702,6 +667,7 @@ export async function copyItems(
         results.push({
           id: item.id,
           kind: 'folder',
+          type: 'folder',
           sourcePath: item.id,
           destPath: '',
           success: false,
@@ -723,12 +689,13 @@ export async function copyItems(
         for (const subFile of subFiles) {
           const subRelative = subFile.virtualPath.slice(folder.virtualPath.length);
           const targetSubFileDir = normalizeVirtualPath(path.posix.dirname(destVirtualPath + subRelative));
-          await copyItems([{ kind: 'file', id: subFile.id }], targetSubFileDir);
+          await copyItems([{ kind: 'file', type: 'file', id: subFile.id }], targetSubFileDir);
         }
 
         results.push({
           id: destVirtualPath,
           kind: 'folder',
+          type: 'folder',
           sourcePath: folder.virtualPath,
           destPath: destVirtualPath,
           success: true,
@@ -737,12 +704,23 @@ export async function copyItems(
         results.push({
           id: folder.id,
           kind: 'folder',
+          type: 'folder',
           sourcePath: folder.virtualPath,
           destPath: '',
           success: false,
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    } else {
+      results.push({
+        id: item.id,
+        kind: 'file',
+        type: 'file',
+        sourcePath: item.id,
+        destPath: '',
+        success: false,
+        error: `Item not found or invalid kind: ${item.id}`,
+      });
     }
   }
 
@@ -788,22 +766,17 @@ export async function renameItem(
       ensureLocalFolderHierarchy(validParentId);
     }
 
-    sqlite.pragma('foreign_keys = OFF');
-    try {
-      await db
-        .update(files)
-        .set({
-          name: newName,
-          virtualPath: newVirtualPath,
-          folderId: validParentId,
-          updatedAt: new Date(),
-        })
-        .where(eq(files.id, file.id));
-    } finally {
-      sqlite.pragma('foreign_keys = ON');
-    }
+    sqlite.transaction(() => {
+      sqlite.pragma('defer_foreign_keys = ON');
+      sqlite
+        .prepare(
+          'UPDATE files SET name = ?, virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+        )
+        .run(newName, newVirtualPath, validParentId, file.id);
+    })();
 
-    try {
+    // Asynchronously update remote Google Drive metadata in the background
+    (async () => {
       const drive = getDriveClient(file.accountId);
       await drive.files.update({
         fileId: file.driveFileId,
@@ -816,9 +789,9 @@ export async function renameItem(
         },
         supportsAllDrives: false,
       });
-    } catch (driveErr) {
-      console.warn(`Drive remote rename deferred for file ${file.id}:`, driveErr);
-    }
+    })().catch((driveErr) => {
+      console.error(`Background Drive remote rename failed for file ${file.id}:`, driveErr);
+    });
 
     return { success: true, oldPath: file.virtualPath, newPath: newVirtualPath };
   } else {
@@ -869,50 +842,50 @@ export async function renameItem(
         drive_file_id: string;
       }>;
 
-    sqlite.pragma('foreign_keys = OFF');
-    try {
-      sqlite.transaction(() => {
-        // 1. Rename folder itself
-        const parentId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+    sqlite.transaction(() => {
+      sqlite.pragma('defer_foreign_keys = ON');
+
+      // 1. Rename folder itself
+      const parentId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+      sqlite
+        .prepare(
+          'UPDATE folders SET id = ?, virtual_path = ?, name = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+        )
+        .run(newFolderPath, newFolderPath, newName, parentId, folder.id);
+
+      // 2. Rename descendant folders
+      const allDescendantFolders = sqlite
+        .prepare('SELECT id, virtual_path FROM folders WHERE virtual_path LIKE ?')
+        .all(`${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string }>;
+
+      for (const sub of allDescendantFolders) {
+        const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
+        const subParent = path.posix.dirname(subNewPath);
         sqlite
           .prepare(
-            'UPDATE folders SET id = ?, virtual_path = ?, name = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+            'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
           )
-          .run(newFolderPath, newFolderPath, newName, parentId, folder.id);
+          .run(subNewPath, subNewPath, subParent === '/' ? null : subParent, sub.id);
+      }
 
-        // 2. Rename descendant folders
-        const allDescendantFolders = sqlite
-          .prepare('SELECT id, virtual_path FROM folders WHERE virtual_path LIKE ?')
-          .all(`${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string }>;
+      // 3. Rename descendant files
+      for (const f of allDescendantFiles) {
+        const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
+          ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
+          : path.posix.join(newFolderPath, f.name);
+        const fileParent = path.posix.dirname(fileNewPath);
+        sqlite
+          .prepare(
+            'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+          )
+          .run(fileNewPath, fileParent === '/' ? null : fileParent, f.id);
+      }
+    })();
 
-        for (const sub of allDescendantFolders) {
-          const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
-          const subParent = path.posix.dirname(subNewPath);
-          sqlite
-            .prepare(
-              'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
-            )
-            .run(subNewPath, subNewPath, subParent === '/' ? null : subParent, sub.id);
-        }
-
-        // 3. Rename descendant files
-        for (const f of allDescendantFiles) {
-          const fileNewPath = f.virtual_path.startsWith(oldFolderPath + '/')
-            ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
-            : path.posix.join(newFolderPath, f.name);
-          const fileParent = path.posix.dirname(fileNewPath);
-          sqlite
-            .prepare(
-              'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
-            )
-            .run(fileNewPath, fileParent === '/' ? null : fileParent, f.id);
-        }
-      })();
-    } finally {
-      sqlite.pragma('foreign_keys = ON');
-    }
-
-    await syncRemoteFolderRename(oldFolderPath, newFolderPath, newName, allDescendantFiles);
+    // Asynchronously update remote Google Drive hierarchy in the background
+    syncRemoteFolderRename(oldFolderPath, newFolderPath, newName, allDescendantFiles).catch((err) => {
+      console.error('Background syncRemoteFolderRename failed:', err);
+    });
 
     return { success: true, oldPath: oldFolderPath, newPath: newFolderPath };
   }

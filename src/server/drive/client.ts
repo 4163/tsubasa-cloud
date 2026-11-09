@@ -258,4 +258,25 @@ export async function getDescendantFolderIds(
   return tree.folderIds;
 }
 
+export async function getAccountRootFolderId(accountId: string): Promise<string> {
+  const accountRecord = await db.query.accounts.findFirst({
+    where: eq(accounts.id, accountId),
+  });
+
+  if (accountRecord?.rootFolderId) {
+    return accountRecord.rootFolderId;
+  }
+
+  const drive = getDriveClient(accountId);
+  const rootId = await ensureRootFolder(drive);
+
+  await db
+    .update(accounts)
+    .set({ rootFolderId: rootId, updatedAt: new Date() })
+    .where(eq(accounts.id, accountId));
+
+  return rootId;
+}
+
+
 

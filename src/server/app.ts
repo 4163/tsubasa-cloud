@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { validator } from 'hono/validator';
 import { db, sqlite } from './db/index.js';
 import { accounts, files, folders } from './db/schema.js';
-import { eq, like, or } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
   authPool,
   hydrateAccount,
@@ -42,9 +42,48 @@ import {
   InsufficientStorageError,
 } from './storage/index.js';
 
-const app = new Hono()
-  .use('*', logger())
-  .use('*', cors())
+async function getAccountsList() {
+  authPool.scan();
+  const records = authPool.getAll();
+  const dbAccounts = await db.select().from(accounts);
+  const dbMap = new Map(dbAccounts.map((a) => [a.id, a]));
+
+  const list = records.map((r) => ({
+    accountId: r.config.accountId,
+    clientId: r.config.clientId,
+    authorized: r.authorized,
+    sourceFile: r.config.sourceFile,
+    isDisabled: dbMap.get(r.config.accountId)?.isDisabled ?? false,
+    mtimeMs: r.config.mtimeMs ?? 0,
+  }));
+
+  list.sort((a, b) => {
+    if (!a.authorized && b.authorized) return -1;
+    if (a.authorized && !b.authorized) return 1;
+
+    if (!a.authorized && !b.authorized) {
+      if (a.mtimeMs !== b.mtimeMs) {
+        return b.mtimeMs - a.mtimeMs;
+      }
+      return a.accountId.localeCompare(b.accountId);
+    }
+
+    const dbA = dbMap.get(a.accountId);
+    const dbB = dbMap.get(b.accountId);
+    const emailA = (dbA?.email || a.accountId).toLowerCase();
+    const emailB = (dbB?.email || b.accountId).toLowerCase();
+    return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  return list;
+}
+
+const app = new Hono();
+
+app.use('*', logger());
+app.use('*', cors());
+
+const routes = app
   .get('/api/health', (c) => {
     const pragmaRes = sqlite.pragma('journal_mode', { simple: true });
     return c.json({
@@ -55,6 +94,10 @@ const app = new Hono()
         journalMode: String(pragmaRes ?? 'wal'),
       },
     });
+  })
+  .get('/api/storage', async (c) => {
+    const overview = await getPooledStorageOverview();
+    return c.json(overview);
   })
   .get('/api/storage/overview', async (c) => {
     const overview = await getPooledStorageOverview();
@@ -124,42 +167,12 @@ const app = new Hono()
       }
     }
   )
+  .get('/api/accounts', async (c) => {
+    const list = await getAccountsList();
+    return c.json({ accounts: list });
+  })
   .get('/api/accounts/pool', async (c) => {
-    authPool.scan();
-    const records = authPool.getAll();
-    const dbAccounts = await db.select().from(accounts);
-    const dbMap = new Map(dbAccounts.map((a) => [a.id, a]));
-
-    const list = records.map((r) => ({
-      accountId: r.config.accountId,
-      clientId: r.config.clientId,
-      authorized: r.authorized,
-      sourceFile: r.config.sourceFile,
-      isDisabled: dbMap.get(r.config.accountId)?.isDisabled ?? false,
-      mtimeMs: r.config.mtimeMs ?? 0,
-    }));
-
-    list.sort((a, b) => {
-      // Unauthorized / imported accounts at top
-      if (!a.authorized && b.authorized) return -1;
-      if (a.authorized && !b.authorized) return 1;
-
-      // Both unauthorized: newest imported at top
-      if (!a.authorized && !b.authorized) {
-        if (a.mtimeMs !== b.mtimeMs) {
-          return b.mtimeMs - a.mtimeMs;
-        }
-        return a.accountId.localeCompare(b.accountId);
-      }
-
-      // Both authorized: alphabetical by Gmail address (email)
-      const dbA = dbMap.get(a.accountId);
-      const dbB = dbMap.get(b.accountId);
-      const emailA = (dbA?.email || a.accountId).toLowerCase();
-      const emailB = (dbB?.email || b.accountId).toLowerCase();
-      return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
-    });
-
+    const list = await getAccountsList();
     return c.json({ accounts: list });
   })
   .post('/api/accounts/:id/disable', async (c) => {
@@ -318,6 +331,10 @@ const app = new Hono()
       });
     }
   )
+  .get('/api/folders', async (c) => {
+    const folderRecords = await db.select().from(folders);
+    return c.json({ folders: folderRecords });
+  })
   .post(
     '/api/folders',
     validator('json', (value, c) => {
@@ -341,19 +358,30 @@ const app = new Hono()
       }
     }
   )
-  .delete('/api/folders', async (c) => {
-    const virtualPath = c.req.query('virtualPath') || c.req.query('path') || c.req.query('id');
-    if (!virtualPath) {
-      return c.json({ error: 'virtualPath query parameter required' }, 400);
+  .delete(
+    '/api/folders',
+    validator('query', (value): { virtualPath?: string; path?: string; id?: string } => {
+      return {
+        virtualPath: typeof value.virtualPath === 'string' ? value.virtualPath : undefined,
+        path: typeof value.path === 'string' ? value.path : undefined,
+        id: typeof value.id === 'string' ? value.id : undefined,
+      };
+    }),
+    async (c) => {
+      const query = c.req.valid('query');
+      const virtualPath = query.virtualPath || query.path || query.id;
+      if (!virtualPath) {
+        return c.json({ error: 'virtualPath query parameter required' }, 400);
+      }
+      const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
+      try {
+        const result = await trashFolder(normalizedPath);
+        return c.json({ success: true, virtualPath: normalizedPath, trashedCount: result.trashedFilesCount });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
     }
-    const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
-    try {
-      const result = await trashFolder(normalizedPath);
-      return c.json({ success: true, virtualPath: normalizedPath, trashedCount: result.trashedFilesCount });
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
-    }
-  })
+  )
   .post(
     '/api/items/move',
     validator('json', (value, c) => {
@@ -664,5 +692,5 @@ const app = new Hono()
     }
   });
 
-export type AppType = typeof app;
-export default app;
+export type AppType = typeof routes;
+export default routes;
