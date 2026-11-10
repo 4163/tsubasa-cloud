@@ -332,12 +332,16 @@ export async function trashFile(fileId: string): Promise<FileRecord> {
     throw new Error(`File ${fileId} not found`);
   }
 
-  const drive = getDriveClient(file.accountId);
-  await drive.files.update({
-    fileId: file.driveFileId,
-    requestBody: { trashed: true },
-    supportsAllDrives: false,
-  });
+  try {
+    const drive = getDriveClient(file.accountId);
+    await drive.files.update({
+      fileId: file.driveFileId,
+      requestBody: { trashed: true },
+      supportsAllDrives: false,
+    });
+  } catch (err) {
+    console.warn(`Drive trash file warning for ${file.id}:`, err);
+  }
 
   const updated = await db
     .update(files)
@@ -361,12 +365,16 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
     throw new Error(`File ${fileId} not found`);
   }
 
-  const drive = getDriveClient(file.accountId);
-  await drive.files.update({
-    fileId: file.driveFileId,
-    requestBody: { trashed: false },
-    supportsAllDrives: false,
-  });
+  try {
+    const drive = getDriveClient(file.accountId);
+    await drive.files.update({
+      fileId: file.driveFileId,
+      requestBody: { trashed: false },
+      supportsAllDrives: false,
+    });
+  } catch (err) {
+    console.warn(`Drive restore file warning for ${file.id}:`, err);
+  }
 
   ensureLocalFolderHierarchy(file.virtualPath);
   const parentDir = path.posix.dirname(file.virtualPath);

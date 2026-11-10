@@ -234,8 +234,10 @@ export async function moveItems(
         continue;
       }
 
+      const wasTrashed = Boolean(file.isTrashed);
+
       const newVirtualPath = normalizeVirtualPath(path.posix.join(destFolder, file.name));
-      if (newVirtualPath === file.virtualPath) {
+      if (newVirtualPath === file.virtualPath && !wasTrashed) {
         results.push({
           id: file.id,
           kind: 'file',
@@ -275,7 +277,12 @@ export async function moveItems(
         sqlite.pragma('defer_foreign_keys = ON');
         sqlite
           .prepare(
-            'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
+            'UPDATE files SET virtual_path = ? WHERE virtual_path = ? AND is_trashed = 1 AND id != ?'
+          )
+          .run(`${newVirtualPath}.trashed-${Date.now()}`, newVirtualPath, file.id);
+        sqlite
+          .prepare(
+            'UPDATE files SET virtual_path = ?, folder_id = ?, is_trashed = 0, trashed_at = NULL, updated_at = unixepoch() WHERE id = ?'
           )
           .run(newVirtualPath, folderId, file.id);
       })();
@@ -303,6 +310,7 @@ export async function moveItems(
           addParents: targetRemoteFolderId,
           removeParents: prevParents,
           requestBody: {
+            ...(wasTrashed ? { trashed: false } : {}),
             appProperties: {
               tsubasa_managed: 'true',
               tsubasa_virtual_path: newVirtualPath,
