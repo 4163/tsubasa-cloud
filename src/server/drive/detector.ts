@@ -5,7 +5,7 @@ import { eq, and } from 'drizzle-orm';
 import { getDriveClient, resolveRemoteFolderTree } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
-import { ensureLocalFolderHierarchy, insertFolderStmt } from './sync.js';
+import { ensureLocalFolderHierarchy, insertFolderRecord, formatFolderId } from './sync.js';
 
 export interface ExternalFileDiscrepancy {
   driveFileId: string;
@@ -43,16 +43,17 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
   }
 
   const drive = getDriveClient(accountId);
+  const poolId = account.poolId ?? 1;
   const folderTree = await resolveRemoteFolderTree(drive, account.rootFolderId);
   const validFolderIds = folderTree.folderIds;
 
   // Sync discovered remote folders into SQLite folders table so folders created directly in Drive are reflected
   for (const folder of folderTree.folders) {
-    insertFolderStmt.run(folder.virtualPath, folder.virtualPath, folder.name, folder.parentId);
+    insertFolderRecord(folder.virtualPath, poolId);
   }
 
   const knownFiles = await db.query.files.findMany({
-    where: and(eq(files.accountId, accountId), eq(files.isTrashed, false)),
+    where: and(eq(files.accountId, accountId), eq(files.poolId, poolId), eq(files.isTrashed, false)),
   });
 
   const knownMapByDriveId = new Map<string, FileRecord>();
@@ -163,6 +164,9 @@ export async function acceptExternalFile(
   driveFileId: string,
   targetVirtualPath?: string
 ): Promise<FileRecord> {
+  const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+  const poolId = account?.poolId ?? 1;
+
   const drive = getDriveClient(accountId);
   const fileRes = await drive.files.get({
     fileId: driveFileId,
@@ -177,7 +181,6 @@ export async function acceptExternalFile(
 
   let finalVirtualPath = targetVirtualPath || remote.appProperties?.tsubasa_virtual_path;
   if (!finalVirtualPath) {
-    const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
     if (account?.rootFolderId) {
       const folderTree = await resolveRemoteFolderTree(drive, account.rootFolderId);
       const parentFolderPath = remote.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
@@ -192,9 +195,9 @@ export async function acceptExternalFile(
   const fileName = path.posix.basename(virtualPath);
   const fileId = remote.appProperties?.tsubasa_virtual_id || remote.id;
 
-  ensureLocalFolderHierarchy(virtualPath);
+  ensureLocalFolderHierarchy(virtualPath, poolId);
   const parentDir = path.posix.dirname(virtualPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
   await drive.files.update({
     fileId: remote.id,
@@ -212,6 +215,7 @@ export async function acceptExternalFile(
     .insert(files)
     .values({
       id: fileId,
+      poolId,
       virtualPath,
       name: fileName,
       sizeBytes,
@@ -223,7 +227,7 @@ export async function acceptExternalFile(
       isTrashed: false,
     })
     .onConflictDoUpdate({
-      target: files.virtualPath,
+      target: [files.poolId, files.virtualPath],
       set: {
         name: fileName,
         sizeBytes,

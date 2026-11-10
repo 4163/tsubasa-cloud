@@ -2,11 +2,22 @@ import { sqlite } from './index.js';
 
 export function initializeDatabase(): void {
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS pools (
+      id INTEGER PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      drive_folder_name TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    INSERT OR IGNORE INTO pools (id, name, drive_folder_name) VALUES (1, 'Pool 1', '_Tsubasa~ Pool 1');
+
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY NOT NULL,
       email TEXT NOT NULL UNIQUE,
       display_name TEXT NOT NULL,
       avatar_url TEXT,
+      pool_id INTEGER NOT NULL DEFAULT 1 REFERENCES pools(id),
       quota_limit_bytes INTEGER NOT NULL DEFAULT 16106127360,
       quota_used_bytes INTEGER NOT NULL DEFAULT 0,
       sync_state TEXT NOT NULL DEFAULT 'idle',
@@ -19,7 +30,8 @@ export function initializeDatabase(): void {
 
     CREATE TABLE IF NOT EXISTS folders (
       id TEXT PRIMARY KEY NOT NULL,
-      virtual_path TEXT NOT NULL UNIQUE,
+      pool_id INTEGER NOT NULL DEFAULT 1 REFERENCES pools(id) ON DELETE CASCADE,
+      virtual_path TEXT NOT NULL,
       name TEXT NOT NULL,
       parent_folder_id TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -28,7 +40,8 @@ export function initializeDatabase(): void {
 
     CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY NOT NULL,
-      virtual_path TEXT NOT NULL UNIQUE,
+      pool_id INTEGER NOT NULL DEFAULT 1 REFERENCES pools(id) ON DELETE CASCADE,
+      virtual_path TEXT NOT NULL,
       name TEXT NOT NULL,
       size_bytes INTEGER NOT NULL DEFAULT 0,
       mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
@@ -50,8 +63,13 @@ export function initializeDatabase(): void {
       timestamp INTEGER NOT NULL
     );
 
+    CREATE INDEX IF NOT EXISTS accounts_pool_idx ON accounts(pool_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS folders_pool_path_idx ON folders(pool_id, virtual_path);
+    CREATE INDEX IF NOT EXISTS folders_pool_parent_idx ON folders(pool_id, parent_folder_id);
     CREATE INDEX IF NOT EXISTS folders_parent_idx ON folders(parent_folder_id);
     CREATE INDEX IF NOT EXISTS folders_path_idx ON folders(virtual_path);
+    CREATE UNIQUE INDEX IF NOT EXISTS files_pool_path_idx ON files(pool_id, virtual_path);
+    CREATE INDEX IF NOT EXISTS files_pool_trashed_idx ON files(pool_id, is_trashed);
     CREATE INDEX IF NOT EXISTS files_account_idx ON files(account_id);
     CREATE INDEX IF NOT EXISTS files_folder_idx ON files(folder_id);
     CREATE INDEX IF NOT EXISTS files_path_idx ON files(virtual_path);
@@ -59,9 +77,6 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS transfer_account_ts_idx ON transfer_logs(account_id, timestamp);
     CREATE INDEX IF NOT EXISTS transfer_ts_idx ON transfer_logs(timestamp);
   `);
-
-  try {
-    sqlite.exec('ALTER TABLE accounts ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0;');
-  } catch {}
 }
+
 

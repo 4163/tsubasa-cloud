@@ -13,7 +13,7 @@ export * from './detector.js';
 export * from './rebalance.js';
 export * from './operations.js';
 
-export async function syncAllAccounts(): Promise<{
+export async function syncAllAccounts(preferredPoolId?: number): Promise<{
   hydrated: string[];
   synced: string[];
   errors: Array<{ accountId: string; error: string }>;
@@ -30,7 +30,7 @@ export async function syncAllAccounts(): Promise<{
     }
 
     try {
-      await hydrateAccount(record.config.accountId);
+      await hydrateAccount(record.config.accountId, preferredPoolId);
       hydrated.push(record.config.accountId);
 
       await runIncrementalSync(record.config.accountId);

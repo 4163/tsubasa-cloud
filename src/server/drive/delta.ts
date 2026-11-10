@@ -26,7 +26,8 @@ async function resolveRemoteParentPath(
   rootFolderId: string,
   parentFolderId: string,
   cache: Map<string, string | null>,
-  expectedPath?: string
+  expectedPath?: string,
+  poolId = 1
 ): Promise<{ isInsidePool: boolean; path: string }> {
   if (parentFolderId === rootFolderId) {
     return { isInsidePool: true, path: '/' };
@@ -47,8 +48,8 @@ async function resolveRemoteParentPath(
       return { isInsidePool: true, path: '/' };
     }
     const localFolder = sqlite
-      .prepare('SELECT virtual_path FROM folders WHERE virtual_path = ? OR id = ?')
-      .get(normExpected, parentFolderId) as { virtual_path: string } | undefined;
+      .prepare('SELECT virtual_path FROM folders WHERE pool_id = ? AND (virtual_path = ? OR id = ?)')
+      .get(poolId, normExpected, parentFolderId) as { virtual_path: string } | undefined;
 
     if (localFolder) {
       cache.set(parentFolderId, localFolder.virtual_path);
@@ -57,8 +58,8 @@ async function resolveRemoteParentPath(
   }
 
   const localById = sqlite
-    .prepare('SELECT virtual_path FROM folders WHERE id = ?')
-    .get(parentFolderId) as { virtual_path: string } | undefined;
+    .prepare('SELECT virtual_path FROM folders WHERE pool_id = ? AND id = ?')
+    .get(poolId, parentFolderId) as { virtual_path: string } | undefined;
 
   if (localById) {
     cache.set(parentFolderId, localById.virtual_path);
@@ -81,7 +82,7 @@ async function resolveRemoteParentPath(
 
     if (folder.parents.includes(rootFolderId)) {
       const computedPath = folder.appProperties?.tsubasa_folder_path || `/${folder.name}`;
-      insertFolderRecord(computedPath);
+      insertFolderRecord(computedPath, poolId);
       cache.set(parentFolderId, computedPath);
       return { isInsidePool: true, path: computedPath };
     }
@@ -91,7 +92,9 @@ async function resolveRemoteParentPath(
       drive,
       rootFolderId,
       grandParentId,
-      cache
+      cache,
+      undefined,
+      poolId
     );
 
     if (!parentResult.isInsidePool) {
@@ -105,7 +108,7 @@ async function resolveRemoteParentPath(
         ? `/${folder.name}`
         : `${parentResult.path}/${folder.name}`);
 
-    insertFolderRecord(computedPath);
+    insertFolderRecord(computedPath, poolId);
     cache.set(parentFolderId, computedPath);
     return { isInsidePool: true, path: computedPath };
   } catch {
@@ -147,6 +150,7 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
       throw new Error(`Account ${accountId} does not have a registered root folder`);
     }
 
+    const poolId = accountRecord.poolId ?? 1;
     const folderPathCache = new Map<string, string | null>([[rootFolderId, '/']]);
 
     let pageToken: string | undefined = accountRecord.lastSyncToken;
@@ -194,7 +198,8 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
               folderPathCache,
               file.appProperties?.tsubasa_folder_path
                 ? path.posix.dirname(file.appProperties.tsubasa_folder_path)
-                : undefined
+                : undefined,
+              poolId
             );
             if (parentRes.isInsidePool) {
               const folderPath =
@@ -231,7 +236,8 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
               rootFolderId,
               parentId,
               folderPathCache,
-              expectedParent
+              expectedParent,
+              poolId
             );
             if (res.isInsidePool) {
               isInsidePool = true;
@@ -288,6 +294,7 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
               accountId,
               driveFileId: file.id || change.fileId,
               isTrashed: false,
+              poolId,
             });
           });
           updatedCount++;
@@ -299,7 +306,7 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
           op();
         }
         for (const folder of batchFolderPaths) {
-          insertFolderRecord(folder);
+          insertFolderRecord(folder, poolId);
         }
       })();
 

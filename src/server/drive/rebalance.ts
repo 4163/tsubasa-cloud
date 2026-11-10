@@ -48,12 +48,24 @@ export async function rebalanceFile(
     throw new Error('Target account must be different from source account');
   }
 
+  const sourceAccount = await db.query.accounts.findFirst({
+    where: eq(accounts.id, sourceAccountId),
+  });
+
+  if (!sourceAccount) {
+    throw new Error(`Source account ${sourceAccountId} not registered`);
+  }
+
   const targetAccount = await db.query.accounts.findFirst({
     where: eq(accounts.id, targetAccountId),
   });
 
   if (!targetAccount || !targetAccount.rootFolderId) {
     throw new Error(`Target account ${targetAccountId} not registered or missing root folder`);
+  }
+
+  if (targetAccount.poolId !== sourceAccount.poolId) {
+    throw new Error('Cannot rebalance file across different storage pools');
   }
 
   if (targetAccount.isDisabled) {
@@ -189,13 +201,23 @@ export async function planAccountRebalance(
 export async function executeAutoRebalance(
   sourceAccountId: string
 ): Promise<RebalanceOperationResult[]> {
+  const sourceAccount = await db.query.accounts.findFirst({
+    where: eq(accounts.id, sourceAccountId),
+  });
+
+  if (!sourceAccount) {
+    throw new Error(`Source account ${sourceAccountId} not found`);
+  }
+
   const plan = await planAccountRebalance(sourceAccountId);
   if (!plan || plan.candidateFiles.length === 0) {
     return [];
   }
 
   const allAccounts = await db.query.accounts.findMany();
-  const targetCandidates = allAccounts.filter((a) => a.id !== sourceAccountId && !a.isDisabled);
+  const targetCandidates = allAccounts.filter(
+    (a) => a.poolId === sourceAccount.poolId && a.id !== sourceAccountId && !a.isDisabled
+  );
 
   // Pre-fetch initial headroom and 24h transfer quotas for all target candidate accounts
   const targetStates: Array<{
@@ -280,6 +302,14 @@ export interface EvacuationResult {
 }
 
 export async function evacuateAccountFiles(sourceAccountId: string): Promise<EvacuationResult> {
+  const sourceAccount = await db.query.accounts.findFirst({
+    where: eq(accounts.id, sourceAccountId),
+  });
+
+  if (!sourceAccount) {
+    throw new Error(`Account ${sourceAccountId} not found`);
+  }
+
   const accountFiles = await db.query.files.findMany({
     where: eq(files.accountId, sourceAccountId),
   });
@@ -295,7 +325,11 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
 
   const allAccounts = await db.query.accounts.findMany();
   const candidateAccounts = allAccounts.filter(
-    (a) => a.id !== sourceAccountId && !a.isDisabled && a.syncState !== 'error'
+    (a) =>
+      a.poolId === sourceAccount.poolId &&
+      a.id !== sourceAccountId &&
+      !a.isDisabled &&
+      a.syncState !== 'error'
   );
 
   if (candidateAccounts.length === 0) {
@@ -386,7 +420,7 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
       );
     }
 
-    const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath);
+    const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath, sourceAccount.poolId);
     let chosenTarget = eligible.find((t) => affinityAccountIds.includes(t.account.id));
 
     if (!chosenTarget) {

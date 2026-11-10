@@ -18,7 +18,7 @@ export function normalizeVirtualPath(rawPath: string): string {
 }
 
 /**
- * Recursively creates and mirrors a directory structure under the account's Tsubasa Storage root folder.
+ * Recursively creates and mirrors a directory structure under the account's _Tsubasa~ Pool <N> root folder.
  * Returns the Google Drive folder ID for the leaf directory.
  */
 export async function ensureRemoteFolderHierarchy(

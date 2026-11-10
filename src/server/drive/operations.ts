@@ -6,7 +6,7 @@ import { eq, or, like, and, sql } from 'drizzle-orm';
 import { getDriveClient, getAccountRootFolderId, resolveRemoteFolderTree } from './client.js';
 import { copyDriveFileCrossAccount } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath, clearRemoteFolderCache } from './mirror.js';
-import { ensureLocalFolderHierarchy } from './sync.js';
+import { ensureLocalFolderHierarchy, formatFolderId } from './sync.js';
 import {
   selectPlacementForFile,
   calculateHeadroom,
@@ -86,11 +86,14 @@ async function syncRemoteFolderRename(
   oldFolderPath: string,
   newFolderPath: string,
   newName: string,
-  descendantFiles: RemoteSyncFileItem[]
+  descendantFiles: RemoteSyncFileItem[],
+  poolId = 1
 ): Promise<void> {
   clearRemoteFolderCache();
 
-  const allAccounts = await db.query.accounts.findMany();
+  const allAccounts = await db.query.accounts.findMany({
+    where: eq(accounts.poolId, poolId),
+  });
   await Promise.all(
     allAccounts.map(async (acc) => {
       try {
@@ -128,11 +131,14 @@ async function syncRemoteFolderMove(
   oldFolderPath: string,
   newFolderPath: string,
   destFolder: string,
-  descendantFiles: RemoteSyncFileItem[]
+  descendantFiles: RemoteSyncFileItem[],
+  poolId = 1
 ): Promise<void> {
   clearRemoteFolderCache();
 
-  const allAccounts = await db.query.accounts.findMany();
+  const allAccounts = await db.query.accounts.findMany({
+    where: eq(accounts.poolId, poolId),
+  });
   await Promise.all(
     allAccounts.map(async (acc) => {
       try {
@@ -198,11 +204,12 @@ export interface MoveResult {
 
 export async function moveItems(
   items: MoveItemInput[],
-  targetFolderPath: string
+  targetFolderPath: string,
+  poolId = 1
 ): Promise<MoveResult[]> {
   const destFolder = normalizeVirtualPath(targetFolderPath);
   if (destFolder !== '/') {
-    ensureLocalFolderHierarchy(destFolder);
+    ensureLocalFolderHierarchy(destFolder, poolId);
   }
 
   const results: MoveResult[] = [];
@@ -211,14 +218,20 @@ export async function moveItems(
     let resolvedKind = item.kind || item.type;
     if (!resolvedKind) {
       const folderExists = await db.query.folders.findFirst({
-        where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
+        where: and(
+          eq(folders.poolId, poolId),
+          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
+        ),
       });
       resolvedKind = folderExists ? 'folder' : 'file';
     }
 
     if (resolvedKind === 'file') {
       const file = await db.query.files.findFirst({
-        where: or(eq(files.id, item.id), eq(files.virtualPath, item.id)),
+        where: and(
+          eq(files.poolId, poolId),
+          or(eq(files.id, item.id), eq(files.virtualPath, item.id))
+        ),
       });
 
       if (!file) {
@@ -250,7 +263,11 @@ export async function moveItems(
       }
 
       const existing = await db.query.files.findFirst({
-        where: and(eq(files.virtualPath, newVirtualPath), eq(files.isTrashed, false)),
+        where: and(
+          eq(files.poolId, poolId),
+          eq(files.virtualPath, newVirtualPath),
+          eq(files.isTrashed, false)
+        ),
       });
 
       if (existing && existing.id !== file.id) {
@@ -267,19 +284,19 @@ export async function moveItems(
       }
 
       const parentDir = path.posix.dirname(newVirtualPath);
-      const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
-      if (folderId) {
-        ensureLocalFolderHierarchy(folderId);
+      if (parentDir !== '/' && parentDir !== '.') {
+        ensureLocalFolderHierarchy(parentDir, poolId);
       }
 
       sqlite.transaction(() => {
         sqlite.pragma('defer_foreign_keys = ON');
         sqlite
           .prepare(
-            'UPDATE files SET virtual_path = ? WHERE virtual_path = ? AND is_trashed = 1 AND id != ?'
+            'UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1 AND id != ?'
           )
-          .run(`${newVirtualPath}.trashed-${Date.now()}`, newVirtualPath, file.id);
+          .run(`${newVirtualPath}.trashed-${Date.now()}`, poolId, newVirtualPath, file.id);
         sqlite
           .prepare(
             'UPDATE files SET virtual_path = ?, folder_id = ?, is_trashed = 0, trashed_at = NULL, updated_at = unixepoch() WHERE id = ?'
@@ -333,7 +350,10 @@ export async function moveItems(
       });
     } else if (resolvedKind === 'folder') {
       const folder = await db.query.folders.findFirst({
-        where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
+        where: and(
+          eq(folders.poolId, poolId),
+          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
+        ),
       });
 
       if (!folder) {
@@ -377,7 +397,7 @@ export async function moveItems(
       }
 
       const existingFolder = await db.query.folders.findFirst({
-        where: eq(folders.virtualPath, newFolderPath),
+        where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, newFolderPath)),
       });
 
       if (existingFolder && existingFolder.id !== folder.id) {
@@ -395,9 +415,9 @@ export async function moveItems(
 
       const allDescendantFiles = sqlite
         .prepare(
-          'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE virtual_path LIKE ? OR folder_id = ?'
+          'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?)'
         )
-        .all(`${oldFolderPath}/%`, oldFolderPath) as Array<{
+        .all(poolId, `${oldFolderPath}/%`, formatFolderId(poolId, oldFolderPath)) as Array<{
           id: string;
           virtual_path: string;
           name: string;
@@ -409,26 +429,29 @@ export async function moveItems(
         sqlite.pragma('defer_foreign_keys = ON');
 
         // 1. Move root folder itself
-        const parentId = destFolder === '/' ? null : destFolder;
+        const parentId = destFolder === '/' ? null : formatFolderId(poolId, destFolder);
+        const newFolderId = formatFolderId(poolId, newFolderPath);
         sqlite
           .prepare(
             'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
           )
-          .run(newFolderPath, newFolderPath, parentId, folder.id);
+          .run(newFolderId, newFolderPath, parentId, folder.id);
 
         // 2. Move descendant folders
         const allDescendantFolders = sqlite
-          .prepare('SELECT id, virtual_path, name FROM folders WHERE virtual_path LIKE ?')
-          .all(`${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string; name: string }>;
+          .prepare('SELECT id, virtual_path, name FROM folders WHERE pool_id = ? AND virtual_path LIKE ?')
+          .all(poolId, `${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string; name: string }>;
 
         for (const sub of allDescendantFolders) {
           const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
           const subParent = path.posix.dirname(subNewPath);
+          const subParentId = subParent === '/' ? null : formatFolderId(poolId, subParent);
+          const subNewId = formatFolderId(poolId, subNewPath);
           sqlite
             .prepare(
               'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
             )
-            .run(subNewPath, subNewPath, subParent === '/' ? null : subParent, sub.id);
+            .run(subNewId, subNewPath, subParentId, sub.id);
         }
 
         // 3. Move all descendant files
@@ -437,16 +460,17 @@ export async function moveItems(
             ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
             : f.virtual_path;
           const fileParent = path.posix.dirname(fileNewPath);
+          const fileParentId = fileParent === '/' ? null : formatFolderId(poolId, fileParent);
           sqlite
             .prepare(
               'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
             )
-            .run(fileNewPath, fileParent === '/' ? null : fileParent, f.id);
+            .run(fileNewPath, fileParentId, f.id);
         }
       })();
 
       // Asynchronously update remote Google Drive hierarchy in the background
-      syncRemoteFolderMove(oldFolderPath, newFolderPath, destFolder, allDescendantFiles).catch((err) => {
+      syncRemoteFolderMove(oldFolderPath, newFolderPath, destFolder, allDescendantFiles, poolId).catch((err) => {
         console.error('Background syncRemoteFolderMove failed:', err);
       });
 
@@ -487,7 +511,8 @@ export interface CopyResult {
 async function getAvailableCopyPath(
   targetDir: string,
   baseName: string,
-  kind: 'file' | 'folder'
+  kind: 'file' | 'folder',
+  poolId = 1
 ): Promise<string> {
   const ext = kind === 'file' ? path.extname(baseName) : '';
   const stem = kind === 'file' ? path.basename(baseName, ext) : baseName;
@@ -499,12 +524,19 @@ async function getAvailableCopyPath(
   while (true) {
     if (kind === 'file') {
       const exists = await db.query.files.findFirst({
-        where: and(eq(files.virtualPath, candidatePath), eq(files.isTrashed, false)),
+        where: and(
+          eq(files.poolId, poolId),
+          eq(files.virtualPath, candidatePath),
+          eq(files.isTrashed, false)
+        ),
       });
       if (!exists) return candidatePath;
     } else {
       const exists = await db.query.folders.findFirst({
-        where: eq(folders.virtualPath, candidatePath),
+        where: and(
+          eq(folders.poolId, poolId),
+          eq(folders.virtualPath, candidatePath)
+        ),
       });
       if (!exists) return candidatePath;
     }
@@ -517,11 +549,12 @@ async function getAvailableCopyPath(
 
 export async function copyItems(
   items: MoveItemInput[],
-  targetFolderPath: string
+  targetFolderPath: string,
+  poolId = 1
 ): Promise<CopyResult[]> {
   const destFolder = normalizeVirtualPath(targetFolderPath);
   if (destFolder !== '/') {
-    ensureLocalFolderHierarchy(destFolder);
+    ensureLocalFolderHierarchy(destFolder, poolId);
   }
 
   const results: CopyResult[] = [];
@@ -530,14 +563,20 @@ export async function copyItems(
     let resolvedKind = item.kind || item.type;
     if (!resolvedKind) {
       const folderExists = await db.query.folders.findFirst({
-        where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
+        where: and(
+          eq(folders.poolId, poolId),
+          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
+        ),
       });
       resolvedKind = folderExists ? 'folder' : 'file';
     }
 
     if (resolvedKind === 'file') {
       const file = await db.query.files.findFirst({
-        where: or(eq(files.id, item.id), eq(files.virtualPath, item.id)),
+        where: and(
+          eq(files.poolId, poolId),
+          or(eq(files.id, item.id), eq(files.virtualPath, item.id))
+        ),
       });
 
       if (!file) {
@@ -553,13 +592,19 @@ export async function copyItems(
       }
 
       try {
-        const destVirtualPath = await getAvailableCopyPath(destFolder, file.name, 'file');
+        const destVirtualPath = await getAvailableCopyPath(destFolder, file.name, 'file', poolId);
         const destFileName = path.posix.basename(destVirtualPath);
 
-        const placement = await selectPlacementForFile({
-          virtualPath: destVirtualPath,
-          sizeBytes: file.sizeBytes,
-        });
+        const placement = await selectPlacementForFile(
+          {
+            virtualPath: destVirtualPath,
+            sizeBytes: file.sizeBytes,
+          },
+          undefined,
+          Date.now(),
+          undefined,
+          poolId
+        );
 
         const targetAccountId = placement.accountId;
         const targetAccount = await db.query.accounts.findFirst({
@@ -622,10 +667,11 @@ export async function copyItems(
         }
 
         const parentDir = path.posix.dirname(destVirtualPath);
-        const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+        const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
         await db.insert(files).values({
           id: newFileId,
+          poolId,
           virtualPath: destVirtualPath,
           name: destFileName,
           sizeBytes: file.sizeBytes,
@@ -668,7 +714,10 @@ export async function copyItems(
       }
     } else if (resolvedKind === 'folder') {
       const folder = await db.query.folders.findFirst({
-        where: or(eq(folders.id, item.id), eq(folders.virtualPath, item.id)),
+        where: and(
+          eq(folders.poolId, poolId),
+          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
+        ),
       });
 
       if (!folder) {
@@ -685,19 +734,21 @@ export async function copyItems(
       }
 
       try {
-        const destVirtualPath = await getAvailableCopyPath(destFolder, folder.name, 'folder');
-        const destFolderName = path.posix.basename(destVirtualPath);
-
-        ensureLocalFolderHierarchy(destVirtualPath);
+        const destVirtualPath = await getAvailableCopyPath(destFolder, folder.name, 'folder', poolId);
+        ensureLocalFolderHierarchy(destVirtualPath, poolId);
 
         const subFiles = await db.query.files.findMany({
-          where: and(like(files.virtualPath, `${folder.virtualPath}/%`), eq(files.isTrashed, false)),
+          where: and(
+            eq(files.poolId, poolId),
+            like(files.virtualPath, `${folder.virtualPath}/%`),
+            eq(files.isTrashed, false)
+          ),
         });
 
         for (const subFile of subFiles) {
           const subRelative = subFile.virtualPath.slice(folder.virtualPath.length);
           const targetSubFileDir = normalizeVirtualPath(path.posix.dirname(destVirtualPath + subRelative));
-          await copyItems([{ kind: 'file', type: 'file', id: subFile.id }], targetSubFileDir);
+          await copyItems([{ kind: 'file', type: 'file', id: subFile.id }], targetSubFileDir, poolId);
         }
 
         results.push({
@@ -738,7 +789,8 @@ export async function copyItems(
 export async function renameItem(
   kind: 'file' | 'folder',
   idOrPath: string,
-  rawNewName: string
+  rawNewName: string,
+  poolId = 1
 ): Promise<{ success: boolean; oldPath: string; newPath: string }> {
   const newName = rawNewName.trim();
   if (!newName || newName.includes('/') || newName.includes('\\')) {
@@ -747,7 +799,10 @@ export async function renameItem(
 
   if (kind === 'file') {
     const file = await db.query.files.findFirst({
-      where: or(eq(files.id, idOrPath), eq(files.virtualPath, idOrPath)),
+      where: and(
+        eq(files.poolId, poolId),
+        or(eq(files.id, idOrPath), eq(files.virtualPath, idOrPath))
+      ),
     });
 
     if (!file) {
@@ -762,16 +817,20 @@ export async function renameItem(
     }
 
     const existing = await db.query.files.findFirst({
-      where: and(eq(files.virtualPath, newVirtualPath), eq(files.isTrashed, false)),
+      where: and(
+        eq(files.poolId, poolId),
+        eq(files.virtualPath, newVirtualPath),
+        eq(files.isTrashed, false)
+      ),
     });
 
     if (existing && existing.id !== file.id) {
       throw new Error(`A file named "${newName}" already exists in this folder`);
     }
 
-    const validParentId = parentDir === '/' || parentDir === '.' ? null : parentDir;
-    if (validParentId) {
-      ensureLocalFolderHierarchy(validParentId);
+    const validParentId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+    if (parentDir !== '/' && parentDir !== '.') {
+      ensureLocalFolderHierarchy(parentDir, poolId);
     }
 
     sqlite.transaction(() => {
@@ -804,7 +863,10 @@ export async function renameItem(
     return { success: true, oldPath: file.virtualPath, newPath: newVirtualPath };
   } else {
     const folder = await db.query.folders.findFirst({
-      where: or(eq(folders.id, idOrPath), eq(folders.virtualPath, idOrPath)),
+      where: and(
+        eq(folders.poolId, poolId),
+        or(eq(folders.id, idOrPath), eq(folders.virtualPath, idOrPath))
+      ),
     });
 
     if (!folder) {
@@ -820,16 +882,19 @@ export async function renameItem(
     }
 
     const existing = await db.query.folders.findFirst({
-      where: eq(folders.virtualPath, newFolderPath),
+      where: and(
+        eq(folders.poolId, poolId),
+        eq(folders.virtualPath, newFolderPath)
+      ),
     });
 
     if (existing && existing.id !== folder.id) {
       const hasFiles = sqlite
-        .prepare('SELECT 1 FROM files WHERE virtual_path LIKE ? OR folder_id = ? LIMIT 1')
-        .get(`${newFolderPath}/%`, newFolderPath);
+        .prepare('SELECT 1 FROM files WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?) LIMIT 1')
+        .get(poolId, `${newFolderPath}/%`, formatFolderId(poolId, newFolderPath));
       const hasSubfolders = sqlite
-        .prepare('SELECT 1 FROM folders WHERE virtual_path LIKE ? AND id != ? LIMIT 1')
-        .get(`${newFolderPath}/%`, newFolderPath);
+        .prepare('SELECT 1 FROM folders WHERE pool_id = ? AND virtual_path LIKE ? AND id != ? LIMIT 1')
+        .get(poolId, `${newFolderPath}/%`, formatFolderId(poolId, newFolderPath));
 
       if (!hasFiles && !hasSubfolders) {
         sqlite.prepare('DELETE FROM folders WHERE id = ?').run(existing.id);
@@ -840,9 +905,9 @@ export async function renameItem(
 
     const allDescendantFiles = sqlite
       .prepare(
-        'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE virtual_path LIKE ? OR folder_id = ?'
+        'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?)'
       )
-      .all(`${oldFolderPath}/%`, oldFolderPath) as Array<{
+      .all(poolId, `${oldFolderPath}/%`, formatFolderId(poolId, oldFolderPath)) as Array<{
         id: string;
         virtual_path: string;
         name: string;
@@ -854,26 +919,29 @@ export async function renameItem(
       sqlite.pragma('defer_foreign_keys = ON');
 
       // 1. Rename folder itself
-      const parentId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+      const parentId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+      const newFolderId = formatFolderId(poolId, newFolderPath);
       sqlite
         .prepare(
           'UPDATE folders SET id = ?, virtual_path = ?, name = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
         )
-        .run(newFolderPath, newFolderPath, newName, parentId, folder.id);
+        .run(newFolderId, newFolderPath, newName, parentId, folder.id);
 
       // 2. Rename descendant folders
       const allDescendantFolders = sqlite
-        .prepare('SELECT id, virtual_path FROM folders WHERE virtual_path LIKE ?')
-        .all(`${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string }>;
+        .prepare('SELECT id, virtual_path FROM folders WHERE pool_id = ? AND virtual_path LIKE ?')
+        .all(poolId, `${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string }>;
 
       for (const sub of allDescendantFolders) {
         const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
         const subParent = path.posix.dirname(subNewPath);
+        const subParentId = subParent === '/' ? null : formatFolderId(poolId, subParent);
+        const subNewId = formatFolderId(poolId, subNewPath);
         sqlite
           .prepare(
             'UPDATE folders SET id = ?, virtual_path = ?, parent_folder_id = ?, updated_at = unixepoch() WHERE id = ?'
           )
-          .run(subNewPath, subNewPath, subParent === '/' ? null : subParent, sub.id);
+          .run(subNewId, subNewPath, subParentId, sub.id);
       }
 
       // 3. Rename descendant files
@@ -882,16 +950,17 @@ export async function renameItem(
           ? newFolderPath + f.virtual_path.slice(oldFolderPath.length)
           : path.posix.join(newFolderPath, f.name);
         const fileParent = path.posix.dirname(fileNewPath);
+        const fileParentId = fileParent === '/' ? null : formatFolderId(poolId, fileParent);
         sqlite
           .prepare(
             'UPDATE files SET virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
           )
-          .run(fileNewPath, fileParent === '/' ? null : fileParent, f.id);
+          .run(fileNewPath, fileParentId, f.id);
       }
     })();
 
     // Asynchronously update remote Google Drive hierarchy in the background
-    syncRemoteFolderRename(oldFolderPath, newFolderPath, newName, allDescendantFiles).catch((err) => {
+    syncRemoteFolderRename(oldFolderPath, newFolderPath, newName, allDescendantFiles, poolId).catch((err) => {
       console.error('Background syncRemoteFolderRename failed:', err);
     });
 
@@ -899,14 +968,19 @@ export async function renameItem(
   }
 }
 
-export async function trashFolder(virtualPath: string): Promise<{ trashedFilesCount: number }> {
+export async function trashFolder(
+  virtualPath: string,
+  poolId = 1
+): Promise<{ trashedFilesCount: number }> {
   const normPath = normalizeVirtualPath(virtualPath);
+  const folderId = formatFolderId(poolId, normPath);
 
   const descendantFiles = await db.query.files.findMany({
     where: and(
+      eq(files.poolId, poolId),
       or(
         like(files.virtualPath, `${normPath}/%`),
-        eq(files.folderId, normPath)
+        eq(files.folderId, folderId)
       ),
       eq(files.isTrashed, false)
     ),
@@ -926,7 +1000,9 @@ export async function trashFolder(virtualPath: string): Promise<{ trashedFilesCo
   }
 
   // Also trash remote folders in Google Drive so detector or delta sync does not recreate them
-  const allAccounts = await db.query.accounts.findMany();
+  const allAccounts = await db.query.accounts.findMany({
+    where: eq(accounts.poolId, poolId),
+  });
   await Promise.all(
     allAccounts.map(async (acc) => {
       try {
@@ -960,13 +1036,13 @@ export async function trashFolder(virtualPath: string): Promise<{ trashedFilesCo
   sqlite.transaction(() => {
     sqlite
       .prepare(
-        'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE virtual_path LIKE ? OR folder_id = ?'
+        'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?)'
       )
-      .run(`${normPath}/%`, normPath);
+      .run(poolId, `${normPath}/%`, folderId);
 
     sqlite
-      .prepare('DELETE FROM folders WHERE virtual_path = ? OR virtual_path LIKE ?')
-      .run(normPath, `${normPath}/%`);
+      .prepare('DELETE FROM folders WHERE pool_id = ? AND (virtual_path = ? OR virtual_path LIKE ?)')
+      .run(poolId, normPath, `${normPath}/%`);
   })();
 
   return { trashedFilesCount: descendantFiles.length };

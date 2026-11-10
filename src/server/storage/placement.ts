@@ -56,11 +56,17 @@ export interface PlacementItem {
 /**
  * Returns candidate accounts with their current headroom and 24h upload stats.
  */
-export async function getEligibleAccounts(nowMs = Date.now()): Promise<CandidateAccount[]> {
+export async function getEligibleAccounts(poolId = 1, nowMs = Date.now()): Promise<CandidateAccount[]> {
   const allAccounts = await db
     .select()
     .from(accounts)
-    .where(and(not(eq(accounts.syncState, 'error')), eq(accounts.isDisabled, false)));
+    .where(
+      and(
+        eq(accounts.poolId, poolId),
+        not(eq(accounts.syncState, 'error')),
+        eq(accounts.isDisabled, false)
+      )
+    );
 
   const candidates: CandidateAccount[] = [];
 
@@ -83,7 +89,7 @@ export async function getEligibleAccounts(nowMs = Date.now()): Promise<Candidate
  * Finds accounts holding files in parent or ancestor paths of the virtual target.
  * Returns accounts ordered by number of co-located files descending.
  */
-export async function findFolderAffinityAccounts(normalizedPath: string): Promise<string[]> {
+export async function findFolderAffinityAccounts(normalizedPath: string, poolId = 1): Promise<string[]> {
   let currentDir = path.posix.dirname(normalizedPath);
 
   while (currentDir && currentDir !== '.') {
@@ -97,6 +103,7 @@ export async function findFolderAffinityAccounts(normalizedPath: string): Promis
       .from(files)
       .where(
         and(
+          eq(files.poolId, poolId),
           eq(files.isTrashed, false),
           sql`${files.virtualPath} LIKE ${pathPrefix + '%'}`
         )
@@ -122,7 +129,8 @@ export async function selectPlacementForFile(
   item: PlacementItem,
   simulatedHeadrooms?: Map<string, number>,
   nowMs = Date.now(),
-  simulatedTransferBudgets?: Map<string, number>
+  simulatedTransferBudgets?: Map<string, number>,
+  poolId = 1
 ): Promise<PlacementDecision> {
   const normalizedPath = normalizeVirtualPath(item.virtualPath);
 
@@ -130,7 +138,7 @@ export async function selectPlacementForFile(
     throw new FileExceedsCeilingError(item.sizeBytes);
   }
 
-  const candidates = await getEligibleAccounts(nowMs);
+  const candidates = await getEligibleAccounts(poolId, nowMs);
 
   const getEffectiveHeadroom = (accId: string, baseHeadroom: number) => {
     if (simulatedHeadrooms && simulatedHeadrooms.has(accId)) {
@@ -168,7 +176,7 @@ export async function selectPlacementForFile(
   }
 
   // Check 1: Folder Affinity (Existing path priority)
-  const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath);
+  const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath, poolId);
   for (const affId of affinityAccountIds) {
     const match = eligible.find((cand) => cand.id === affId);
     if (match) {
@@ -290,7 +298,8 @@ function buildDirectoryTree(items: PlacementItem[]): TreeNode {
  */
 export async function planBatchPlacement(
   items: PlacementItem[],
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  poolId = 1
 ): Promise<BatchPlacementPlan> {
   for (const item of items) {
     if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
@@ -300,7 +309,7 @@ export async function planBatchPlacement(
 
   const simulatedHeadrooms = new Map<string, number>();
   const simulatedTransferBudgets = new Map<string, number>();
-  const candidates = await getEligibleAccounts(nowMs);
+  const candidates = await getEligibleAccounts(poolId, nowMs);
   for (const c of candidates) {
     simulatedHeadrooms.set(c.id, c.headroomBytes);
     simulatedTransferBudgets.set(c.id, c.transferStats.remainingUploadBytes24h);
@@ -342,7 +351,7 @@ export async function planBatchPlacement(
 
     if (eligibleForBranch.length > 0 && node.fullPath !== '/') {
       // Find affinity or best-fit for the branch as a whole
-      const affinityIds = await findFolderAffinityAccounts(node.fullPath);
+      const affinityIds = await findFolderAffinityAccounts(node.fullPath, poolId);
       let targetAccount = eligibleForBranch.find((cand) => affinityIds.includes(cand.id));
       let reason: 'folder_affinity' | 'best_fit' = 'folder_affinity';
 
@@ -388,7 +397,7 @@ export async function planBatchPlacement(
 
     // Place remaining direct files in this node individually
     for (const f of node.files) {
-      const decision = await selectPlacementForFile(f, simulatedHeadrooms, nowMs, simulatedTransferBudgets);
+      const decision = await selectPlacementForFile(f, simulatedHeadrooms, nowMs, simulatedTransferBudgets, poolId);
       recordDecision(decision);
     }
   }
@@ -412,7 +421,8 @@ export async function planBatchPlacement(
 export async function validateTargetPlacement(
   accountId: string,
   sizeBytes: number,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  expectedPoolId?: number
 ): Promise<CandidateAccount> {
   const account = await db.query.accounts.findFirst({
     where: eq(accounts.id, accountId),
@@ -420,6 +430,10 @@ export async function validateTargetPlacement(
 
   if (!account) {
     throw new Error(`Target account ${accountId} not found in database`);
+  }
+
+  if (expectedPoolId !== undefined && account.poolId !== expectedPoolId) {
+    throw new InsufficientStorageError(`Drive "${account.displayName || accountId}" does not belong to Pool ${expectedPoolId}`);
   }
 
   if (account.isDisabled) {

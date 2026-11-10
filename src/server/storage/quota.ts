@@ -42,6 +42,8 @@ export interface AccountStorageSummary {
   email: string;
   displayName: string;
   avatarUrl: string | null;
+  poolId: number;
+  canSwitchPool: boolean;
   quotaLimitBytes: number;
   quotaUsedBytes: number;
   usableLimitBytes: number;
@@ -58,6 +60,7 @@ export interface SystemStorageBreakdown {
 }
 
 export interface PooledStorageOverview {
+  poolId: number;
   totalAccounts: number;
   totalLimitBytes: number;
   totalUsedBytes: number;
@@ -187,7 +190,7 @@ export async function recordTransfer(
   });
 }
 
-export async function getSystemStorageBreakdown(): Promise<SystemStorageBreakdown> {
+export async function getSystemStorageBreakdown(poolId = 1): Promise<SystemStorageBreakdown> {
   // Roadmaps classify snapshots, database mirrors, and manifests as system storage
   const systemFileRecords = await db
     .select({
@@ -197,6 +200,7 @@ export async function getSystemStorageBreakdown(): Promise<SystemStorageBreakdow
     .from(files)
     .where(
       and(
+        eq(files.poolId, poolId),
         eq(files.isTrashed, false),
         sql`${files.virtualPath} LIKE '/.tsubasa/%'`
       )
@@ -209,12 +213,13 @@ export async function getSystemStorageBreakdown(): Promise<SystemStorageBreakdow
   };
 }
 
-export async function getPooledStorageOverview(nowMs = Date.now()): Promise<PooledStorageOverview> {
+export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): Promise<PooledStorageOverview> {
   const allAccounts = await db
     .select()
     .from(accounts)
+    .where(eq(accounts.poolId, poolId))
     .orderBy(asc(accounts.email));
-  const systemStorage = await getSystemStorageBreakdown();
+  const systemStorage = await getSystemStorageBreakdown(poolId);
 
   const activeFiles = await db
     .select({
@@ -222,8 +227,20 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
       totalBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)`,
     })
     .from(files)
-    .where(eq(files.isTrashed, false))
+    .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false)))
     .groupBy(files.accountId);
+
+  const allAccountFileCounts = await db
+    .select({
+      accountId: files.accountId,
+      fileCount: sql<number>`count(*)`,
+    })
+    .from(files)
+    .groupBy(files.accountId);
+  const totalFilesByAccount = new Map<string, number>();
+  for (const row of allAccountFileCounts) {
+    totalFilesByAccount.set(row.accountId, Number(row.fileCount || 0));
+  }
 
   const tsubasaUsedByAccount = new Map<string, number>();
   let totalTsubasaUsed = 0;
@@ -266,6 +283,8 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
       email: acc.email,
       displayName: acc.displayName,
       avatarUrl: acc.avatarUrl,
+      poolId: acc.poolId,
+      canSwitchPool: (totalFilesByAccount.get(acc.id) ?? 0) === 0,
       quotaLimitBytes: acc.quotaLimitBytes,
       quotaUsedBytes: acc.quotaUsedBytes,
       usableLimitBytes: usableLimit,
@@ -280,6 +299,7 @@ export async function getPooledStorageOverview(nowMs = Date.now()): Promise<Pool
   const clusterDailyCapacity = allAccounts.length * DAILY_UPLOAD_LIMIT_BYTES;
 
   return {
+    poolId,
     totalAccounts: allAccounts.length,
     totalLimitBytes: totalLimit,
     totalUsedBytes: totalUsed,

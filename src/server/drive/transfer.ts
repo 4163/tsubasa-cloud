@@ -6,7 +6,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { authPool } from './auth.js';
 import { getDriveClient, getAccountRootFolderId } from './client.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
-import { ensureLocalFolderHierarchy } from './sync.js';
+import { ensureLocalFolderHierarchy, formatFolderId } from './sync.js';
 import {
   selectPlacementForFile,
   validateTargetPlacement,
@@ -21,11 +21,13 @@ export interface UploadOptions {
   mimeType?: string;
   hash?: string;
   targetAccountId?: string;
+  poolId?: number;
 }
 
 export interface ResumableSessionInfo {
   fileId: string;
   accountId: string;
+  poolId: number;
   virtualPath: string;
   sizeBytes: number;
   mimeType: string;
@@ -148,12 +150,23 @@ export async function initiateResumableUpload(
   }
 
   let accountId: string;
+  let poolId: number;
   if (options.targetAccountId) {
-    await validateTargetPlacement(options.targetAccountId, sizeBytes);
+    await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), options.poolId);
     accountId = options.targetAccountId;
+    const accRow = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+    poolId = accRow?.poolId ?? options.poolId ?? 1;
   } else {
-    const decision = await selectPlacementForFile({ virtualPath, sizeBytes });
+    const targetPoolId = options.poolId ?? 1;
+    const decision = await selectPlacementForFile(
+      { virtualPath, sizeBytes },
+      undefined,
+      Date.now(),
+      undefined,
+      targetPoolId
+    );
     accountId = decision.accountId;
+    poolId = targetPoolId;
   }
 
   const rootFolderId = await getAccountRootFolderId(accountId);
@@ -201,6 +214,7 @@ export async function initiateResumableUpload(
   return {
     fileId,
     accountId,
+    poolId,
     virtualPath,
     sizeBytes,
     mimeType,
@@ -239,14 +253,15 @@ export async function executeStreamingUpload(
   };
 
   const fileName = path.posix.basename(session.virtualPath);
-  ensureLocalFolderHierarchy(session.virtualPath);
+  ensureLocalFolderHierarchy(session.virtualPath, session.poolId);
   const parentDir = path.posix.dirname(session.virtualPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(session.poolId, parentDir);
 
   const insertedRecords = await db
     .insert(files)
     .values({
       id: session.fileId,
+      poolId: session.poolId,
       virtualPath: session.virtualPath,
       name: fileName,
       sizeBytes: session.sizeBytes,
@@ -258,7 +273,7 @@ export async function executeStreamingUpload(
       isTrashed: false,
     })
     .onConflictDoUpdate({
-      target: files.virtualPath,
+      target: [files.poolId, files.virtualPath],
       set: {
         name: fileName,
         sizeBytes: session.sizeBytes,
@@ -286,15 +301,23 @@ export async function executeStreamingUpload(
   return insertedRecords[0];
 }
 
-export async function getStreamingDownload(fileIdOrPath: string): Promise<{
+export async function getStreamingDownload(
+  fileIdOrPath: string,
+  poolId?: number
+): Promise<{
   stream: ReadableStream;
   file: FileRecord;
 }> {
+  const conditions = [
+    sql`${files.id} = ${fileIdOrPath} OR ${files.virtualPath} = ${fileIdOrPath} OR ${files.driveFileId} = ${fileIdOrPath}`,
+    eq(files.isTrashed, false),
+  ];
+  if (poolId !== undefined) {
+    conditions.push(eq(files.poolId, poolId));
+  }
+
   const file = await db.query.files.findFirst({
-    where: and(
-      sql`${files.id} = ${fileIdOrPath} OR ${files.virtualPath} = ${fileIdOrPath} OR ${files.driveFileId} = ${fileIdOrPath}`,
-      eq(files.isTrashed, false)
-    ),
+    where: and(...conditions),
   });
 
   if (!file) {
@@ -376,9 +399,9 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
     console.warn(`Drive restore file warning for ${file.id}:`, err);
   }
 
-  ensureLocalFolderHierarchy(file.virtualPath);
+  ensureLocalFolderHierarchy(file.virtualPath, file.poolId);
   const parentDir = path.posix.dirname(file.virtualPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : parentDir;
+  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(file.poolId, parentDir);
 
   const updated = await db
     .update(files)
@@ -418,9 +441,12 @@ export async function purgeFile(fileId: string): Promise<FileRecord> {
   return file;
 }
 
-export async function emptyTrash(): Promise<{ filesPurged: number; bytesReclaimed: number }> {
+export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number; bytesReclaimed: number }> {
   const trashedFiles = await db.query.files.findMany({
-    where: eq(files.isTrashed, true),
+    where:
+      poolId !== undefined
+        ? and(eq(files.isTrashed, true), eq(files.poolId, poolId))
+        : eq(files.isTrashed, true),
   });
 
   let filesPurged = 0;

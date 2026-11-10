@@ -49,6 +49,7 @@ export interface AccountCredentials {
   tokens?: Credentials;
   sourceFile: string;
   mtimeMs?: number;
+  preferredPoolId?: number;
 }
 
 export interface AccountAuthRecord {
@@ -65,6 +66,7 @@ const SCOPES = [
 
 class AuthPool {
   private pool = new Map<string, AccountAuthRecord>();
+  private preferredPools = new Map<string, number>();
   private oauthDir: string;
 
   constructor(oauthDir = path.resolve(process.cwd(), '.oauths')) {
@@ -257,6 +259,18 @@ class AuthPool {
     return record;
   }
 
+  public setPreferredPool(accountId: string, poolId: number): void {
+    this.preferredPools.set(accountId, poolId);
+    const record = this.pool.get(accountId);
+    if (record) {
+      record.config.preferredPoolId = poolId;
+    }
+  }
+
+  public getPreferredPool(accountId: string): number {
+    return this.preferredPools.get(accountId) ?? this.pool.get(accountId)?.config.preferredPoolId ?? 1;
+  }
+
   public renameAccount(oldAccountId: string, newAccountId: string): string {
     if (!oldAccountId || !newAccountId || oldAccountId.toLowerCase() === newAccountId.toLowerCase()) {
       return oldAccountId;
@@ -265,6 +279,12 @@ class AuthPool {
     const record = this.pool.get(oldAccountId);
     if (!record) {
       return oldAccountId;
+    }
+
+    if (this.preferredPools.has(oldAccountId)) {
+      const pref = this.preferredPools.get(oldAccountId)!;
+      this.preferredPools.set(newAccountId, pref);
+      this.preferredPools.delete(oldAccountId);
     }
 
     const oldSourceFile = record.config.sourceFile;
@@ -325,6 +345,7 @@ class AuthPool {
 
     if (record) {
       this.pool.delete(accountId);
+      this.preferredPools.delete(accountId);
       removedAny = true;
     }
 
@@ -399,7 +420,8 @@ class AuthPool {
 
   public async importCredentials(
     rawFilename: string,
-    rawContent: string
+    rawContent: string,
+    poolId = 1
   ): Promise<{
     success: boolean;
     accountId?: string;
@@ -519,6 +541,10 @@ class AuthPool {
 
     const record = this.pool.get(baseName) || this.getAll().find((r) => r.config.sourceFile === targetFilePath);
     const finalAccountId = record ? record.config.accountId : baseName;
+    this.setPreferredPool(finalAccountId, poolId);
+    if (record) {
+      record.config.preferredPoolId = poolId;
+    }
     return {
       success: true,
       accountId: finalAccountId,

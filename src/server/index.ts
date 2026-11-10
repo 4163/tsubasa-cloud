@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
 import app from './app.js';
 import { initializeDatabase } from './db/init.js';
-import { authPool, hydrateAccount } from './drive/index.js';
+import { authPool, hydrateAccount, runIncrementalSync } from './drive/index.js';
 
 initializeDatabase();
 
@@ -12,7 +12,10 @@ console.log(`Discovered ${accountRecords.length} account credential files in .oa
 for (const record of accountRecords) {
   if (record.authorized) {
     hydrateAccount(record.config.accountId)
-      .then((res) => console.log(`Hydrated account ${res.email} (${res.accountId})`))
+      .then(async (res) => {
+        console.log(`Hydrated account ${res.email} (${res.accountId}) in Pool ${res.poolId}`);
+        await runIncrementalSync(res.accountId);
+      })
       .catch((err) => console.warn(`Hydration deferred for ${record.config.accountId}:`, err.message));
   }
 }

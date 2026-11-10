@@ -4,6 +4,10 @@ import { accounts, files } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import path from 'node:path';
 
+export function formatFolderId(poolId: number, virtualPath: string): string {
+  return `${poolId}:${virtualPath}`;
+}
+
 export interface ColdSyncReport {
   accountId: string;
   filesIndexed: number;
@@ -21,42 +25,91 @@ export interface DiscoveredFile {
   accountId: string;
   driveFileId: string;
   isTrashed: boolean;
+  poolId?: number;
 }
 
-export const insertFolderStmt = sqlite.prepare(`
-  INSERT INTO folders (id, virtual_path, name, parent_folder_id, updated_at)
-  VALUES (?, ?, ?, ?, unixepoch())
-  ON CONFLICT(virtual_path) DO UPDATE SET
-    name = excluded.name,
-    parent_folder_id = excluded.parent_folder_id,
-    updated_at = unixepoch()
-`);
+let _insertFolderStmt: ReturnType<typeof sqlite.prepare> | null = null;
+export function getInsertFolderStmt() {
+  if (!_insertFolderStmt) {
+    _insertFolderStmt = sqlite.prepare(`
+      INSERT INTO folders (id, pool_id, virtual_path, name, parent_folder_id, updated_at)
+      VALUES (?, ?, ?, ?, ?, unixepoch())
+      ON CONFLICT(pool_id, virtual_path) DO UPDATE SET
+        name = excluded.name,
+        parent_folder_id = excluded.parent_folder_id,
+        updated_at = unixepoch()
+    `);
+  }
+  return _insertFolderStmt;
+}
 
-export const upsertFileStmt = sqlite.prepare(`
-  INSERT INTO files (
-    id, virtual_path, name, size_bytes, mime_type, hash,
-    account_id, drive_file_id, folder_id, is_trashed, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-  ON CONFLICT(virtual_path) DO UPDATE SET
-    name = excluded.name,
-    size_bytes = excluded.size_bytes,
-    mime_type = excluded.mime_type,
-    hash = excluded.hash,
-    account_id = excluded.account_id,
-    drive_file_id = excluded.drive_file_id,
-    folder_id = excluded.folder_id,
-    is_trashed = excluded.is_trashed,
-    updated_at = unixepoch()
-`);
+export const insertFolderStmt = {
+  run(...args: any[]) {
+    return (getInsertFolderStmt() as any).run(...args);
+  },
+};
 
-export const deleteFileStmt = sqlite.prepare(`
-  DELETE FROM files WHERE drive_file_id = ? AND account_id = ?
-`);
+let _upsertFileStmt: ReturnType<typeof sqlite.prepare> | null = null;
+export function getUpsertFileStmt() {
+  if (!_upsertFileStmt) {
+    _upsertFileStmt = sqlite.prepare(`
+      INSERT INTO files (
+        id, pool_id, virtual_path, name, size_bytes, mime_type, hash,
+        account_id, drive_file_id, folder_id, is_trashed, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+      ON CONFLICT(pool_id, virtual_path) DO UPDATE SET
+        name = excluded.name,
+        size_bytes = excluded.size_bytes,
+        mime_type = excluded.mime_type,
+        hash = excluded.hash,
+        account_id = excluded.account_id,
+        drive_file_id = excluded.drive_file_id,
+        folder_id = excluded.folder_id,
+        is_trashed = excluded.is_trashed,
+        updated_at = unixepoch()
+    `);
+  }
+  return _upsertFileStmt;
+}
 
-export const trashFileStmt = sqlite.prepare(`
-  UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch()
-  WHERE drive_file_id = ? AND account_id = ?
-`);
+export const upsertFileStmt = {
+  run(...args: any[]) {
+    return (getUpsertFileStmt() as any).run(...args);
+  },
+};
+
+let _deleteFileStmt: ReturnType<typeof sqlite.prepare> | null = null;
+export function getDeleteFileStmt() {
+  if (!_deleteFileStmt) {
+    _deleteFileStmt = sqlite.prepare(`
+      DELETE FROM files WHERE drive_file_id = ? AND account_id = ?
+    `);
+  }
+  return _deleteFileStmt;
+}
+
+export const deleteFileStmt = {
+  run(...args: any[]) {
+    return (getDeleteFileStmt() as any).run(...args);
+  },
+};
+
+let _trashFileStmt: ReturnType<typeof sqlite.prepare> | null = null;
+export function getTrashFileStmt() {
+  if (!_trashFileStmt) {
+    _trashFileStmt = sqlite.prepare(`
+      UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch()
+      WHERE drive_file_id = ? AND account_id = ?
+    `);
+  }
+  return _trashFileStmt;
+}
+
+export const trashFileStmt = {
+  run(...args: any[]) {
+    return (getTrashFileStmt() as any).run(...args);
+  },
+};
 
 export function extractFolderPaths(virtualPath: string): string[] {
   const result: string[] = [];
@@ -68,14 +121,15 @@ export function extractFolderPaths(virtualPath: string): string[] {
   return result;
 }
 
-export function insertFolderRecord(folderPath: string): void {
+export function insertFolderRecord(folderPath: string, poolId = 1): void {
   const folderName = path.posix.basename(folderPath);
   const parentPath = path.posix.dirname(folderPath);
-  const parentId = parentPath === '/' || parentPath === '.' ? null : parentPath;
-  insertFolderStmt.run(folderPath, folderPath, folderName, parentId);
+  const parentId = parentPath === '/' || parentPath === '.' ? null : formatFolderId(poolId, parentPath);
+  const id = formatFolderId(poolId, folderPath);
+  insertFolderStmt.run(id, poolId, folderPath, folderName, parentId);
 }
 
-export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string): void {
+export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string, poolId = 1): void {
   const folders = extractFolderPaths(virtualPathOrFolderPath);
   if (virtualPathOrFolderPath.startsWith('/') && !virtualPathOrFolderPath.includes('.') && virtualPathOrFolderPath !== '/') {
     if (!folders.includes(virtualPathOrFolderPath)) {
@@ -83,17 +137,18 @@ export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string): voi
     }
   }
   for (let i = folders.length - 1; i >= 0; i--) {
-    insertFolderRecord(folders[i]);
+    insertFolderRecord(folders[i], poolId);
   }
 }
 
 export function upsertFileRecord(f: DiscoveredFile): void {
+  const poolId = f.poolId ?? 1;
   const parentPath = path.posix.dirname(f.virtualPath);
-  const folderId = parentPath === '/' || parentPath === '.' ? null : parentPath;
+  const folderId = parentPath === '/' || parentPath === '.' ? null : formatFolderId(poolId, parentPath);
 
   const existingById = sqlite
-    .prepare('SELECT id, virtual_path FROM files WHERE id = ? OR drive_file_id = ?')
-    .get(f.id, f.driveFileId) as { id: string; virtual_path: string } | undefined;
+    .prepare('SELECT id, virtual_path FROM files WHERE pool_id = ? AND (id = ? OR drive_file_id = ?)')
+    .get(poolId, f.id, f.driveFileId) as { id: string; virtual_path: string } | undefined;
 
   if (existingById && existingById.virtual_path !== f.virtualPath) {
     sqlite
@@ -103,6 +158,7 @@ export function upsertFileRecord(f: DiscoveredFile): void {
 
   upsertFileStmt.run(
     f.id,
+    poolId,
     f.virtualPath,
     f.name,
     f.sizeBytes,
@@ -129,6 +185,7 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       throw new Error(`Account ${accountId} does not have a registered root folder`);
     }
 
+    const poolId = accountRecord.poolId ?? 1;
     const folderTree = await resolveRemoteFolderTree(drive, accountRecord.rootFolderId);
     const validFolderIds = folderTree.folderIds;
     const discoveredFiles: DiscoveredFile[] = [];
@@ -187,6 +244,7 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
           accountId,
           driveFileId: item.id,
           isTrashed: Boolean(item.trashed),
+          poolId,
         });
 
         for (const folder of extractFolderPaths(virtualPath)) {
@@ -198,18 +256,22 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
     } while (pageToken);
 
     const localAccountFiles = await db.query.files.findMany({
-      where: and(eq(files.accountId, accountId), eq(files.isTrashed, false)),
+      where: and(
+        eq(files.accountId, accountId),
+        eq(files.poolId, poolId),
+        eq(files.isTrashed, false)
+      ),
     });
 
     const discoveredDriveIds = new Set(discoveredFiles.map((f) => f.driveFileId));
 
     const applySync = sqlite.transaction(() => {
       for (const folder of folderTree.folders) {
-        insertFolderStmt.run(folder.virtualPath, folder.virtualPath, folder.name, folder.parentId);
+        insertFolderRecord(folder.virtualPath, poolId);
       }
 
       for (const folderPath of discoveredFolderPaths) {
-        insertFolderRecord(folderPath);
+        insertFolderRecord(folderPath, poolId);
       }
 
       for (const f of discoveredFiles) {

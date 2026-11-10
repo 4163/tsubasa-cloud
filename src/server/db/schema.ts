@@ -1,11 +1,20 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+
+export const pools = sqliteTable('pools', {
+  id: integer('id').primaryKey(),
+  name: text('name').notNull(),
+  driveFolderName: text('drive_folder_name').notNull().unique(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+});
 
 export const accounts = sqliteTable('accounts', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   displayName: text('display_name').notNull(),
   avatarUrl: text('avatar_url'),
+  poolId: integer('pool_id').notNull().default(1).references(() => pools.id),
   quotaLimitBytes: integer('quota_limit_bytes').notNull().default(16106127360), // 15 GB default
   quotaUsedBytes: integer('quota_used_bytes').notNull().default(0),
   syncState: text('sync_state', { enum: ['idle', 'syncing', 'error'] }).notNull().default('idle'),
@@ -14,23 +23,29 @@ export const accounts = sqliteTable('accounts', {
   rootFolderId: text('root_folder_id'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-});
+}, (table) => [
+  index('accounts_pool_idx').on(table.poolId),
+]);
 
 export const folders = sqliteTable('folders', {
   id: text('id').primaryKey(),
-  virtualPath: text('virtual_path').notNull().unique(),
+  poolId: integer('pool_id').notNull().default(1).references(() => pools.id, { onDelete: 'cascade' }),
+  virtualPath: text('virtual_path').notNull(),
   name: text('name').notNull(),
   parentFolderId: text('parent_folder_id'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 }, (table) => [
+  uniqueIndex('folders_pool_path_idx').on(table.poolId, table.virtualPath),
+  index('folders_pool_parent_idx').on(table.poolId, table.parentFolderId),
   index('folders_parent_idx').on(table.parentFolderId),
   index('folders_path_idx').on(table.virtualPath),
 ]);
 
 export const files = sqliteTable('files', {
   id: text('id').primaryKey(),
-  virtualPath: text('virtual_path').notNull().unique(),
+  poolId: integer('pool_id').notNull().default(1).references(() => pools.id, { onDelete: 'cascade' }),
+  virtualPath: text('virtual_path').notNull(),
   name: text('name').notNull(),
   sizeBytes: integer('size_bytes').notNull().default(0),
   mimeType: text('mime_type').notNull().default('application/octet-stream'),
@@ -43,6 +58,8 @@ export const files = sqliteTable('files', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 }, (table) => [
+  uniqueIndex('files_pool_path_idx').on(table.poolId, table.virtualPath),
+  index('files_pool_trashed_idx').on(table.poolId, table.isTrashed),
   index('files_account_idx').on(table.accountId),
   index('files_folder_idx').on(table.folderId),
   index('files_path_idx').on(table.virtualPath),
@@ -60,6 +77,9 @@ export const transferLogs = sqliteTable('transfer_logs', {
   index('transfer_ts_idx').on(table.timestamp),
 ]);
 
+export type Pool = typeof pools.$inferSelect;
+export type NewPool = typeof pools.$inferInsert;
+
 export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 
@@ -71,4 +91,5 @@ export type NewFileRecord = typeof files.$inferInsert;
 
 export type TransferLog = typeof transferLogs.$inferSelect;
 export type NewTransferLog = typeof transferLogs.$inferInsert;
+
 
