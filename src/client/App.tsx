@@ -235,6 +235,20 @@ export function App() {
   const [clipboard, setClipboard] = useState<ActionPortalClipboard | null>(null);
   const [renameModalItem, setRenameModalItem] = useState<RenameTarget | null>(null);
   const [movePoolTargetAccount, setMovePoolTargetAccount] = useState<AccountItem | null>(null);
+  const [filteredAccountIds, setFilteredAccountIds] = useState<Set<string>>(new Set());
+
+  const handleToggleAccountFilter = useCallback((accountId: string) => {
+    setSelectedIds(new Set());
+    setFilteredAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleNavigate = useCallback(
     (newPath: string) => {
@@ -278,6 +292,20 @@ export function App() {
       handleNavigate(fallback);
     }
   }, [folders, currentPath, handleNavigate]);
+
+  useEffect(() => {
+    setFilteredAccountIds((prev) => {
+      if (prev.size === 0) return prev;
+      const valid = new Set<string>();
+      for (const id of prev) {
+        if (files.some((f) => !f.isTrashed && f.accountId === id)) {
+          valid.add(id);
+        }
+      }
+      if (valid.size === prev.size) return prev;
+      return valid;
+    });
+  }, [files]);
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
@@ -1325,6 +1353,17 @@ export function App() {
     }
   }
 
+  // Count active files per account to show the filter toggle only on accounts with files in the pool
+  const accountFileCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const f of files) {
+      if (!f.isTrashed) {
+        map.set(f.accountId, (map.get(f.accountId) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [files]);
+
   // Aggregate account list merging discovered with storage overview
   const accountItems: AccountItem[] = useMemo(() => {
     const items = discovered.map((d) => {
@@ -1356,6 +1395,7 @@ export function App() {
         mtimeMs: d.mtimeMs,
         poolId: summary?.poolId ?? d.poolId ?? activePoolId,
         canSwitchPool: summary?.canSwitchPool ?? d.canSwitchPool ?? ((summary?.tsubasaUsedBytes ?? 0) === 0),
+        fileCount: accountFileCountMap.get(d.accountId) ?? 0,
       };
     });
 
@@ -1390,7 +1430,7 @@ export function App() {
       const emailB = (b.email || b.id).toLowerCase();
       return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [discovered, storage, pendingDiscrepancies, activePoolId]);
+  }, [discovered, storage, pendingDiscrepancies, activePoolId, accountFileCountMap]);
 
   async function handleTransferFile(fileId: string, targetAccountId: string) {
     const file = files.find((f) => f.id === fileId);
@@ -1518,6 +1558,7 @@ export function App() {
     (nextPoolId: number) => {
       if (nextPoolId === activePoolId) return;
       setActivePoolId(nextPoolId);
+      setFilteredAccountIds(new Set());
       setCurrentPath('/');
       setSelectedIds(new Set());
       setClipboard(null);
@@ -1613,13 +1654,60 @@ export function App() {
     [pools, showToast, loadClusterData, loadFiles, currentPath, loadTrashFiles]
   );
 
+  const displayedFiles = useMemo(() => {
+    if (filteredAccountIds.size === 0) return files;
+    return files.filter((f) => filteredAccountIds.has(f.accountId));
+  }, [files, filteredAccountIds]);
+
+  const displayedTrashedFiles = useMemo(() => {
+    if (filteredAccountIds.size === 0) return trashedFiles;
+    return trashedFiles.filter((f) => filteredAccountIds.has(f.accountId));
+  }, [trashedFiles, filteredAccountIds]);
+
+  const displayedFolders = useMemo(() => {
+    if (filteredAccountIds.size === 0) return folders;
+
+    const validPaths = new Set<string>();
+    const validFolderIds = new Set<string>();
+    const folderById = new Map<string, ClientFolder>();
+    for (const folder of folders) {
+      folderById.set(folder.id, folder);
+    }
+
+    for (const f of displayedFiles) {
+      if (f.isTrashed) continue;
+      const vPath = f.virtualPath.startsWith('/') ? f.virtualPath : '/' + f.virtualPath;
+      let slashIdx = vPath.indexOf('/', 1);
+      while (slashIdx !== -1) {
+        validPaths.add(vPath.slice(0, slashIdx));
+        slashIdx = vPath.indexOf('/', slashIdx + 1);
+      }
+      if (f.folderId) {
+        let currId: string | null = f.folderId;
+        while (currId && folderById.has(currId)) {
+          validFolderIds.add(currId);
+          currId = folderById.get(currId)?.parentFolderId ?? null;
+        }
+      }
+    }
+
+    return folders.filter((folder) => {
+      const canonical = folder.virtualPath === '/'
+        ? '/'
+        : folder.virtualPath.endsWith('/')
+          ? folder.virtualPath.slice(0, -1)
+          : folder.virtualPath;
+      return validPaths.has(canonical) || validFolderIds.has(folder.id);
+    });
+  }, [folders, displayedFiles, filteredAccountIds]);
+
   const actionableSelectedCount = useMemo(() => {
     return Array.from(selectedIds).filter((id) => id !== '__parent__').length;
   }, [selectedIds]);
 
-  const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => selectedIds.has(f.id));
+  const selectedFiles = (currentNav === 'trash' ? displayedTrashedFiles : displayedFiles).filter((f) => selectedIds.has(f.id));
   const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
-  const trashedTotalBytes = trashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+  const trashedTotalBytes = displayedTrashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
 
   return (
     <div
@@ -1633,6 +1721,8 @@ export function App() {
 
       <Sidebar
         accounts={accountItems}
+        filteredAccountIds={filteredAccountIds}
+        onToggleAccountFilter={handleToggleAccountFilter}
         tsubasaUsedBytes={storage?.totalTsubasaUsedBytes ?? storage?.systemStorage?.systemBytesTotal ?? 0}
         poolHeadroomBytes={storage?.totalHeadroomBytes ?? 0}
         totalLimitBytes={storage?.totalLimitBytes ?? 0}
@@ -1688,7 +1778,7 @@ export function App() {
           onSyncAll={handleSyncAll}
           isSyncing={isSyncing}
           isTrashView={currentNav === 'trash'}
-          trashedCount={trashedFiles.length}
+          trashedCount={displayedTrashedFiles.length}
           onEmptyTrash={() => setConfirmEmptyTrash(true)}
           selectedCount={actionableSelectedCount}
           selectedTotalBytes={selectedTotalBytes}
@@ -1705,8 +1795,8 @@ export function App() {
         />
 
         <FileTable
-          files={currentNav === 'trash' ? trashedFiles : files}
-          folders={currentNav === 'trash' ? [] : folders}
+          files={currentNav === 'trash' ? displayedTrashedFiles : displayedFiles}
+          folders={currentNav === 'trash' ? [] : displayedFolders}
           currentPath={currentPath}
           searchQuery={searchQuery}
           selectedIds={selectedIds}

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolder, IconTrash, IconPlus, IconClock, IconEdit, IconChevronDown } from './Icons.js';
+import { IconFolder, IconTrash, IconPlus, IconClock, IconEdit, IconChevronDown, IconFunnel, IconFunnelX } from './Icons.js';
 import { AccountAvatar } from './AccountAvatar.js';
 import brandLogo from '../assets/brand-mono.png';
 
@@ -57,6 +57,7 @@ export interface AccountItem {
   mtimeMs?: number;
   poolId?: number;
   canSwitchPool?: boolean;
+  fileCount?: number;
 }
 
 interface SidebarProps {
@@ -89,6 +90,8 @@ interface SidebarProps {
   onDropItemsToRoot?: (items: Array<{ kind: 'file' | 'folder'; id: string; name?: string; virtualPath?: string; isTrashed?: boolean }>) => void;
   onDropItemsToTrash?: (items: Array<{ kind: 'file' | 'folder'; id: string; name?: string; virtualPath?: string; isTrashed?: boolean }>) => void;
   onDropExternalToRoot?: (dataTransfer: DataTransfer) => void;
+  filteredAccountIds?: Set<string>;
+  onToggleAccountFilter?: (accountId: string) => void;
 }
 
 const styles = stylex.create({
@@ -490,6 +493,9 @@ const styles = stylex.create({
     flexDirection: 'column',
     gap: spacing.space2,
   },
+  accountCardFiltered: {
+    borderColor: colors.brandAccent,
+  },
   accountTop: {
     display: 'flex',
     alignItems: 'center',
@@ -507,6 +513,12 @@ const styles = stylex.create({
     gap: '2px',
     minWidth: 0,
   },
+  accountNameRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space1,
+    minWidth: 0,
+  },
   accountName: {
     fontSize: typography.fontSizeMeta,
     fontWeight: typography.fontWeightTitle,
@@ -514,6 +526,43 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    minWidth: 0,
+  },
+  accountFilterBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    padding: '0px',
+    backgroundColor: 'transparent',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'transparent',
+    borderRadius: radius.compact,
+    color: colors.secondaryText,
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.surface,
+      borderColor: colors.borderSubtle,
+      color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${colors.focusRing}`,
+      outlineOffset: '1px',
+    },
+  },
+  accountFilterBtnActive: {
+    backgroundColor: colors.brandAccentSurface,
+    borderColor: colors.brandAccent,
+    color: colors.brandAccent,
+    ':hover': {
+      backgroundColor: colors.brandAccentSurface,
+      borderColor: colors.brandAccentHover,
+      color: colors.brandAccentHover,
+    },
   },
   redactedEmail: {
     fontSize: '10px',
@@ -1066,6 +1115,8 @@ export function Sidebar({
   onDropItemsToRoot,
   onDropItemsToTrash,
   onDropExternalToRoot,
+  filteredAccountIds,
+  onToggleAccountFilter,
 }: SidebarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [authUrls, setAuthUrls] = useState<Record<string, string>>({});
@@ -1404,9 +1455,17 @@ export function Sidebar({
               : accountCapacityBytes > 0
                 ? Math.min(100, Math.max(0, Math.round((tsubasaUsedBytes / accountCapacityBytes) * 100)))
                 : 0;
+            const hasFiles = (acc.fileCount ?? 0) > 0 || (acc.tsubasaUsedBytes ?? 0) > 0;
+            const isFiltered = Boolean(filteredAccountIds?.has(acc.id));
 
             return (
-              <div key={acc.id} {...stylex.props(styles.accountCard)}>
+              <div
+                key={acc.id}
+                {...stylex.props(
+                  styles.accountCard,
+                  isFiltered && styles.accountCardFiltered
+                )}
+              >
                 <div {...stylex.props(styles.accountTop)}>
                   <div {...stylex.props(styles.accountNameGroup)}>
                     <AccountAvatar
@@ -1416,12 +1475,32 @@ export function Sidebar({
                       index={index}
                     />
                     <div {...stylex.props(styles.accountTextGroup)}>
-                      <span
-                        {...stylex.props(styles.accountName)}
-                        title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
-                      >
-                        {acc.displayName || acc.id}
-                      </span>
+                      <div {...stylex.props(styles.accountNameRow)}>
+                        <span
+                          {...stylex.props(styles.accountName)}
+                          title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
+                        >
+                          {acc.displayName || acc.id}
+                        </span>
+                        {hasFiles && (
+                          <button
+                            type="button"
+                            {...stylex.props(
+                              styles.accountFilterBtn,
+                              isFiltered && styles.accountFilterBtnActive
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleAccountFilter?.(acc.id);
+                            }}
+                            title={isFiltered ? 'Remove filter for this account' : 'Filter files on this account'}
+                            aria-label={isFiltered ? `Remove filter for ${acc.displayName || acc.id}` : `Filter files on ${acc.displayName || acc.id}`}
+                            aria-pressed={isFiltered}
+                          >
+                            {isFiltered ? <IconFunnelX size={11} /> : <IconFunnel size={11} />}
+                          </button>
+                        )}
+                      </div>
                       <RedactedEmail email={acc.email || acc.id} />
                     </div>
                   </div>
