@@ -23,6 +23,8 @@ import {
   ejectFileToDriveRoot,
   removeMissingFile,
   rebalanceFile,
+  rebalanceFilesBatch,
+  RebalanceValidationError,
   executeAutoRebalance,
   disableDriveAccount,
   enableDriveAccount,
@@ -946,6 +948,31 @@ const routes = app
         const result = await rebalanceFile(fileId, targetAccountId);
         return c.json(result);
       } catch (err) {
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/rebalance/batch',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (!Array.isArray(body?.fileIds) || body.fileIds.length === 0 || typeof body?.targetAccountId !== 'string') {
+        return c.json({ error: 'fileIds (non-empty array) and targetAccountId (string) required' }, 400);
+      }
+      return { fileIds: body.fileIds as string[], targetAccountId: body.targetAccountId };
+    }),
+    async (c) => {
+      const { fileIds, targetAccountId } = c.req.valid('json');
+      try {
+        const result = await rebalanceFilesBatch(fileIds, targetAccountId);
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof RebalanceValidationError) {
+          return c.json({ error: err.message, code: 'VALIDATION_ERROR' }, 400);
+        }
         if (err instanceof InsufficientStorageError) {
           return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
         }

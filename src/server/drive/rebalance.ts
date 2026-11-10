@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { db } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { getDriveClient } from './client.js';
 import { copyDriveFileCrossAccount, deleteDriveFileIgnoreNotFound } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
@@ -10,11 +10,17 @@ import {
   calculateHeadroom,
   getAccountTransferStats,
   recordTransfer,
-  MAX_SINGLE_FILE_BYTES,
   InsufficientStorageError,
   type AccountTransferStats,
 } from '../storage/index.js';
 import { findFolderAffinityAccounts } from '../storage/placement.js';
+
+export class RebalanceValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RebalanceValidationError';
+  }
+}
 
 export interface RebalanceOperationResult {
   fileId: string;
@@ -23,6 +29,14 @@ export interface RebalanceOperationResult {
   targetAccountId: string;
   newDriveFileId: string;
   bytesMoved: number;
+}
+
+export interface BatchRebalanceResult {
+  sourceAccountId: string;
+  targetAccountId: string;
+  totalFiles: number;
+  totalBytesMoved: number;
+  results: RebalanceOperationResult[];
 }
 
 export interface AccountRebalancePlan {
@@ -35,17 +49,45 @@ export async function rebalanceFile(
   fileId: string,
   targetAccountId: string
 ): Promise<RebalanceOperationResult> {
-  const file = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-  });
+  const batch = await rebalanceFilesBatch([fileId], targetAccountId);
+  const result = batch.results[0];
+  if (!result) {
+    throw new Error(`Failed to rebalance file ${fileId}`);
+  }
+  return result;
+}
 
-  if (!file) {
-    throw new Error(`File ${fileId} not found`);
+export async function rebalanceFilesBatch(
+  fileIds: string[],
+  targetAccountId: string
+): Promise<BatchRebalanceResult> {
+  if (!Array.isArray(fileIds) || fileIds.length === 0) {
+    throw new RebalanceValidationError('fileIds must be a non-empty array');
   }
 
-  const sourceAccountId = file.accountId;
+  const uniqueFileIds = Array.from(new Set(fileIds));
+
+  const batchFiles = await db.query.files.findMany({
+    where: inArray(files.id, uniqueFileIds),
+  });
+
+  if (batchFiles.length !== uniqueFileIds.length) {
+    const foundIds = new Set(batchFiles.map((f) => f.id));
+    const missing = uniqueFileIds.filter((id) => !foundIds.has(id));
+    if (uniqueFileIds.length === 1 && missing.length === 1) {
+      throw new RebalanceValidationError(`File ${missing[0]} not found`);
+    }
+    throw new RebalanceValidationError(`Files not found: ${missing.join(', ')}`);
+  }
+
+  const sourceAccountId = batchFiles[0].accountId;
+  const hasMultipleSources = batchFiles.some((f) => f.accountId !== sourceAccountId);
+  if (hasMultipleSources) {
+    throw new RebalanceValidationError('All files in a single batch rebalance must belong to the same source account');
+  }
+
   if (sourceAccountId === targetAccountId) {
-    throw new Error('Target account must be different from source account');
+    throw new RebalanceValidationError('Target account must be different from source account');
   }
 
   const sourceAccount = await db.query.accounts.findFirst({
@@ -53,7 +95,7 @@ export async function rebalanceFile(
   });
 
   if (!sourceAccount) {
-    throw new Error(`Source account ${sourceAccountId} not registered`);
+    throw new RebalanceValidationError(`Source account ${sourceAccountId} not registered`);
   }
 
   const targetAccount = await db.query.accounts.findFirst({
@@ -61,111 +103,127 @@ export async function rebalanceFile(
   });
 
   if (!targetAccount || !targetAccount.rootFolderId) {
-    throw new Error(`Target account ${targetAccountId} not registered or missing root folder`);
+    throw new RebalanceValidationError(`Target account ${targetAccountId} not registered or missing root folder`);
   }
 
   if (targetAccount.poolId !== sourceAccount.poolId) {
-    throw new Error('Cannot rebalance file across different storage pools');
+    throw new RebalanceValidationError('Cannot rebalance files across different storage pools');
   }
 
   if (targetAccount.isDisabled) {
-    throw new Error(`Target account ${targetAccountId} is disabled`);
+    throw new RebalanceValidationError(`Target account ${targetAccountId} is disabled`);
   }
+
+  const totalBytes = batchFiles.reduce((sum, f) => sum + f.sizeBytes, 0);
 
   const targetHeadroom = calculateHeadroom(
     targetAccount.quotaLimitBytes,
     targetAccount.quotaUsedBytes
   );
 
-  if (targetHeadroom < file.sizeBytes) {
+  if (targetHeadroom < totalBytes) {
     throw new InsufficientStorageError(
-      `Target account ${targetAccountId} does not have enough headroom for ${file.sizeBytes} bytes`
+      `Target account ${targetAccountId} does not have enough headroom for batch of ${totalBytes} bytes`
     );
   }
 
-  // Google Drive server-side copy consumes target account's 750 GB daily upload limit
   const targetTransferStats = await getAccountTransferStats(targetAccountId);
-  if (targetTransferStats.remainingUploadBytes24h < file.sizeBytes) {
+  if (targetTransferStats.remainingUploadBytes24h < totalBytes) {
     throw new InsufficientStorageError(
-      `Target account ${targetAccountId} has insufficient Google 750 GB daily transfer quota (${targetTransferStats.remainingUploadBytes24h} bytes remaining, requires ${file.sizeBytes} bytes)`
+      `Target account ${targetAccountId} has insufficient Google 750 GB daily transfer quota (${targetTransferStats.remainingUploadBytes24h} bytes remaining, requires ${totalBytes} bytes)`
     );
   }
 
   const driveTarget = getDriveClient(targetAccountId);
-  const parentDir = path.posix.dirname(file.virtualPath);
-  const targetFolderId = await ensureRemoteFolderHierarchy(
-    driveTarget,
-    targetAccount.rootFolderId,
-    parentDir
-  );
+  const results: RebalanceOperationResult[] = [];
+  let totalBytesMoved = 0;
 
-  const newDriveFileId = await copyDriveFileCrossAccount({
-    sourceAccountId,
-    sourceDriveFileId: file.driveFileId,
-    targetAccountId,
-    targetAccountEmail: targetAccount.email,
-    targetRemoteFolderId: targetFolderId,
-    destFileName: file.name,
-    appProperties: {
-      tsubasa_managed: 'true',
-      tsubasa_virtual_path: file.virtualPath,
-      tsubasa_virtual_id: file.id,
-      tsubasa_checksum: file.hash || '',
-    },
-    fields: 'id, name, size, mimeType, md5Checksum',
-  });
+  try {
+    for (const file of batchFiles) {
+      const parentDir = path.posix.dirname(file.virtualPath);
+      const targetFolderId = await ensureRemoteFolderHierarchy(
+        driveTarget,
+        targetAccount.rootFolderId,
+        parentDir
+      );
 
-  if (file.isTrashed) {
-    try {
-      await driveTarget.files.update({
-        fileId: newDriveFileId,
-        requestBody: { trashed: true },
-        supportsAllDrives: false,
+      const newDriveFileId = await copyDriveFileCrossAccount({
+        sourceAccountId,
+        sourceDriveFileId: file.driveFileId,
+        targetAccountId,
+        targetAccountEmail: targetAccount.email,
+        targetRemoteFolderId: targetFolderId,
+        destFileName: file.name,
+        appProperties: {
+          tsubasa_managed: 'true',
+          tsubasa_virtual_path: file.virtualPath,
+          tsubasa_virtual_id: file.id,
+          tsubasa_checksum: file.hash || '',
+        },
+        fields: 'id, name, size, mimeType, md5Checksum',
       });
-    } catch (err) {
-      console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
+
+      if (file.isTrashed) {
+        try {
+          await driveTarget.files.update({
+            fileId: newDriveFileId,
+            requestBody: { trashed: true },
+            supportsAllDrives: false,
+          });
+        } catch (err) {
+          console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
+        }
+      }
+
+      await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId);
+
+      await db
+        .update(files)
+        .set({
+          accountId: targetAccountId,
+          driveFileId: newDriveFileId,
+          updatedAt: new Date(),
+        })
+        .where(eq(files.id, file.id));
+
+      await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
+
+      totalBytesMoved += file.sizeBytes;
+      results.push({
+        fileId: file.id,
+        virtualPath: file.virtualPath,
+        sourceAccountId,
+        targetAccountId,
+        newDriveFileId,
+        bytesMoved: file.sizeBytes,
+      });
+    }
+  } finally {
+    if (totalBytesMoved > 0) {
+      await db
+        .update(accounts)
+        .set({
+          quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${totalBytesMoved})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, sourceAccountId));
+
+      await db
+        .update(accounts)
+        .set({
+          quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${totalBytesMoved}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, targetAccountId));
     }
   }
 
-  // Delete original file from source account
-  await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId);
-
-  // Update SQLite index and accounts quota usage
-  await db
-    .update(files)
-    .set({
-      accountId: targetAccountId,
-      driveFileId: newDriveFileId,
-      updatedAt: new Date(),
-    })
-    .where(eq(files.id, file.id));
-
-  await db
-    .update(accounts)
-    .set({
-      quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${file.sizeBytes})`,
-      updatedAt: new Date(),
-    })
-    .where(eq(accounts.id, sourceAccountId));
-
-  await db
-    .update(accounts)
-    .set({
-      quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${file.sizeBytes}`,
-      updatedAt: new Date(),
-    })
-    .where(eq(accounts.id, targetAccountId));
-
-  // Server-side copy consumes target account's 750 GB daily upload/copy limit
-  await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
-
   return {
-    fileId: file.id,
-    virtualPath: file.virtualPath,
     sourceAccountId,
     targetAccountId,
-    newDriveFileId,
-    bytesMoved: file.sizeBytes,
+    totalFiles: results.length,
+    totalBytesMoved,
+    results,
   };
 }
 
