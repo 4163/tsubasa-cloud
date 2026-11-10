@@ -67,6 +67,9 @@ interface SidebarProps {
   isSyncing: boolean;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
+  onDropItemsToRoot?: (items: Array<{ kind: 'file' | 'folder'; id: string; name?: string; virtualPath?: string; isTrashed?: boolean }>) => void;
+  onDropItemsToTrash?: (items: Array<{ kind: 'file' | 'folder'; id: string; name?: string; virtualPath?: string; isTrashed?: boolean }>) => void;
+  onDropExternalToRoot?: (dataTransfer: DataTransfer) => void;
 }
 
 const styles = stylex.create({
@@ -222,6 +225,24 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.selectionBg,
       color: colors.primaryText,
+    },
+  },
+  navItemDragOver: {
+    backgroundColor: colors.brandAccentSurface,
+    color: colors.brandAccent,
+    borderLeftColor: colors.accentGold,
+    ':hover': {
+      backgroundColor: colors.brandAccentSurface,
+      color: colors.brandAccent,
+    },
+  },
+  navItemDragOverTrash: {
+    backgroundColor: colors.dangerSurface,
+    color: colors.danger,
+    borderLeftColor: colors.danger,
+    ':hover': {
+      backgroundColor: colors.dangerSurface,
+      color: colors.danger,
     },
   },
   navIcon: {
@@ -910,10 +931,35 @@ export function Sidebar({
   isSyncing,
   isMobileOpen = false,
   onCloseMobile,
+  onDropItemsToRoot,
+  onDropItemsToTrash,
+  onDropExternalToRoot,
 }: SidebarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [authUrls, setAuthUrls] = useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [dragOverNav, setDragOverNav] = useState<'files' | 'trash' | null>(null);
+
+  useEffect(() => {
+    const handleDragEnd = () => setDragOverNav(null);
+    const handleWindowDragLeave = (e: DragEvent) => {
+      if (
+        !e.relatedTarget ||
+        e.clientX <= 0 ||
+        e.clientY <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight
+      ) {
+        setDragOverNav(null);
+      }
+    };
+    window.addEventListener('dragend', handleDragEnd);
+    window.addEventListener('dragleave', handleWindowDragLeave);
+    return () => {
+      window.removeEventListener('dragend', handleDragEnd);
+      window.removeEventListener('dragleave', handleWindowDragLeave);
+    };
+  }, []);
 
   useEffect(() => {
     for (const acc of accounts) {
@@ -1013,8 +1059,44 @@ export function Sidebar({
         <nav aria-label="Main Navigation" {...stylex.props(styles.navSection)}>
           <button
             type="button"
-            {...stylex.props(styles.navItem, currentNav === 'files' && styles.navItemActive)}
+            {...stylex.props(
+              styles.navItem,
+              currentNav === 'files' && styles.navItemActive,
+              dragOverNav === 'files' && styles.navItemDragOver
+            )}
             onClick={() => onSelectNav('files')}
+            onDragOver={(e) => {
+              const hasItems = e.dataTransfer?.types?.includes('application/x-tsubasa-items');
+              const hasFiles = e.dataTransfer?.types?.includes('Files');
+              if (hasItems || hasFiles) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = hasItems ? 'move' : 'copy';
+                setDragOverNav('files');
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDragOverNav((prev) => (prev === 'files' ? null : prev));
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              (e.nativeEvent as any).__tsubasaHandled = true;
+              setDragOverNav(null);
+              if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
+                try {
+                  const raw = e.dataTransfer.getData('application/x-tsubasa-items');
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    onDropItemsToRoot?.(parsed);
+                  }
+                } catch {}
+              } else if (e.dataTransfer.types.includes('Files') && e.dataTransfer.files.length > 0) {
+                onDropExternalToRoot?.(e.dataTransfer);
+              }
+            }}
           >
             <IconFolder {...stylex.props(styles.navIcon)} />
             All files
@@ -1022,8 +1104,40 @@ export function Sidebar({
 
           <button
             type="button"
-            {...stylex.props(styles.navItem, currentNav === 'trash' && styles.navItemActive)}
+            {...stylex.props(
+              styles.navItem,
+              currentNav === 'trash' && styles.navItemActive,
+              dragOverNav === 'trash' && styles.navItemDragOverTrash
+            )}
             onClick={() => onSelectNav('trash')}
+            onDragOver={(e) => {
+              if (currentNav !== 'trash' && e.dataTransfer?.types?.includes('application/x-tsubasa-items')) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                setDragOverNav('trash');
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDragOverNav((prev) => (prev === 'trash' ? null : prev));
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              (e.nativeEvent as any).__tsubasaHandled = true;
+              setDragOverNav(null);
+              if (currentNav !== 'trash' && e.dataTransfer.types.includes('application/x-tsubasa-items')) {
+                try {
+                  const raw = e.dataTransfer.getData('application/x-tsubasa-items');
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    onDropItemsToTrash?.(parsed);
+                  }
+                } catch {}
+              }
+            }}
           >
             <IconTrash {...stylex.props(styles.navIcon)} />
             Trash

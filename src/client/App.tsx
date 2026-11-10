@@ -688,6 +688,7 @@ export function App() {
   useEffect(() => {
     const handleWindowDragOver = (e: DragEvent) => {
       if (currentNav === 'trash') return;
+      if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
@@ -696,6 +697,7 @@ export function App() {
 
     const handleWindowDrop = async (e: DragEvent) => {
       if (currentNav === 'trash') return;
+      if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
         if ((e as any).__tsubasaHandled) return;
@@ -875,7 +877,7 @@ export function App() {
             return remaining.length > 0 ? { ...prev, items: remaining } : null;
           });
           setSelectedIds(new Set());
-          await loadFiles(currentPath);
+          await Promise.all([loadFiles(currentPath), loadTrashFiles(), loadClusterData()]);
         } else {
           setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to move items');
         }
@@ -883,7 +885,90 @@ export function App() {
         setErrorNotice(err instanceof Error ? err.message : String(err));
       }
     },
-    [currentPath, loadFiles, showToast]
+    [currentPath, loadFiles, loadTrashFiles, loadClusterData, showToast]
+  );
+
+  const handleTrashItems = useCallback(
+    async (
+      itemsToTrash: Array<{
+        kind: 'file' | 'folder';
+        id: string;
+        name?: string;
+        virtualPath?: string;
+        isTrashed?: boolean;
+      }>
+    ) => {
+      const activeItems = itemsToTrash.filter((item) => !item.isTrashed);
+      if (activeItems.length === 0) return;
+
+      const trashedFolders = activeItems.filter((i) => i.kind === 'folder');
+      const trashedFilesList = activeItems.filter((i) => i.kind === 'file');
+
+      let effectivePath = currentPath;
+      const trashedIds = new Set<string>();
+
+      try {
+        for (const folder of trashedFolders) {
+          const fPath = folder.virtualPath || folder.id;
+          const res = await client.api.folders.$delete({
+            query: { virtualPath: fPath },
+          });
+          if (res.ok) {
+            trashedIds.add(folder.id);
+            if (fPath && (effectivePath === fPath || effectivePath.startsWith(fPath + '/'))) {
+              const parts = fPath.split('/').filter(Boolean);
+              effectivePath = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
+            }
+          }
+        }
+
+        for (const file of trashedFilesList) {
+          const res = await client.api.files[':id'].trash.$post({
+            param: { id: file.id },
+          });
+          if (res.ok) {
+            trashedIds.add(file.id);
+          }
+        }
+
+        if (trashedIds.size > 0) {
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            for (const id of trashedIds) {
+              next.delete(id);
+            }
+            return next;
+          });
+
+          setClipboard((prev) => {
+            if (!prev || prev.mode !== 'cut') return prev;
+            const remaining = prev.items.filter((i) => !trashedIds.has(i.id));
+            return remaining.length > 0 ? { ...prev, items: remaining } : null;
+          });
+
+          if (effectivePath !== currentPath) {
+            handleNavigate(effectivePath);
+          }
+
+          await Promise.all([
+            loadFiles(effectivePath),
+            loadTrashFiles(),
+            loadClusterData(),
+          ]);
+
+          if (trashedIds.size === 1) {
+            const single = activeItems.find((i) => trashedIds.has(i.id));
+            const singleName = single?.name || (single?.virtualPath ? single.virtualPath.split('/').pop() : 'item');
+            showToast(`Moved "${singleName}" to trash.`);
+          } else {
+            showToast(`Moved ${trashedIds.size} items to trash.`);
+          }
+        }
+      } catch (err) {
+        setErrorNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [currentPath, handleNavigate, loadFiles, loadTrashFiles, loadClusterData, showToast]
   );
 
   const handleCopyItems = useCallback(
@@ -1384,6 +1469,9 @@ export function App() {
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
         onCloseMobile={() => setIsMobileOpen(false)}
+        onDropItemsToRoot={(items) => handleMoveItems(items, '/')}
+        onDropItemsToTrash={handleTrashItems}
+        onDropExternalToRoot={(dt) => handleDropExternalToPath('/', dt)}
       />
 
       <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import {
@@ -307,6 +307,12 @@ export function ActionPortal({
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
+  useEffect(() => {
+    const handleDragEnd = () => setDragOverIndex(null);
+    window.addEventListener('dragend', handleDragEnd);
+    return () => window.removeEventListener('dragend', handleDragEnd);
+  }, []);
+
   // Normalize path segments
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
   const segments = cleanPath.split('/').filter(Boolean);
@@ -321,12 +327,13 @@ export function ActionPortal({
   }
 
   function handleBreadcrumbDragOver(e: React.DragEvent, index: number) {
-    if (isTrashView) return;
+    const hasTsubasa = e.dataTransfer?.types?.includes('application/x-tsubasa-items');
+    const hasFiles = e.dataTransfer?.types?.includes('Files');
+    if (!hasTsubasa && !hasFiles) return;
+
     e.preventDefault();
     e.stopPropagation();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = 'move';
-    }
+    e.dataTransfer.dropEffect = hasTsubasa ? 'move' : 'copy';
     setDragOverIndex(index);
   }
 
@@ -339,9 +346,9 @@ export function ActionPortal({
   }
 
   function handleBreadcrumbDrop(e: React.DragEvent, index: number) {
-    if (isTrashView) return;
     e.preventDefault();
     e.stopPropagation();
+    (e.nativeEvent as any).__tsubasaHandled = true;
     setDragOverIndex(null);
     const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
 

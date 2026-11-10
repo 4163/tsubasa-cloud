@@ -584,6 +584,16 @@ function formatDate(dateValue: Date | number | string | null | undefined): strin
       });
 }
 
+function isInternalItemDrag(e: React.DragEvent | DragEvent): boolean {
+  return Boolean(e.dataTransfer?.types?.includes('application/x-tsubasa-items'));
+}
+
+function isExternalFileDrag(e: React.DragEvent | DragEvent): boolean {
+  const types = e.dataTransfer?.types;
+  if (!types) return false;
+  return types.includes('Files') && !types.includes('application/x-tsubasa-items');
+}
+
 export async function extractDataTransferEntries(
   dataTransfer: DataTransfer,
   basePath: string
@@ -954,7 +964,7 @@ export function FileTable({
     setDragOverRowId(null);
 
     if (e.dataTransfer) {
-      if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
+      if (isInternalItemDrag(e)) {
         try {
           const raw = e.dataTransfer.getData('application/x-tsubasa-items');
           const parsed = JSON.parse(raw);
@@ -965,7 +975,7 @@ export function FileTable({
         } catch {}
       }
 
-      if (e.dataTransfer.types.includes('Files')) {
+      if (isExternalFileDrag(e)) {
         if (onStageDroppedUpload) {
           const extracted = await extractDataTransferEntries(e.dataTransfer, cleanPath);
           if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
@@ -986,7 +996,7 @@ export function FileTable({
     setIsDropZoneActive(false);
     setDragOverRowId(null);
 
-    if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
+    if (isInternalItemDrag(e)) {
       try {
         const raw = e.dataTransfer.getData('application/x-tsubasa-items');
         const parsed = JSON.parse(raw);
@@ -997,7 +1007,7 @@ export function FileTable({
       } catch {}
     }
 
-    if (e.dataTransfer.types.includes('Files')) {
+    if (isExternalFileDrag(e)) {
       if (onStageDroppedUpload) {
         const extracted = await extractDataTransferEntries(e.dataTransfer, targetVirtualPath);
         if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
@@ -1264,21 +1274,27 @@ export function FileTable({
 
   const handleRowDragStart = (
     e: React.DragEvent,
-    item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }
+    item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string; isTrashed?: boolean }
   ) => {
-    if (isTrashView) return;
     setMarqueeRect(null);
     const isItemSelected = selectedIds.has(item.id);
-    let dragPayload: Array<{ kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }> = [];
+    let dragPayload: Array<{
+      kind: 'file' | 'folder';
+      id: string;
+      name: string;
+      virtualPath: string;
+      isTrashed?: boolean;
+    }> = [];
 
     if (isItemSelected && selectedIds.size > 1) {
       dragPayload = selectableItems
         .filter((it) => selectedIds.has(it.data.id))
         .map((it) => ({
-          kind: it.kind as 'file' | 'folder',
+          kind: it.kind === 'folder' ? 'folder' : 'file',
           id: it.data.id,
           name: it.data.name,
           virtualPath: it.data.virtualPath,
+          ...(it.kind === 'trash' ? { isTrashed: true } : {}),
         }));
     } else {
       dragPayload = [item];
@@ -1589,10 +1605,7 @@ export function FileTable({
         onMouseDown={handleMouseDown}
         onDragOver={(e) => {
           if (isTrashView) return;
-          if (
-            e.dataTransfer?.types?.includes('Files') ||
-            e.dataTransfer?.types?.includes('application/x-tsubasa-items')
-          ) {
+          if (isExternalFileDrag(e) || isInternalItemDrag(e)) {
             e.preventDefault();
           }
         }}
@@ -1612,13 +1625,16 @@ export function FileTable({
               isDropZoneActive && !isTrashView && styles.emptyStateDragOver
             )}
             onDragEnter={(e) => {
-              if (isTrashView) return;
+              if (isTrashView || !isExternalFileDrag(e)) return;
               e.preventDefault();
               e.stopPropagation();
               setIsDropZoneActive(true);
             }}
             onDragOver={(e) => {
-              if (isTrashView) return;
+              if (isTrashView || !isExternalFileDrag(e)) {
+                if (isDropZoneActive) setIsDropZoneActive(false);
+                return;
+              }
               e.preventDefault();
               e.stopPropagation();
               if (e.dataTransfer) {
@@ -1715,7 +1731,7 @@ export function FileTable({
                         e.preventDefault();
                         e.stopPropagation();
                         if (e.dataTransfer) {
-                          e.dataTransfer.dropEffect = 'copy';
+                          e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
                         }
                         setDragOverRowId('__parent__');
                       }}
@@ -1781,7 +1797,7 @@ export function FileTable({
                         e.preventDefault();
                         e.stopPropagation();
                         if (e.dataTransfer) {
-                          e.dataTransfer.dropEffect = 'copy';
+                          e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
                         }
                         setDragOverRowId(folder.id);
                       }}
@@ -1882,6 +1898,16 @@ export function FileTable({
                     <div
                       key={`trash-${file.id}`}
                       data-row="true"
+                      draggable={true}
+                      onDragStart={(e) =>
+                        handleRowDragStart(e, {
+                          kind: 'file',
+                          id: file.id,
+                          name: file.name,
+                          virtualPath: file.virtualPath,
+                          isTrashed: true,
+                        })
+                      }
                       {...stylex.props(styles.row, isSelected && styles.rowSelected)}
                       style={{
                         height: `${virtualRow.size}px`,
@@ -2150,13 +2176,16 @@ export function FileTable({
             <div
               {...stylex.props(styles.emptyDropZone)}
               onDragEnter={(e) => {
-                if (isTrashView) return;
+                if (isTrashView || !isExternalFileDrag(e)) return;
                 e.preventDefault();
                 e.stopPropagation();
                 setIsDropZoneActive(true);
               }}
               onDragOver={(e) => {
-                if (isTrashView) return;
+                if (isTrashView || !isExternalFileDrag(e)) {
+                  if (isDropZoneActive) setIsDropZoneActive(false);
+                  return;
+                }
                 e.preventDefault();
                 e.stopPropagation();
                 if (e.dataTransfer) {
