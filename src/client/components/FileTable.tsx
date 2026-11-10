@@ -87,9 +87,9 @@ const styles = stylex.create({
     borderLeftColor: 'transparent',
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
-    gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
+    gridTemplateColumns: '16px 40px minmax(240px, 3fr) 140px 110px 140px 90px',
     alignItems: 'stretch',
-    paddingLeft: spacing.space3,
+    paddingLeft: '0px',
     paddingRight: spacing.space4,
     fontSize: typography.fontSizeTableHeader,
     fontWeight: typography.fontWeightTableHeader,
@@ -100,6 +100,11 @@ const styles = stylex.create({
     '@media (max-width: 768px)': {
       display: 'none',
     },
+  },
+  headerGutter: {
+    width: '16px',
+    height: '100%',
+    boxSizing: 'border-box',
   },
   colRight: {
     textAlign: 'right',
@@ -187,7 +192,19 @@ const styles = stylex.create({
     flexShrink: 0,
     userSelect: 'none',
   },
-  row: {
+  gutterCell: {
+    width: '16px',
+    flexShrink: 0,
+    height: '100%',
+    boxSizing: 'border-box',
+    cursor: 'default',
+    backgroundColor: 'transparent',
+    userSelect: 'none',
+    '@media (pointer: coarse)': {
+      display: 'none',
+    },
+  },
+  rowWrapper: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -199,10 +216,42 @@ const styles = stylex.create({
     borderLeftWidth: '3px',
     borderLeftStyle: 'solid',
     borderLeftColor: 'transparent',
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    boxSizing: 'border-box',
+    backgroundColor: {
+      default: 'transparent',
+      ':has([data-row="true"]:hover)': colors.rowHover,
+    },
+    userSelect: 'none',
+    transition: motion.transitionFast,
+    '@media (pointer: coarse)': {
+      height: layout.mobileRowHeight,
+    },
+  },
+  rowWrapperSelected: {
+    borderLeftColor: colors.accentGold,
+    backgroundColor: {
+      default: colors.selectionBg,
+      ':has([data-row="true"]:hover)': colors.selectionBg,
+    },
+  },
+  rowWrapperDragOver: {
+    borderLeftColor: colors.accentGold,
+    backgroundColor: {
+      default: colors.brandAccentSurface,
+      ':has([data-row="true"]:hover)': colors.brandAccentSurface,
+    },
+  },
+  rowMain: {
+    flex: 1,
+    minWidth: 0,
+    height: '100%',
     display: 'grid',
     gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
     alignItems: 'center',
-    paddingLeft: spacing.space3,
+    paddingLeft: '0px',
     paddingRight: spacing.space4,
     boxSizing: 'border-box',
     cursor: 'default',
@@ -212,17 +261,10 @@ const styles = stylex.create({
     fontFamily: typography.fontFamilyBody,
     backgroundColor: 'transparent',
     transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-    },
     '@media (pointer: coarse)': {
-      height: layout.mobileRowHeight,
       gridTemplateColumns: '36px 32px 1fr 36px',
       paddingLeft: spacing.space2,
       paddingRight: spacing.space3,
-      ':hover': {
-        backgroundColor: 'unset',
-      },
       ':active': {
         backgroundColor: colors.rowHover,
         transition: motion.transitionTap,
@@ -231,11 +273,9 @@ const styles = stylex.create({
   },
   rowSelected: {
     backgroundColor: colors.selectionBg,
-    borderLeftColor: colors.accentGold,
   },
   rowDragOver: {
     backgroundColor: colors.brandAccentSurface,
-    borderLeftColor: colors.accentGold,
   },
   rowCutMuted: {
     opacity: 0.5,
@@ -1155,15 +1195,18 @@ export function FileTable({
     if (e.button !== 0) return;
 
     const target = e.target as HTMLElement | null;
-    if (
-      target?.closest('button') ||
-      target?.closest('input') ||
-      target?.closest('select') ||
-      target?.closest('a') ||
-      target?.closest('[data-row="true"]') ||
-      target?.closest('[draggable="true"]')
-    ) {
-      return;
+    const isMarqueeGutter = Boolean(target?.closest('[data-marquee-gutter="true"]'));
+    if (!isMarqueeGutter) {
+      if (
+        target?.closest('button') ||
+        target?.closest('input') ||
+        target?.closest('select') ||
+        target?.closest('a') ||
+        target?.closest('[data-row="true"]') ||
+        target?.closest('[draggable="true"]')
+      ) {
+        return;
+      }
     }
 
     const viewport = parentRef.current;
@@ -1471,6 +1514,7 @@ export function FileTable({
   return (
     <div {...stylex.props(styles.container)}>
       <div {...stylex.props(styles.headerRow)}>
+        <div {...stylex.props(styles.headerGutter)} data-marquee-gutter="true" aria-hidden="true" />
         <div {...stylex.props(styles.checkboxCell)}>
           <button
             type="button"
@@ -1711,62 +1755,75 @@ export function FileTable({
                   return (
                     <div
                       key={`parent-${virtualRow.index}`}
-                      data-row="true"
                       {...stylex.props(
-                        styles.row,
-                        isSelected && styles.rowSelected,
-                        isDragOverParent && styles.rowDragOver
+                        styles.rowWrapper,
+                        isSelected && styles.rowWrapperSelected,
+                        isDragOverParent && styles.rowWrapperDragOver
                       )}
                       style={{
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleItemClick('__parent__', e);
-                      }}
-                      onDoubleClick={() => onNavigate(item.path)}
-                      onDragOver={(e) => {
-                        if (isTrashView) return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (e.dataTransfer) {
-                          e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
-                        }
-                        setDragOverRowId('__parent__');
-                      }}
-                      onDragLeave={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
-                      }}
-                      onDrop={(e) => {
-                        setDragOverRowId(null);
-                        handleRowDrop(e, item.path);
-                      }}
                     >
-                      <div {...stylex.props(styles.checkboxCell)} />
-                      <div {...stylex.props(styles.nameCell)} title={item.path}>
-                        <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-                        <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
-                      </div>
-                      <div {...stylex.props(styles.accountCell)}>
-                        <span {...stylex.props(styles.accountPill)} title="Parent folder">Parent folder</span>
-                      </div>
-                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
-                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
-                      <div {...stylex.props(styles.actionsCell)}>
-                        <button
-                          type="button"
-                          {...stylex.props(styles.rowBtn)}
-                          aria-label="Open parent folder"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onNavigate(item.path);
-                          }}
-                        >
-                          <IconChevronRight {...stylex.props(styles.actionIcon)} />
-                        </button>
+                      <div
+                        data-marquee-gutter="true"
+                        aria-hidden="true"
+                        {...stylex.props(styles.gutterCell)}
+                      />
+                      <div
+                        data-row="true"
+                        {...stylex.props(
+                          styles.rowMain,
+                          isSelected && styles.rowSelected,
+                          isDragOverParent && styles.rowDragOver
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleItemClick('__parent__', e);
+                        }}
+                        onDoubleClick={() => onNavigate(item.path)}
+                        onDragOver={(e) => {
+                          if (isTrashView) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (e.dataTransfer) {
+                            e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
+                          }
+                          setDragOverRowId('__parent__');
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
+                        }}
+                        onDrop={(e) => {
+                          setDragOverRowId(null);
+                          handleRowDrop(e, item.path);
+                        }}
+                      >
+                        <div {...stylex.props(styles.checkboxCell)} />
+                        <div {...stylex.props(styles.nameCell)} title={item.path}>
+                          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
+                          <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
+                        </div>
+                        <div {...stylex.props(styles.accountCell)}>
+                          <span {...stylex.props(styles.accountPill)} title="Parent folder">Parent folder</span>
+                        </div>
+                        <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
+                        <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
+                        <div {...stylex.props(styles.actionsCell)}>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.rowBtn)}
+                            aria-label="Open parent folder"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onNavigate(item.path);
+                            }}
+                          >
+                            <IconChevronRight {...stylex.props(styles.actionIcon)} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1782,108 +1839,121 @@ export function FileTable({
                   return (
                     <div
                       key={folder.id}
-                      data-row="true"
-                      draggable={!isTrashView}
-                      onDragStart={(e) =>
-                        handleRowDragStart(e, {
-                          kind: 'folder',
-                          id: folder.id,
-                          name: folder.name,
-                          virtualPath: folder.virtualPath,
-                        })
-                      }
-                      onDragOver={(e) => {
-                        if (isTrashView) return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (e.dataTransfer) {
-                          e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
-                        }
-                        setDragOverRowId(folder.id);
-                      }}
-                      onDragLeave={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setDragOverRowId((prev) => (prev === folder.id ? null : prev));
-                      }}
-                      onDrop={(e) => {
-                        setDragOverRowId(null);
-                        handleRowDrop(e, folder.virtualPath);
-                      }}
                       {...stylex.props(
-                        styles.row,
-                        isSelected && styles.rowSelected,
-                        isDragOverFolder && styles.rowDragOver,
-                        isCut && styles.rowCutMuted
+                        styles.rowWrapper,
+                        isSelected && styles.rowWrapperSelected,
+                        isDragOverFolder && styles.rowWrapperDragOver
                       )}
                       style={{
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleItemClick(folder.id, e);
-                      }}
-                      onDoubleClick={() => onNavigate(folder.virtualPath)}
                     >
-                      <div {...stylex.props(styles.checkboxCell)}>
-                        <button
-                          type="button"
-                          role="checkbox"
-                          aria-checked={isSelected}
-                          aria-label={`Select folder ${folder.name}`}
-                          {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
-                          onClick={(e) => handleCheckboxToggle(folder.id, e)}
-                        >
-                          {isSelected && <IconCheck size={12} strokeWidth={3} />}
-                        </button>
-                      </div>
-
-                      <div {...stylex.props(styles.nameCell)} title={folder.virtualPath}>
-                        <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-                        <span {...stylex.props(styles.itemLabel)}>
-                          {isSearching ? folder.virtualPath : folder.name}
-                        </span>
-                      </div>
-
-                      <div {...stylex.props(styles.accountCell)}>
-                        <span {...stylex.props(styles.accountPill)} title="Cluster folder">Cluster folder</span>
-                      </div>
-
                       <div
-                        {...stylex.props(styles.colRight, styles.tabularCell)}
-                        title={folderSize > 0 ? `${formatBytes(folderSize)} across descendant files` : 'Empty folder'}
+                        data-marquee-gutter="true"
+                        aria-hidden="true"
+                        {...stylex.props(styles.gutterCell)}
+                      />
+                      <div
+                        data-row="true"
+                        draggable={!isTrashView}
+                        onDragStart={(e) =>
+                          handleRowDragStart(e, {
+                            kind: 'folder',
+                            id: folder.id,
+                            name: folder.name,
+                            virtualPath: folder.virtualPath,
+                          })
+                        }
+                        onDragOver={(e) => {
+                          if (isTrashView) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (e.dataTransfer) {
+                            e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
+                          }
+                          setDragOverRowId(folder.id);
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDragOverRowId((prev) => (prev === folder.id ? null : prev));
+                        }}
+                        onDrop={(e) => {
+                          setDragOverRowId(null);
+                          handleRowDrop(e, folder.virtualPath);
+                        }}
+                        {...stylex.props(
+                          styles.rowMain,
+                          isSelected && styles.rowSelected,
+                          isDragOverFolder && styles.rowDragOver,
+                          isCut && styles.rowCutMuted
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleItemClick(folder.id, e);
+                        }}
+                        onDoubleClick={() => onNavigate(folder.virtualPath)}
                       >
-                        {folderSize > 0 ? formatBytes(folderSize) : '—'}
-                      </div>
-                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                        {formatDate(folder.updatedAt)}
-                      </div>
-                      <div {...stylex.props(styles.actionsCell)}>
-                        {onDeleteFolder && (
+                        <div {...stylex.props(styles.checkboxCell)}>
                           <button
                             type="button"
-                            {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                            aria-label="Delete folder"
+                            role="checkbox"
+                            aria-checked={isSelected}
+                            aria-label={`Select folder ${folder.name}`}
+                            {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
+                            onClick={(e) => handleCheckboxToggle(folder.id, e)}
+                          >
+                            {isSelected && <IconCheck size={12} strokeWidth={3} />}
+                          </button>
+                        </div>
+
+                        <div {...stylex.props(styles.nameCell)} title={folder.virtualPath}>
+                          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
+                          <span {...stylex.props(styles.itemLabel)}>
+                            {isSearching ? folder.virtualPath : folder.name}
+                          </span>
+                        </div>
+
+                        <div {...stylex.props(styles.accountCell)}>
+                          <span {...stylex.props(styles.accountPill)} title="Cluster folder">Cluster folder</span>
+                        </div>
+
+                        <div
+                          {...stylex.props(styles.colRight, styles.tabularCell)}
+                          title={folderSize > 0 ? `${formatBytes(folderSize)} across descendant files` : 'Empty folder'}
+                        >
+                          {folderSize > 0 ? formatBytes(folderSize) : '—'}
+                        </div>
+                        <div {...stylex.props(styles.colRight, styles.tabularCell)}>
+                          {formatDate(folder.updatedAt)}
+                        </div>
+                        <div {...stylex.props(styles.actionsCell)}>
+                          {onDeleteFolder && (
+                            <button
+                              type="button"
+                              {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+                              aria-label="Delete folder"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteFolder(folder);
+                              }}
+                            >
+                              <IconTrash {...stylex.props(styles.actionIcon)} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            {...stylex.props(styles.rowBtn)}
+                            aria-label="Open folder"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onDeleteFolder(folder);
+                              onNavigate(folder.virtualPath);
                             }}
                           >
-                            <IconTrash {...stylex.props(styles.actionIcon)} />
+                            <IconChevronRight {...stylex.props(styles.actionIcon)} />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          {...stylex.props(styles.rowBtn)}
-                          aria-label="Open folder"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onNavigate(folder.virtualPath);
-                          }}
-                        >
-                          <IconChevronRight {...stylex.props(styles.actionIcon)} />
-                        </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1897,34 +1967,45 @@ export function FileTable({
                   return (
                     <div
                       key={`trash-${file.id}`}
-                      data-row="true"
-                      draggable={true}
-                      onDragStart={(e) =>
-                        handleRowDragStart(e, {
-                          kind: 'file',
-                          id: file.id,
-                          name: file.name,
-                          virtualPath: file.virtualPath,
-                          isTrashed: true,
-                        })
-                      }
-                      {...stylex.props(styles.row, isSelected && styles.rowSelected)}
+                      {...stylex.props(
+                        styles.rowWrapper,
+                        isSelected && styles.rowWrapperSelected
+                      )}
                       style={{
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleItemClick(file.id, e);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (e.dataTransfer) {
-                          e.dataTransfer.dropEffect = 'none';
-                        }
-                      }}
                     >
+                      <div
+                        data-marquee-gutter="true"
+                        aria-hidden="true"
+                        {...stylex.props(styles.gutterCell)}
+                      />
+                      <div
+                        data-row="true"
+                        draggable={true}
+                        onDragStart={(e) =>
+                          handleRowDragStart(e, {
+                            kind: 'file',
+                            id: file.id,
+                            name: file.name,
+                            virtualPath: file.virtualPath,
+                            isTrashed: true,
+                          })
+                        }
+                        {...stylex.props(styles.rowMain, isSelected && styles.rowSelected)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleItemClick(file.id, e);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (e.dataTransfer) {
+                            e.dataTransfer.dropEffect = 'none';
+                          }
+                        }}
+                      >
                       <div {...stylex.props(styles.checkboxCell)}>
                         <button
                           type="button"
@@ -1995,8 +2076,9 @@ export function FileTable({
                         )}
                       </div>
                     </div>
-                  );
-                }
+                  </div>
+                );
+              }
 
                 // File row
                 const file = item.data;
@@ -2007,44 +2089,54 @@ export function FileTable({
                 return (
                   <div
                     key={file.id}
-                    data-row="true"
-                    draggable={!isTrashView}
-                    onDragStart={(e) =>
-                      handleRowDragStart(e, {
-                        kind: 'file',
-                        id: file.id,
-                        name: file.name,
-                        virtualPath: file.virtualPath,
-                      })
-                    }
-                    onDragOver={(e) => {
-                      if (isTrashView) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (e.dataTransfer) {
-                        e.dataTransfer.dropEffect = 'none';
-                      }
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      (e.nativeEvent as any).__tsubasaHandled = true;
-                    }}
                     {...stylex.props(
-                      styles.row,
-                      isSelected && styles.rowSelected,
-                      isCut && styles.rowCutMuted
+                      styles.rowWrapper,
+                      isSelected && styles.rowWrapperSelected
                     )}
                     style={{
                       height: `${virtualRow.size}px`,
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleItemClick(file.id, e);
-                    }}
-                    onDoubleClick={() => onDownload(file)}
                   >
+                    <div
+                      data-marquee-gutter="true"
+                      aria-hidden="true"
+                      {...stylex.props(styles.gutterCell)}
+                    />
+                    <div
+                      data-row="true"
+                      draggable={!isTrashView}
+                      onDragStart={(e) =>
+                        handleRowDragStart(e, {
+                          kind: 'file',
+                          id: file.id,
+                          name: file.name,
+                          virtualPath: file.virtualPath,
+                        })
+                      }
+                      onDragOver={(e) => {
+                        if (isTrashView) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (e.dataTransfer) {
+                          e.dataTransfer.dropEffect = 'none';
+                        }
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        (e.nativeEvent as any).__tsubasaHandled = true;
+                      }}
+                      {...stylex.props(
+                        styles.rowMain,
+                        isSelected && styles.rowSelected,
+                        isCut && styles.rowCutMuted
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleItemClick(file.id, e);
+                      }}
+                    >
                     <div {...stylex.props(styles.checkboxCell)}>
                       <button
                         type="button"
@@ -2169,8 +2261,9 @@ export function FileTable({
                       </button>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              );
+            })}
             </div>
 
             <div
