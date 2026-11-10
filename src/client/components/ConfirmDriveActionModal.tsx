@@ -175,7 +175,7 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: spacing.space3,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.surface,
   },
   cancelBtn: {
     height: '32px',

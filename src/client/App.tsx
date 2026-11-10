@@ -4,7 +4,7 @@ import { client } from './api.js';
 import { colors, darkColors, radius, typography } from './tokens.stylex.js';
 import { Header, type ThemeChoice } from './components/Header.js';
 import { Sidebar, type AccountItem, type AccountTransferStats, type PoolSummary } from './components/Sidebar.js';
-import { ActionPortal, type ActionPortalClipboard } from './components/ActionPortal.js';
+import { ActionPortal, type ActionPortalClipboard, type SelectedAccountGroup } from './components/ActionPortal.js';
 import {
   FileTable,
   extractDataTransferEntries,
@@ -19,6 +19,7 @@ import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
 import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js';
 import { RenameModal, type RenameTarget } from './components/RenameModal.js';
 import { MovePoolModal } from './components/MovePoolModal.js';
+import { MoveFilesModal } from './components/MoveFilesModal.js';
 
 interface AccountSummary {
   id: string;
@@ -186,7 +187,7 @@ export function App() {
   ]);
   const [activePoolId, setActivePoolId] = useState<number>(() => {
     if (typeof window !== 'undefined') {
-      const saved = Number(localStorage.getItem('tsubasa-active-pool-id'));
+      const saved = Number(window.sessionStorage.getItem('tsubasa-active-pool-id'));
       if (Number.isInteger(saved) && saved >= 1) return saved;
     }
     return 1;
@@ -194,7 +195,7 @@ export function App() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('tsubasa-active-pool-id', String(activePoolId));
+      window.sessionStorage.setItem('tsubasa-active-pool-id', String(activePoolId));
     }
   }, [activePoolId]);
 
@@ -235,7 +236,40 @@ export function App() {
   const [clipboard, setClipboard] = useState<ActionPortalClipboard | null>(null);
   const [renameModalItem, setRenameModalItem] = useState<RenameTarget | null>(null);
   const [movePoolTargetAccount, setMovePoolTargetAccount] = useState<AccountItem | null>(null);
-  const [filteredAccountIds, setFilteredAccountIds] = useState<Set<string>>(new Set());
+  const [moveFilesModalGroup, setMoveFilesModalGroup] = useState<SelectedAccountGroup | null>(null);
+  const [filteredAccountIds, setFilteredAccountIds] = useState<Set<string>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = window.sessionStorage.getItem('tsubasa-filtered-account-ids');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return new Set(parsed.filter((id) => typeof id === 'string'));
+          }
+        }
+      } catch {
+        // Ignore storage parse errors
+      }
+    }
+    return new Set();
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        if (filteredAccountIds.size === 0) {
+          window.sessionStorage.removeItem('tsubasa-filtered-account-ids');
+        } else {
+          window.sessionStorage.setItem(
+            'tsubasa-filtered-account-ids',
+            JSON.stringify(Array.from(filteredAccountIds))
+          );
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  }, [filteredAccountIds]);
 
   const handleToggleAccountFilter = useCallback((accountId: string) => {
     setSelectedIds(new Set());
@@ -1456,6 +1490,32 @@ export function App() {
     }
   }
 
+  async function handleTransferBatch(fileIds: string[], targetAccountId: string) {
+    const targetAcc = accountItems.find((a) => a.id === targetAccountId);
+    const targetName = targetAcc?.displayName || targetAccountId;
+    try {
+      const res = await client.api.sync.rebalance.batch.$post({
+        json: { fileIds, targetAccountId },
+      });
+      if (res.ok) {
+        showToast(`Transferred ${fileIds.length} file${fileIds.length === 1 ? '' : 's'} to ${targetName}.`);
+        setMoveFilesModalGroup(null);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        const errorMsg = ('error' in err ? (err.error as string) : null) || 'Failed to transfer files';
+        setErrorNotice(errorMsg);
+        throw new Error(errorMsg);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorNotice(msg);
+      throw err;
+    } finally {
+      await loadFiles(currentPath);
+      await loadClusterData();
+    }
+  }
+
   async function handleDisableAccount(accountId: string) {
     try {
       const res = await client.api.accounts[':id'].disable.$post({
@@ -1705,9 +1765,44 @@ export function App() {
     return Array.from(selectedIds).filter((id) => id !== '__parent__').length;
   }, [selectedIds]);
 
-  const selectedFiles = (currentNav === 'trash' ? displayedTrashedFiles : displayedFiles).filter((f) => selectedIds.has(f.id));
-  const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+  const selectedFiles = useMemo(() => {
+    const source = currentNav === 'trash' ? displayedTrashedFiles : displayedFiles;
+    return source.filter((f) => selectedIds.has(f.id));
+  }, [currentNav, displayedTrashedFiles, displayedFiles, selectedIds]);
+
+  const selectedTotalBytes = useMemo(() => {
+    return selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+  }, [selectedFiles]);
   const trashedTotalBytes = displayedTrashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+
+  const selectedAccountGroups: SelectedAccountGroup[] = useMemo(() => {
+    if (currentNav === 'trash') return [];
+    const groupsMap = new Map<string, { fileIds: string[]; totalBytes: number }>();
+    for (const f of selectedFiles) {
+      const existing = groupsMap.get(f.accountId);
+      if (existing) {
+        existing.fileIds.push(f.id);
+        existing.totalBytes += f.sizeBytes || 0;
+      } else {
+        groupsMap.set(f.accountId, { fileIds: [f.id], totalBytes: f.sizeBytes || 0 });
+      }
+    }
+    return Array.from(groupsMap.entries()).map(([accountId, group]) => {
+      const acc = accountItems.find((a) => a.id === accountId);
+      return {
+        accountId,
+        accountName: acc?.displayName || accountId,
+        fileIds: group.fileIds,
+        totalBytes: group.totalBytes,
+      };
+    });
+  }, [currentNav, selectedFiles, accountItems]);
+
+  const modalFiles = useMemo(() => {
+    if (!moveFilesModalGroup) return [];
+    const idsSet = new Set(moveFilesModalGroup.fileIds);
+    return selectedFiles.filter((f) => idsSet.has(f.id));
+  }, [moveFilesModalGroup, selectedFiles]);
 
   return (
     <div
@@ -1782,6 +1877,8 @@ export function App() {
           onEmptyTrash={() => setConfirmEmptyTrash(true)}
           selectedCount={actionableSelectedCount}
           selectedTotalBytes={selectedTotalBytes}
+          selectedAccountGroups={selectedAccountGroups}
+          onOpenMoveFilesModal={(group) => setMoveFilesModalGroup(group)}
           onClearSelection={() => setSelectedIds(new Set())}
           onDeleteSelected={handleDeleteSelected}
           onRenamePrompt={handleOpenRenameSelected}
@@ -1890,6 +1987,15 @@ export function App() {
         pools={pools}
         activePoolId={activePoolId}
         onConfirm={handleSwitchAccountPool}
+      />
+
+      <MoveFilesModal
+        isOpen={moveFilesModalGroup !== null}
+        onClose={() => setMoveFilesModalGroup(null)}
+        sourceAccount={accountItems.find((a) => a.id === moveFilesModalGroup?.accountId) ?? null}
+        files={modalFiles}
+        accounts={accountItems}
+        onConfirm={handleTransferBatch}
       />
 
       <ConfirmPurgeModal

@@ -24,6 +24,13 @@ export interface ActionPortalClipboard {
   }>;
 }
 
+export interface SelectedAccountGroup {
+  accountId: string;
+  accountName: string;
+  fileIds: string[];
+  totalBytes: number;
+}
+
 interface ActionPortalProps {
   currentPath: string;
   onNavigatePath: (path: string) => void;
@@ -36,6 +43,8 @@ interface ActionPortalProps {
   onEmptyTrash?: () => void;
   selectedCount?: number;
   selectedTotalBytes?: number;
+  selectedAccountGroups?: SelectedAccountGroup[];
+  onOpenMoveFilesModal?: (group: SelectedAccountGroup) => void;
   onClearSelection?: () => void;
   onDeleteSelected?: () => void;
   onRenamePrompt?: () => void;
@@ -215,30 +224,67 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space3,
   },
-  selectionBadge: {
+  selectionBadgeSize: {
+    color: colors.secondaryText,
+    fontVariantNumeric: 'tabular-nums',
+    fontSize: typography.fontSizeMeta,
+  },
+  selectionBadgeBtnSize: {
+    color: colors.accentGoldText,
+    opacity: 0.8,
+    fontVariantNumeric: 'tabular-nums',
+    fontSize: typography.fontSizeMeta,
+  },
+  selectionBadgeBtn: {
     height: '32px',
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
     fontSize: typography.fontSizeBody,
     fontFamily: typography.fontFamilyBody,
-    fontWeight: '500',
-    color: colors.primaryText,
-    backgroundColor: colors.selectionBg,
+    fontWeight: typography.fontWeightTitle,
+    color: colors.accentGoldText,
+    backgroundColor: colors.accentGold,
     paddingLeft: spacing.space4,
     paddingRight: spacing.space4,
     borderRadius: radius.button,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.selectionBorder,
+    borderWidth: '0px',
     userSelect: 'none',
     boxSizing: 'border-box',
     whiteSpace: 'nowrap',
+    cursor: 'pointer',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.accentGold,
+      opacity: 0.9,
+    },
+    ':focus': {
+      outline: 'none',
+      boxShadow: `0 0 0 2px ${colors.brandAccent}`,
+    },
+    ':active': {
+      transform: 'scale(0.98)',
+      transition: motion.transitionTap,
+    },
   },
-  selectionBadgeSize: {
-    color: colors.secondaryText,
-    fontVariantNumeric: 'tabular-nums',
-    fontSize: typography.fontSizeMeta,
+  selectionBadge: {
+    height: '32px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.button,
+    backgroundColor: colors.surface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    color: colors.primaryText,
+    fontSize: typography.fontSizeBody,
+    fontWeight: typography.fontWeightTitle,
+    userSelect: 'none',
+    boxSizing: 'border-box',
+    whiteSpace: 'nowrap',
   },
   deleteSelectedBtn: {
     color: colors.danger,
@@ -292,6 +338,8 @@ export function ActionPortal({
   onEmptyTrash,
   selectedCount = 0,
   selectedTotalBytes = 0,
+  selectedAccountGroups,
+  onOpenMoveFilesModal,
   onClearSelection,
   onDeleteSelected,
   onRenamePrompt,
@@ -316,6 +364,9 @@ export function ActionPortal({
   // Normalize path segments
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
   const segments = cleanPath.split('/').filter(Boolean);
+
+  const groupedFilesCount = selectedAccountGroups?.reduce((sum, g) => sum + g.fileIds.length, 0) ?? 0;
+  const nonGroupedCount = selectedCount - groupedFilesCount;
 
   function handleBreadcrumbClick(index: number) {
     if (index === -1) {
@@ -430,14 +481,42 @@ export function ActionPortal({
         {selectedCount > 0 && (
           <>
             <div {...stylex.props(styles.selectionGroup)}>
-              <span {...stylex.props(styles.selectionBadge)}>
-                <span>{selectedCount} selected</span>
-                {selectedTotalBytes > 0 && (
-                  <span {...stylex.props(styles.selectionBadgeSize)}>
-                    · {formatBytes(selectedTotalBytes)}
-                  </span>
-                )}
-              </span>
+              {selectedAccountGroups && selectedAccountGroups.length > 0 ? (
+                <>
+                  {selectedAccountGroups.map((group) => (
+                    <button
+                      key={group.accountId}
+                      type="button"
+                      {...stylex.props(styles.selectionBadgeBtn)}
+                      onClick={() => onOpenMoveFilesModal?.(group)}
+                      title="Click to move selected files to another account"
+                    >
+                      <span>
+                        {group.accountName} · {group.fileIds.length} selected
+                      </span>
+                      <span {...stylex.props(styles.selectionBadgeBtnSize)}>
+                        · {formatBytes(group.totalBytes)}
+                      </span>
+                    </button>
+                  ))}
+                  {nonGroupedCount > 0 && (
+                    <span {...stylex.props(styles.selectionBadge)}>
+                      <span>
+                        {nonGroupedCount} folder{nonGroupedCount === 1 ? '' : 's'}
+                      </span>
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span {...stylex.props(styles.selectionBadge)}>
+                  <span>{selectedCount} selected</span>
+                  {selectedTotalBytes > 0 && (
+                    <span {...stylex.props(styles.selectionBadgeSize)}>
+                      · {formatBytes(selectedTotalBytes)}
+                    </span>
+                  )}
+                </span>
+              )}
 
               {isTrashView && onRestoreSelected && (
                 <button

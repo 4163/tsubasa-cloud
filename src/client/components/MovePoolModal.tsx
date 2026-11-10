@@ -181,7 +181,7 @@ const styles = stylex.create({
     borderTopWidth: '1px',
     borderTopStyle: 'solid',
     borderTopColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.surface,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
