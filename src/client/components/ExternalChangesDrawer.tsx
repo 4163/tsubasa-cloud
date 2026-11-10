@@ -642,7 +642,7 @@ export function ExternalChangesDrawer({
                 Over-ceiling files (&gt; 14.25 GB)
               </h3>
               <p {...stylex.props(styles.cardDesc)}>
-                Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside Tsubasa Storage/ to preserve incoming email delivery.
+                Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
               </p>
               <div {...stylex.props(styles.cardList)}>
                 {report.overCeiling.map((item) => (

@@ -10,3 +10,6 @@ export type FoldersResponse = InferResponseType<typeof client.api.folders.$get, 
 export type FolderRecord = FoldersResponse['folders'][number];
 export type Folder = FolderRecord;
 
+export type PoolsResponse = InferResponseType<typeof client.api.pools.$get, 200>;
+export type PoolRecord = PoolsResponse['pools'][number];
+

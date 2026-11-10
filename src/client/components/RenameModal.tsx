@@ -4,7 +4,7 @@ import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js
 import { IconEdit, IconClose } from './Icons.js';
 
 export interface RenameTarget {
-  kind: 'file' | 'folder';
+  kind: 'file' | 'folder' | 'pool';
   id: string;
   name: string;
 }
@@ -13,7 +13,7 @@ interface RenameModalProps {
   isOpen: boolean;
   onClose: () => void;
   item: RenameTarget | null;
-  onRename: (kind: 'file' | 'folder', id: string, newName: string) => Promise<void> | void;
+  onRename: (kind: 'file' | 'folder' | 'pool', id: string, newName: string) => Promise<void> | void;
 }
 
 const styles = stylex.create({
@@ -119,6 +119,9 @@ const styles = stylex.create({
     ':focus': {
       borderColor: colors.accentGold,
       boxShadow: `0 0 0 1px ${colors.accentGold}`,
+    },
+    '::placeholder': {
+      color: colors.dimText,
     },
   },
   errorMessage: {
@@ -271,7 +274,7 @@ export function RenameModal({
           <div {...stylex.props(styles.titleGroup)}>
             <IconEdit size={16} />
             <h2 {...stylex.props(styles.title)}>
-              Rename {item.kind === 'folder' ? 'Folder' : 'File'}
+              Rename {item.kind === 'pool' ? 'Pool' : item.kind === 'folder' ? 'Folder' : 'File'}
             </h2>
           </div>
           <button
@@ -290,6 +293,7 @@ export function RenameModal({
               <input
                 ref={inputRef}
                 type="text"
+                placeholder={item.kind === 'pool' ? 'Pool X' : undefined}
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value);

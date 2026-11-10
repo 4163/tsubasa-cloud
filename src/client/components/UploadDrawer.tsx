@@ -27,6 +27,7 @@ interface UploadDrawerProps {
   stagedEmptyFolders?: string[];
   currentPath: string;
   accounts?: AccountItem[];
+  poolId?: number;
   onUploadComplete: () => Promise<void>;
   onClearFiles: () => void;
 }
@@ -496,6 +497,7 @@ export function UploadDrawer({
   stagedEmptyFolders = [],
   currentPath,
   accounts = [],
+  poolId = 1,
   onUploadComplete,
   onClearFiles,
 }: UploadDrawerProps) {
@@ -574,6 +576,7 @@ export function UploadDrawer({
       .$post({
         json: {
           items: eligibleItems.map((e) => ({ virtualPath: e.virtualPath, sizeBytes: e.sizeBytes })),
+          poolId,
         },
       })
       .then(async (res) => {
@@ -618,7 +621,7 @@ export function UploadDrawer({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, normalizedItems]);
+  }, [isOpen, normalizedItems, poolId]);
 
   // Overall transfer progress computation
   const overallProgress = useMemo(() => {
@@ -645,7 +648,7 @@ export function UploadDrawer({
         try {
           const name = folderPath.split('/').filter(Boolean).pop() || folderPath;
           await client.api.folders.$post({
-            json: { virtualPath: folderPath, name },
+            json: { virtualPath: folderPath, name, poolId },
           });
         } catch {
           // Continue if already exists
@@ -680,7 +683,7 @@ export function UploadDrawer({
       try {
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(item.virtualPath)}&sizeBytes=${item.file.size}&mimeType=${encodeURIComponent(item.file.type || 'application/octet-stream')}${accountParam}`;
+          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(item.virtualPath)}&sizeBytes=${item.file.size}&mimeType=${encodeURIComponent(item.file.type || 'application/octet-stream')}${accountParam}&poolId=${encodeURIComponent(String(poolId))}`;
 
           xhr.open('POST', uploadUrl, true);
           xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
@@ -733,7 +736,7 @@ export function UploadDrawer({
 
     setIsUploading(false);
     await onUploadComplete();
-  }, [isUploading, normalizedItems, stagedEmptyFolders, onUploadComplete, selectedAccounts, previews]);
+  }, [isUploading, normalizedItems, stagedEmptyFolders, onUploadComplete, selectedAccounts, previews, poolId]);
 
   const hasUnallocatedFiles = normalizedItems.some((it) => {
     if (it.file.size > CEILING_14_25_GB) return false;

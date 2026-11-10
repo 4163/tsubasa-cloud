@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolder, IconTrash, IconPlus, IconClock } from './Icons.js';
+import { IconFolder, IconTrash, IconPlus, IconClock, IconEdit, IconChevronDown } from './Icons.js';
 import { AccountAvatar } from './AccountAvatar.js';
 import brandLogo from '../assets/brand-mono.png';
 
@@ -29,6 +29,15 @@ export interface ClusterTransferOverview {
   rateLimitedAccountsCount: number;
 }
 
+export interface PoolSummary {
+  id: number;
+  name: string;
+  driveFolderName: string;
+  accountCount: number;
+  fileCount: number;
+  totalBytes: number;
+}
+
 export interface AccountItem {
   id: string;
   email: string;
@@ -46,6 +55,8 @@ export interface AccountItem {
   hasPendingChanges?: boolean;
   hasDiscrepancy?: boolean;
   mtimeMs?: number;
+  poolId?: number;
+  canSwitchPool?: boolean;
 }
 
 interface SidebarProps {
@@ -54,6 +65,14 @@ interface SidebarProps {
   poolHeadroomBytes: number;
   totalLimitBytes: number;
   clusterTransfer?: ClusterTransferOverview;
+  pools?: PoolSummary[];
+  activePoolId?: number;
+  onSelectPool?: (poolId: number) => void;
+  onCreatePool?: () => void;
+  onRenamePoolPrompt?: (pool: PoolSummary) => void;
+  onDeletePoolPrompt?: (pool: PoolSummary) => void;
+  onSwitchAccountPool?: (accountId: string, targetPoolId: number) => void;
+  onOpenMovePool?: (account: AccountItem) => void;
   currentNav: 'files' | 'trash';
   onSelectNav: (nav: 'files' | 'trash') => void;
   onAuthorizeAccount: (id: string) => void;
@@ -169,6 +188,111 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontFamily: typography.fontFamilyBody,
     lineHeight: '1.3',
+  },
+  poolSection: {
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing.space2,
+    flexShrink: 0,
+  },
+  poolHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
+  },
+  poolHeadingLabel: {
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightSection,
+    color: colors.dimText,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+  },
+  poolHeaderActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space1,
+  },
+  poolActionBtn: {
+    backgroundColor: 'transparent',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.compact,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '600',
+    color: colors.secondaryText,
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+      borderColor: colors.brandAccent,
+      color: colors.primaryText,
+    },
+  },
+  poolDeleteBtn: {
+    ':hover': {
+      backgroundColor: colors.dangerSurface,
+      borderColor: colors.danger,
+      color: colors.danger,
+    },
+  },
+  poolSelectWrapper: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    width: '100%',
+  },
+  poolSelect: {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    width: '100%',
+    height: '32px',
+    paddingLeft: spacing.space3,
+    paddingRight: '28px',
+    borderRadius: radius.compact,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    color: colors.primaryText,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBody,
+    fontWeight: typography.fontWeightTitle,
+    cursor: 'pointer',
+    outline: 'none',
+    boxSizing: 'border-box',
+    ':hover': {
+      borderColor: colors.border,
+    },
+    ':focus': {
+      borderColor: colors.accentGold,
+    },
+  },
+  poolSelectChevron: {
+    position: 'absolute',
+    right: '8px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    pointerEvents: 'none',
+    color: colors.secondaryText,
+    display: 'flex',
+    alignItems: 'center',
   },
   navSection: {
     paddingTop: spacing.space2,
@@ -918,6 +1042,14 @@ export function Sidebar({
   poolHeadroomBytes,
   totalLimitBytes,
   clusterTransfer,
+  pools,
+  activePoolId = 1,
+  onSelectPool,
+  onCreatePool,
+  onRenamePoolPrompt,
+  onDeletePoolPrompt,
+  onSwitchAccountPool,
+  onOpenMovePool,
   currentNav,
   onSelectNav,
   onAuthorizeAccount,
@@ -1040,6 +1172,8 @@ export function Sidebar({
     ? Math.min(100, Math.round((tsubasaUsedBytes / poolCapacityBytes) * 100))
     : 0;
 
+  const activePool = pools?.find((p) => p.id === activePoolId) || pools?.[0];
+
   return (
     <>
       {isMobileOpen && <div {...stylex.props(styles.backdrop)} onClick={onCloseMobile} />}
@@ -1055,6 +1189,70 @@ export function Sidebar({
             </div>
           </div>
         </div>
+
+        {pools && pools.length > 0 && (
+          <section aria-label="Storage Pool Switcher" {...stylex.props(styles.poolSection)}>
+            <div {...stylex.props(styles.poolHeaderRow)}>
+              <span {...stylex.props(styles.poolHeadingLabel)}>Storage pool</span>
+              <div {...stylex.props(styles.poolHeaderActions)}>
+                {activePool && onRenamePoolPrompt && (
+                  <button
+                    type="button"
+                    {...stylex.props(styles.poolActionBtn)}
+                    onClick={() => onRenamePoolPrompt(activePool)}
+                    title="Rename pool display name"
+                    aria-label="Rename storage pool"
+                  >
+                    <IconEdit size={11} />
+                    <span>Rename</span>
+                  </button>
+                )}
+                {activePool && activePool.accountCount === 0 && (pools?.length ?? 0) > 1 && onDeletePoolPrompt && (
+                  <button
+                    type="button"
+                    {...stylex.props(styles.poolActionBtn, styles.poolDeleteBtn)}
+                    onClick={() => onDeletePoolPrompt(activePool)}
+                    title="Delete empty storage pool"
+                    aria-label="Delete storage pool"
+                  >
+                    <IconTrash size={11} />
+                    <span>Delete</span>
+                  </button>
+                )}
+                {onCreatePool && (
+                  <button
+                    type="button"
+                    {...stylex.props(styles.poolActionBtn)}
+                    onClick={onCreatePool}
+                    title="Create new storage pool"
+                    aria-label="Create new storage pool"
+                  >
+                    <IconPlus size={11} strokeWidth={2.5} />
+                    <span>New</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div {...stylex.props(styles.poolSelectWrapper)}>
+              <select
+                aria-label="Select active storage pool"
+                value={activePoolId}
+                onChange={(e) => onSelectPool?.(Number(e.target.value))}
+                {...stylex.props(styles.poolSelect)}
+              >
+                {pools.map((pool) => (
+                  <option key={pool.id} value={pool.id}>
+                    {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'})
+                  </option>
+                ))}
+              </select>
+              <div {...stylex.props(styles.poolSelectChevron)}>
+                <IconChevronDown size={14} strokeWidth={2.5} />
+              </div>
+            </div>
+          </section>
+        )}
 
         <nav aria-label="Main Navigation" {...stylex.props(styles.navSection)}>
           <button
@@ -1275,17 +1473,30 @@ export function Sidebar({
                       </button>
                     </div>
 
-                    {onRemoveAccount && (
+                    {(onRemoveAccount || (pools && pools.length > 1 && acc.canSwitchPool !== false)) && (
                       <div {...stylex.props(styles.accountActionsRow)}>
+                        <div {...stylex.props(styles.accountActionsLeft)} />
                         <div {...stylex.props(styles.accountActionsRight)}>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.miniDangerBtn)}
-                            onClick={() => onRemoveAccount(acc)}
-                            title="Remove credential file"
-                          >
-                            Remove
-                          </button>
+                          {pools && pools.length > 1 && acc.canSwitchPool !== false && (
+                            <button
+                              type="button"
+                              {...stylex.props(styles.miniSyncBtn)}
+                              onClick={() => onOpenMovePool?.(acc)}
+                              title="Move account to another storage pool"
+                            >
+                              Move pool
+                            </button>
+                          )}
+                          {onRemoveAccount && (
+                            <button
+                              type="button"
+                              {...stylex.props(styles.miniDangerBtn)}
+                              onClick={() => onRemoveAccount(acc)}
+                              title="Remove credential file"
+                            >
+                              Remove
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1346,6 +1557,16 @@ export function Sidebar({
                         )}
                       </div>
                       <div {...stylex.props(styles.accountActionsRight)}>
+                        {pools && pools.length > 1 && acc.canSwitchPool !== false && (
+                          <button
+                            type="button"
+                            {...stylex.props(styles.miniSyncBtn)}
+                            onClick={() => onOpenMovePool?.(acc)}
+                            title="Move account to another storage pool"
+                          >
+                            Move pool
+                          </button>
+                        )}
                         {acc.isDisabled && onEnableAccount && (
                           <button
                             type="button"
