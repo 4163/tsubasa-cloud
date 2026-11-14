@@ -39,8 +39,6 @@ export const folders = sqliteTable('folders', {
 }, (table) => [
   uniqueIndex('folders_pool_path_idx').on(table.poolId, table.virtualPath),
   index('folders_pool_parent_idx').on(table.poolId, table.parentFolderId),
-  index('folders_parent_idx').on(table.parentFolderId),
-  index('folders_path_idx').on(table.virtualPath),
 ]);
 
 export const files = sqliteTable('files', {
@@ -61,10 +59,13 @@ export const files = sqliteTable('files', {
 }, (table) => [
   uniqueIndex('files_pool_path_idx').on(table.poolId, table.virtualPath),
   index('files_pool_trashed_idx').on(table.poolId, table.isTrashed),
+  index('files_pool_trashed_path_idx').on(table.poolId, table.isTrashed, table.virtualPath, table.accountId, table.sizeBytes),
+  index('files_pool_trashed_account_size_idx').on(table.poolId, table.isTrashed, table.accountId, table.sizeBytes),
   index('files_account_idx').on(table.accountId),
+  index('files_account_drive_file_idx').on(table.accountId, table.driveFileId),
+  index('files_account_pool_trashed_idx').on(table.accountId, table.poolId, table.isTrashed),
   index('files_folder_idx').on(table.folderId),
   index('files_path_idx').on(table.virtualPath),
-  index('files_trashed_idx').on(table.isTrashed),
 ]);
 
 export const transferLogs = sqliteTable('transfer_logs', {
@@ -74,7 +75,7 @@ export const transferLogs = sqliteTable('transfer_logs', {
   byteCount: integer('byte_count').notNull(),
   timestamp: integer('timestamp').notNull(), // epoch ms for high-precision 24-hour rolling aggregation
 }, (table) => [
-  index('transfer_account_ts_idx').on(table.accountId, table.timestamp),
+  index('transfer_account_type_ts_bytes_idx').on(table.accountId, table.transferType, table.timestamp, table.byteCount),
   index('transfer_ts_idx').on(table.timestamp),
 ]);
 
@@ -91,6 +92,7 @@ export const shareLinks = sqliteTable('share_links', {
 }, (table) => [
   uniqueIndex('share_links_pool_batch_account_idx').on(table.poolId, table.batchFolderName, table.accountId),
   index('share_links_pool_batch_idx').on(table.poolId, table.batchFolderName),
+  index('share_links_account_idx').on(table.accountId),
 ]);
 
 export type Pool = typeof pools.$inferSelect;

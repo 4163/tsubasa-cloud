@@ -1,6 +1,13 @@
 import { sqlite } from './index.js';
 
+const CURRENT_SCHEMA_VERSION = 2;
+
 export function initializeDatabase(): void {
+  const currentVersion = sqlite.pragma('user_version', { simple: true }) as number;
+  if (currentVersion >= CURRENT_SCHEMA_VERSION) {
+    return;
+  }
+
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS pools (
       id INTEGER PRIMARY KEY NOT NULL,
@@ -79,18 +86,25 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS accounts_pool_idx ON accounts(pool_id);
     CREATE UNIQUE INDEX IF NOT EXISTS folders_pool_path_idx ON folders(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS folders_pool_parent_idx ON folders(pool_id, parent_folder_id);
-    CREATE INDEX IF NOT EXISTS folders_parent_idx ON folders(parent_folder_id);
-    CREATE INDEX IF NOT EXISTS folders_path_idx ON folders(virtual_path);
     CREATE UNIQUE INDEX IF NOT EXISTS files_pool_path_idx ON files(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS files_pool_trashed_idx ON files(pool_id, is_trashed);
+    CREATE INDEX IF NOT EXISTS files_pool_trashed_path_idx ON files(pool_id, is_trashed, virtual_path, account_id, size_bytes);
+    CREATE INDEX IF NOT EXISTS files_pool_trashed_account_size_idx ON files(pool_id, is_trashed, account_id, size_bytes);
     CREATE INDEX IF NOT EXISTS files_account_idx ON files(account_id);
+    CREATE INDEX IF NOT EXISTS files_account_drive_file_idx ON files(account_id, drive_file_id);
+    CREATE INDEX IF NOT EXISTS files_account_pool_trashed_idx ON files(account_id, pool_id, is_trashed);
     CREATE INDEX IF NOT EXISTS files_folder_idx ON files(folder_id);
     CREATE INDEX IF NOT EXISTS files_path_idx ON files(virtual_path);
-    CREATE INDEX IF NOT EXISTS files_trashed_idx ON files(is_trashed);
-    CREATE INDEX IF NOT EXISTS transfer_account_ts_idx ON transfer_logs(account_id, timestamp);
+    CREATE INDEX IF NOT EXISTS transfer_account_type_ts_bytes_idx ON transfer_logs(account_id, transfer_type, timestamp, byte_count);
     CREATE INDEX IF NOT EXISTS transfer_ts_idx ON transfer_logs(timestamp);
     CREATE UNIQUE INDEX IF NOT EXISTS share_links_pool_batch_account_idx ON share_links(pool_id, batch_folder_name, account_id);
     CREATE INDEX IF NOT EXISTS share_links_pool_batch_idx ON share_links(pool_id, batch_folder_name);
+    CREATE INDEX IF NOT EXISTS share_links_account_idx ON share_links(account_id);
+
+    DROP INDEX IF EXISTS folders_parent_idx;
+    DROP INDEX IF EXISTS folders_path_idx;
+    DROP INDEX IF EXISTS files_trashed_idx;
+    DROP INDEX IF EXISTS transfer_account_ts_idx;
   `);
 
   const poolColumns = sqlite.pragma('table_info(pools)') as Array<{ name: string }>;
@@ -176,12 +190,14 @@ export function initializeDatabase(): void {
           sqlite
             .prepare('UPDATE pools SET id = ? WHERE id = ?')
             .run(SHARE_POOL_RESERVE_ID, oldId);
-        })();
+        }).immediate();
       } finally {
         sqlite.pragma(`foreign_keys = ${fkWasEnabled ? 'ON' : 'OFF'}`);
       }
     }
   }
+
+  sqlite.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
 }
 
 
