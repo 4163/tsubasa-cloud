@@ -4,6 +4,8 @@ import { client } from '../api.js';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconFolder, IconTrash, IconPlus, IconClock, IconEdit, IconChevronDown, IconFunnel, IconFunnelX } from './Icons.js';
 import { AccountAvatar } from './AccountAvatar.js';
+import { RedactedEmail } from './RedactedEmail.js';
+import { sortPools, copyTextToClipboard } from '../utils/format.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export interface AccountTransferStats {
@@ -36,6 +38,7 @@ export interface PoolSummary {
   accountCount: number;
   fileCount: number;
   totalBytes: number;
+  isSharePool?: boolean;
 }
 
 export interface AccountItem {
@@ -564,24 +567,6 @@ const styles = stylex.create({
       color: colors.brandAccentHover,
     },
   },
-  redactedEmail: {
-    fontSize: '10px',
-    fontFamily: typography.fontFamilyMono,
-    color: colors.secondaryText,
-    userSelect: 'text',
-    cursor: 'default',
-    transition: motion.transitionFast,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    letterSpacing: '0.02em',
-    ':hover': {
-      color: colors.primaryText,
-    },
-  },
-  redactedEmailRevealed: {
-    color: colors.primaryText,
-  },
   storageSection: {
     display: 'flex',
     flexDirection: 'column',
@@ -1010,81 +995,6 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
   );
 }
 
-function maskEmail(email: string): string {
-  if (!email || !email.includes('@')) return email;
-  const [user, domain] = email.split('@');
-  if (!user || user.length <= 4) return email;
-
-  const startCount = user.length >= 8 ? 3 : 2;
-  const endCount = user.length >= 6 ? 2 : 1;
-  const dotCount = Math.max(1, user.length - startCount - endCount);
-
-  const start = user.slice(0, startCount);
-  const end = user.slice(user.length - endCount);
-  const dots = '•'.repeat(dotCount);
-
-  return `${start}${dots}${end}@${domain}`;
-}
-
-function isNodeSelected(el: HTMLElement | null): boolean {
-  if (!el || typeof window === 'undefined') return false;
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
-
-  const anchor = selection.anchorNode;
-  const focus = selection.focusNode;
-  if ((anchor && el.contains(anchor)) || (focus && el.contains(focus))) {
-    return true;
-  }
-  if (typeof selection.containsNode === 'function') {
-    return selection.containsNode(el, true);
-  }
-  return false;
-}
-
-function RedactedEmail({ email }: { email: string }) {
-  const spanRef = useRef<HTMLSpanElement>(null);
-  const [isHovered, setIsHovered] = useState(false);
-  const [isSelected, setIsSelected] = useState(false);
-  const masked = useMemo(() => maskEmail(email), [email]);
-
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      const selected = isNodeSelected(spanRef.current);
-      setIsSelected((prev) => (prev !== selected ? selected : prev));
-    };
-
-    document.addEventListener('selectionchange', handleSelectionChange);
-    return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange);
-    };
-  }, []);
-
-  const isRevealed = isHovered || isSelected;
-
-  return (
-    <span
-      ref={spanRef}
-      title={email}
-      {...stylex.props(styles.redactedEmail, isRevealed && styles.redactedEmailRevealed)}
-      onMouseEnter={() => {
-        setIsHovered(true);
-        if (spanRef.current) {
-          setIsSelected(isNodeSelected(spanRef.current));
-        }
-      }}
-      onMouseLeave={() => {
-        setIsHovered(false);
-        if (spanRef.current) {
-          setIsSelected(isNodeSelected(spanRef.current));
-        }
-      }}
-    >
-      {isRevealed ? email : masked}
-    </span>
-  );
-}
-
 export function Sidebar({
   accounts,
   tsubasaUsedBytes,
@@ -1179,16 +1089,7 @@ export function Sidebar({
     }
 
     if (url) {
-      try {
-        await navigator.clipboard.writeText(url);
-      } catch {
-        const ta = document.createElement('textarea');
-        ta.value = url;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      }
+      await copyTextToClipboard(url);
       setCopiedId(accountId);
       setTimeout(() => {
         setCopiedId((prev) => (prev === accountId ? null : prev));
@@ -1223,7 +1124,9 @@ export function Sidebar({
     ? Math.min(100, Math.round((tsubasaUsedBytes / poolCapacityBytes) * 100))
     : 0;
 
-  const activePool = pools?.find((p) => p.id === activePoolId) || pools?.[0];
+  const sortedPools = useMemo(() => (pools ? sortPools(pools) : []), [pools]);
+  const standardPoolCount = sortedPools.filter((p) => !p.isSharePool).length;
+  const activePool = sortedPools.find((p) => p.id === activePoolId) || sortedPools[0];
 
   return (
     <>
@@ -1241,12 +1144,12 @@ export function Sidebar({
           </div>
         </div>
 
-        {pools && pools.length > 0 && (
+        {sortedPools.length > 0 && (
           <section aria-label="Storage Pool Switcher" {...stylex.props(styles.poolSection)}>
             <div {...stylex.props(styles.poolHeaderRow)}>
               <span {...stylex.props(styles.poolHeadingLabel)}>Storage pool</span>
               <div {...stylex.props(styles.poolHeaderActions)}>
-                {activePool && onRenamePoolPrompt && (
+                {activePool && !activePool.isSharePool && onRenamePoolPrompt && (
                   <button
                     type="button"
                     {...stylex.props(styles.poolActionBtn)}
@@ -1258,7 +1161,7 @@ export function Sidebar({
                     <span>Rename</span>
                   </button>
                 )}
-                {activePool && activePool.accountCount === 0 && (pools?.length ?? 0) > 1 && onDeletePoolPrompt && (
+                {activePool && !activePool.isSharePool && activePool.accountCount === 0 && standardPoolCount > 1 && onDeletePoolPrompt && (
                   <button
                     type="button"
                     {...stylex.props(styles.poolActionBtn, styles.poolDeleteBtn)}
@@ -1292,7 +1195,7 @@ export function Sidebar({
                 onChange={(e) => onSelectPool?.(Number(e.target.value))}
                 {...stylex.props(styles.poolSelect)}
               >
-                {pools.map((pool) => (
+                {sortedPools.map((pool) => (
                   <option key={pool.id} value={pool.id}>
                     {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'})
                   </option>
@@ -1315,6 +1218,7 @@ export function Sidebar({
             )}
             onClick={() => onSelectNav('files')}
             onDragOver={(e) => {
+              if (activePool?.isSharePool) return;
               const hasItems = e.dataTransfer?.types?.includes('application/x-tsubasa-items');
               const hasFiles = e.dataTransfer?.types?.includes('Files');
               if (hasItems || hasFiles) {
@@ -1330,6 +1234,7 @@ export function Sidebar({
               }
             }}
             onDrop={(e) => {
+              if (activePool?.isSharePool) return;
               e.preventDefault();
               e.stopPropagation();
               (e.nativeEvent as any).__tsubasaHandled = true;
@@ -1398,7 +1303,7 @@ export function Sidebar({
             Connected accounts ({authorizedCount})
           </div>
 
-        {onImportOAuth && (
+        {!activePool?.isSharePool && onImportOAuth && (
           <div {...stylex.props(styles.addAccountWrapper)}>
             <button
               type="button"
@@ -1624,7 +1529,7 @@ export function Sidebar({
 
                     <div {...stylex.props(styles.accountActionsRow)}>
                       <div {...stylex.props(styles.accountActionsLeft)}>
-                        {hasActionableChanges && onOpenExternalChanges && (
+                        {!activePool?.isSharePool && hasActionableChanges && onOpenExternalChanges && (
                           <button
                             type="button"
                             {...stylex.props(styles.miniChangesBtnRed)}

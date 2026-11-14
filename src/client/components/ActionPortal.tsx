@@ -11,8 +11,11 @@ import {
   IconCopy,
   IconClipboard,
   IconFolder,
+  IconShare,
+  IconLink,
+  IconCheck,
 } from './Icons.js';
-import { formatBytes } from '../utils/format.js';
+import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
 
 export interface ActionPortalClipboard {
   mode: 'cut' | 'copy';
@@ -30,6 +33,13 @@ export interface SelectedAccountGroup {
   fileIds: string[];
   totalBytes: number;
 }
+
+export interface SelectedShareBatch {
+  batchFolderName: string;
+  linksCount: number;
+}
+
+const ACTIVE_SHARE_COPY_KEY = '__active__';
 
 interface ActionPortalProps {
   currentPath: string;
@@ -55,6 +65,14 @@ interface ActionPortalProps {
   onPaste?: () => void;
   onMoveItemsToPath?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => void;
   onDropExternalToPath?: (targetPath: string, dataTransfer: DataTransfer) => void;
+  onShareSelected?: () => void;
+  isSharePoolActive?: boolean;
+  sharePoolItemCount?: number;
+  onClearSharePool?: () => void;
+  activeShareLinksCount?: number;
+  onCopyActiveShareLinks?: () => Promise<boolean> | void;
+  selectedShareBatches?: SelectedShareBatch[];
+  onCopyShareBatchLinks?: (batchFolderName: string) => Promise<boolean> | void;
 }
 
 const styles = stylex.create({
@@ -147,6 +165,8 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
@@ -173,6 +193,8 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -210,6 +232,8 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerHover,
@@ -350,10 +374,94 @@ export function ActionPortal({
   onPaste,
   onMoveItemsToPath,
   onDropExternalToPath,
+  onShareSelected,
+  isSharePoolActive = false,
+  sharePoolItemCount = 0,
+  onClearSharePool,
+  activeShareLinksCount = 0,
+  onCopyActiveShareLinks,
+  selectedShareBatches,
+  onCopyShareBatchLinks,
 }: ActionPortalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [copiedKeys, setCopiedKeys] = useState<Set<string>>(new Set());
+  const copyTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const clearCopyFeedbackTimers = () => {
+    for (const timer of copyTimersRef.current.values()) {
+      clearTimeout(timer);
+    }
+    copyTimersRef.current.clear();
+  };
+
+  const markKeyCopied = (key: string) => {
+    setCopiedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    const existing = copyTimersRef.current.get(key);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      copyTimersRef.current.delete(key);
+      setCopiedKeys((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }, COPY_FEEDBACK_DURATION_MS);
+    copyTimersRef.current.set(key, timer);
+  };
+
+  function renderShareCopyButton(
+    copyKey: string,
+    defaultLabel: string,
+    copiedLabel: string,
+    title: string,
+    onCopy: () => Promise<boolean> | void
+  ) {
+    const isCopied = copiedKeys.has(copyKey);
+    return (
+      <button
+        key={copyKey}
+        type="button"
+        {...stylex.props(styles.secondaryBtn)}
+        onClick={async () => {
+          const result = await onCopy();
+          if (result !== false) {
+            markKeyCopied(copyKey);
+          }
+        }}
+        title={title}
+      >
+        {isCopied ? (
+          <>
+            <IconCheck {...stylex.props(styles.btnIcon)} />
+            {copiedLabel}
+          </>
+        ) : (
+          <>
+            <IconLink {...stylex.props(styles.btnIcon)} />
+            {defaultLabel}
+          </>
+        )}
+      </button>
+    );
+  }
+
+  useEffect(() => {
+    setCopiedKeys(new Set());
+    clearCopyFeedbackTimers();
+  }, [currentPath, activeShareLinksCount, isSharePoolActive]);
+
+  useEffect(() => {
+    return () => {
+      clearCopyFeedbackTimers();
+    };
+  }, []);
 
   useEffect(() => {
     const handleDragEnd = () => setDragOverIndex(null);
@@ -378,6 +486,7 @@ export function ActionPortal({
   }
 
   function handleBreadcrumbDragOver(e: React.DragEvent, index: number) {
+    if (isSharePoolActive) return;
     const hasTsubasa = e.dataTransfer?.types?.includes('application/x-tsubasa-items');
     const hasFiles = e.dataTransfer?.types?.includes('Files');
     if (!hasTsubasa && !hasFiles) return;
@@ -397,6 +506,7 @@ export function ActionPortal({
   }
 
   function handleBreadcrumbDrop(e: React.DragEvent, index: number) {
+    if (isSharePoolActive) return;
     e.preventDefault();
     e.stopPropagation();
     (e.nativeEvent as any).__tsubasaHandled = true;
@@ -481,7 +591,7 @@ export function ActionPortal({
         {selectedCount > 0 && (
           <>
             <div {...stylex.props(styles.selectionGroup)}>
-              {selectedAccountGroups && selectedAccountGroups.length > 0 ? (
+              {!isSharePoolActive && selectedAccountGroups && selectedAccountGroups.length > 0 ? (
                 <>
                   {selectedAccountGroups.map((group) => (
                     <button
@@ -530,7 +640,7 @@ export function ActionPortal({
                 </button>
               )}
 
-              {!isTrashView && selectedCount === 1 && onRenamePrompt && (
+              {!isTrashView && !isSharePoolActive && selectedCount === 1 && onRenamePrompt && (
                 <button
                   type="button"
                   {...stylex.props(styles.secondaryBtn)}
@@ -542,7 +652,7 @@ export function ActionPortal({
                 </button>
               )}
 
-              {!isTrashView && onCutSelected && (
+              {!isTrashView && !isSharePoolActive && onCutSelected && (
                 <button
                   type="button"
                   {...stylex.props(styles.secondaryBtn)}
@@ -554,7 +664,7 @@ export function ActionPortal({
                 </button>
               )}
 
-              {!isTrashView && onCopySelected && (
+              {!isTrashView && !isSharePoolActive && onCopySelected && (
                 <button
                   type="button"
                   {...stylex.props(styles.secondaryBtn)}
@@ -565,6 +675,47 @@ export function ActionPortal({
                   Copy
                 </button>
               )}
+
+              {!isTrashView && !isSharePoolActive && onShareSelected && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={onShareSelected}
+                  title="Share selected items via Google Drive"
+                >
+                  <IconShare size={14} />
+                  Share
+                </button>
+              )}
+
+              {isSharePoolActive &&
+                !isTrashView &&
+                selectedShareBatches &&
+                selectedShareBatches.length > 0 &&
+                onCopyShareBatchLinks &&
+                selectedShareBatches.map((batch) => {
+                  const showBatchName = selectedShareBatches.length > 1;
+                  const defaultLabel = showBatchName
+                    ? batch.linksCount > 1
+                      ? `Copy ${batch.batchFolderName} (${batch.linksCount})`
+                      : `Copy ${batch.batchFolderName}`
+                    : batch.linksCount > 1
+                      ? `Copy links (${batch.linksCount})`
+                      : 'Copy link';
+                  const copiedLabel = showBatchName ? `Copied ${batch.batchFolderName}` : 'Link copied';
+                  const title =
+                    batch.linksCount > 1
+                      ? `Copy ${batch.linksCount} share links for ${batch.batchFolderName}`
+                      : `Copy share link for ${batch.batchFolderName}`;
+
+                  return renderShareCopyButton(
+                    batch.batchFolderName,
+                    defaultLabel,
+                    copiedLabel,
+                    title,
+                    () => onCopyShareBatchLinks(batch.batchFolderName)
+                  );
+                })}
 
               {onDeleteSelected && (
                 <button
@@ -594,7 +745,7 @@ export function ActionPortal({
           </>
         )}
 
-        {clipboard && !isTrashView && onPaste && (
+        {clipboard && !isTrashView && !isSharePoolActive && onPaste && (
           <>
             <button
               type="button"
@@ -621,73 +772,103 @@ export function ActionPortal({
           </button>
         ) : (
           <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              {...stylex.props(styles.hiddenInput)}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  onUploadFiles(e.target.files);
-                  e.target.value = '';
-                }
-              }}
-            />
+            {!isSharePoolActive && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  {...stylex.props(styles.hiddenInput)}
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      onUploadFiles(e.target.files);
+                      e.target.value = '';
+                    }
+                  }}
+                />
 
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              {...({ webkitdirectory: '', directory: '' } as any)}
-              {...stylex.props(styles.hiddenInput)}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  onUploadFiles(e.target.files);
-                  e.target.value = '';
-                }
-              }}
-            />
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  {...({ webkitdirectory: '', directory: '' } as any)}
+                  {...stylex.props(styles.hiddenInput)}
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      onUploadFiles(e.target.files);
+                      e.target.value = '';
+                    }
+                  }}
+                />
 
-            <button
-              type="button"
-              {...stylex.props(styles.primaryBtn)}
-              onClick={() => fileInputRef.current?.click()}
-              title="Upload files to current folder"
-            >
-              <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
-              Upload file
-            </button>
+                <button
+                  type="button"
+                  {...stylex.props(styles.primaryBtn)}
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Upload files to current folder"
+                >
+                  <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
+                  Upload file
+                </button>
 
-            <button
-              type="button"
-              {...stylex.props(styles.secondaryBtn)}
-              onClick={() => folderInputRef.current?.click()}
-              title="Upload an entire folder with nested files and structure"
-            >
-              <IconFolderPlus {...stylex.props(styles.btnIcon)} />
-              Upload folder
-            </button>
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={() => folderInputRef.current?.click()}
+                  title="Upload an entire folder with nested files and structure"
+                >
+                  <IconFolderPlus {...stylex.props(styles.btnIcon)} />
+                  Upload folder
+                </button>
 
-            <button
-              type="button"
-              {...stylex.props(styles.secondaryBtn)}
-              onClick={onCreateFolderPrompt}
-              title="Create new directory in current location"
-            >
-              <IconFolder {...stylex.props(styles.btnIcon)} />
-              New folder
-            </button>
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={onCreateFolderPrompt}
+                  title="Create new directory in current location"
+                >
+                  <IconFolder {...stylex.props(styles.btnIcon)} />
+                  New folder
+                </button>
 
-            <button
-              type="button"
-              {...stylex.props(styles.secondaryBtn)}
-              onClick={onSyncAll}
-              disabled={isSyncing}
-              title="Fetch external changes from Google Drive and scan .oauths/ credentials"
-            >
-              <IconRefreshCw {...stylex.props(styles.btnIcon)} />
-              {isSyncing ? 'Fetching...' : 'Fetch Drive changes'}
-            </button>
+                <button
+                  type="button"
+                  {...stylex.props(styles.secondaryBtn)}
+                  onClick={onSyncAll}
+                  disabled={isSyncing}
+                  title="Fetch external changes from Google Drive and scan .oauths/ credentials"
+                >
+                  <IconRefreshCw {...stylex.props(styles.btnIcon)} />
+                  {isSyncing ? 'Fetching...' : 'Fetch Drive changes'}
+                </button>
+              </>
+            )}
+
+            {isSharePoolActive &&
+              !isTrashView &&
+              activeShareLinksCount > 0 &&
+              onCopyActiveShareLinks &&
+              renderShareCopyButton(
+                ACTIVE_SHARE_COPY_KEY,
+                activeShareLinksCount > 1 ? `Copy links (${activeShareLinksCount})` : 'Copy link',
+                'Link copied',
+                activeShareLinksCount > 1
+                  ? `Copy ${activeShareLinksCount} share links for this folder`
+                  : 'Copy share link for this folder',
+                onCopyActiveShareLinks
+              )}
+
+            {isSharePoolActive && selectedCount === 0 && (sharePoolItemCount ?? 0) > 0 && onClearSharePool && (
+              <button
+                type="button"
+                {...stylex.props(styles.emptyTrashBtn)}
+                onClick={onClearSharePool}
+                title="Permanently delete all copied files and folders in Share Pool"
+              >
+                <IconTrash size={14} />
+                Clear Share Pool
+              </button>
+            )}
           </>
         )}
       </div>

@@ -14,8 +14,11 @@ import {
   IconUpload,
   IconCheck,
   IconMinus,
+  IconShare,
+  IconLink,
 } from './Icons.js';
-import { formatBytes } from '../utils/format.js';
+import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
+import { RedactedEmail } from './RedactedEmail.js';
 import type { FileRecord, FolderRecord } from '../api.js';
 import type { AccountItem } from './Sidebar.js';
 
@@ -59,6 +62,10 @@ interface FileTableProps {
   sortColumn?: SortColumn;
   sortDirection?: SortDirection;
   onSortChange?: (column: SortColumn, direction: SortDirection) => void;
+  onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
+  isSharePoolActive?: boolean;
+  shareLinksByBatch?: Record<string, Array<{ webViewLink: string; accountId: string }>>;
+  onCopyShareLinks?: (batchFolderName: string) => Promise<boolean> | void;
 }
 
 type TableItem =
@@ -378,7 +385,7 @@ const styles = stylex.create({
     height: '100%',
     paddingLeft: spacing.space1,
     paddingRight: spacing.space1,
-    overflow: 'visible',
+    overflow: 'hidden',
   },
   selectWrapper: {
     position: 'relative',
@@ -401,8 +408,8 @@ const styles = stylex.create({
   accountPill: {
     fontSize: typography.fontSizeBadge,
     fontFamily: typography.fontFamilyMono,
-    display: 'inline-flex',
-    alignItems: 'center',
+    display: 'inline-block',
+    maxWidth: '100%',
     height: '22px',
     lineHeight: '18px',
     paddingTop: '1px',
@@ -415,11 +422,13 @@ const styles = stylex.create({
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     color: colors.brandAccent,
-    width: 'fit-content',
     boxSizing: 'border-box',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    verticalAlign: 'middle',
+    cursor: 'default',
+    userSelect: 'text',
   },
   accountSelect: {
     appearance: 'none',
@@ -499,6 +508,10 @@ const styles = stylex.create({
       color: colors.danger,
       backgroundColor: colors.dangerSurface,
     },
+  },
+  rowBtnCopied: {
+    color: colors.success,
+    backgroundColor: colors.successSurface,
   },
   actionIcon: {
     width: '14px',
@@ -833,6 +846,14 @@ function getSessionSortDirection(fallback: SortDirection = 'asc'): SortDirection
   return fallback;
 }
 
+function getAccountTooltip(accountId: string, fileAcc?: AccountItem): string {
+  const email = fileAcc?.email || accountId;
+  if (fileAcc?.displayName && fileAcc.displayName !== email) {
+    return `${fileAcc.displayName} (${email})`;
+  }
+  return email;
+}
+
 export function FileTable({
   files,
   folders,
@@ -859,15 +880,27 @@ export function FileTable({
   sortColumn: sortColumnProp,
   sortDirection: sortDirectionProp,
   onSortChange,
+  onShareItem,
+  isSharePoolActive = false,
+  shareLinksByBatch,
+  onCopyShareLinks,
 }: FileTableProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [isDropZoneActive, setIsDropZoneActive] = useState(false);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
+  const [copiedBatchId, setCopiedBatchId] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const justFinishedMarquee = useRef(false);
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   const folderSizeMap = useMemo(() => {
     const folderIdsByPath = new Map<string, string[]>();
@@ -996,7 +1029,7 @@ export function FileTable({
   };
 
   const handleDrop = async (e: React.DragEvent) => {
-    if (isTrashView) return;
+    if (isTrashView || isSharePoolActive) return;
     e.preventDefault();
     e.stopPropagation();
     (e.nativeEvent as any).__tsubasaHandled = true;
@@ -1029,7 +1062,7 @@ export function FileTable({
   };
 
   const handleRowDrop = async (e: React.DragEvent, targetVirtualPath: string) => {
-    if (isTrashView) return;
+    if (isTrashView || isSharePoolActive) return;
     e.preventDefault();
     e.stopPropagation();
     (e.nativeEvent as any).__tsubasaHandled = true;
@@ -1319,6 +1352,10 @@ export function FileTable({
     e: React.DragEvent,
     item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string; isTrashed?: boolean }
   ) => {
+    if (isTrashView) {
+      e.preventDefault();
+      return;
+    }
     setMarqueeRect(null);
     const isItemSelected = selectedIds.has(item.id);
     let dragPayload: Array<{
@@ -1648,7 +1685,7 @@ export function FileTable({
         {...stylex.props(styles.scrollViewport)}
         onMouseDown={handleMouseDown}
         onDragOver={(e) => {
-          if (isTrashView) return;
+          if (isTrashView || isSharePoolActive) return;
           if (isExternalFileDrag(e) || isInternalItemDrag(e)) {
             e.preventDefault();
           }
@@ -1666,16 +1703,16 @@ export function FileTable({
           <div
             {...stylex.props(
               styles.emptyState,
-              isDropZoneActive && !isTrashView && styles.emptyStateDragOver
+              isDropZoneActive && !isTrashView && !isSharePoolActive && styles.emptyStateDragOver
             )}
             onDragEnter={(e) => {
-              if (isTrashView || !isExternalFileDrag(e)) return;
+              if (isTrashView || isSharePoolActive || !isExternalFileDrag(e)) return;
               e.preventDefault();
               e.stopPropagation();
               setIsDropZoneActive(true);
             }}
             onDragOver={(e) => {
-              if (isTrashView || !isExternalFileDrag(e)) {
+              if (isTrashView || isSharePoolActive || !isExternalFileDrag(e)) {
                 if (isDropZoneActive) setIsDropZoneActive(false);
                 return;
               }
@@ -1698,7 +1735,7 @@ export function FileTable({
               handleDrop(e);
             }}
           >
-            {isDropZoneActive && !isTrashView ? (
+            {isDropZoneActive && !isTrashView && !isSharePoolActive ? (
               <div {...stylex.props(styles.dropBox)}>
                 <IconUpload size={36} color={colors.accentGold} strokeWidth={2.5} />
                 <h3 {...stylex.props(styles.dropTitle)}>Drop files to upload</h3>
@@ -1723,6 +1760,8 @@ export function FileTable({
                     ? 'Soft-deleted files across connected accounts will appear here.'
                     : isSearching
                     ? `No files or directories match "${searchQuery}".`
+                    : isSharePoolActive
+                    ? 'Files and folders copied to the Share Pool appear here.'
                     : 'Upload files or create subfolders to populate this directory.'}
                 </p>
               </>
@@ -1783,7 +1822,7 @@ export function FileTable({
                         }}
                         onDoubleClick={() => onNavigate(item.path)}
                         onDragOver={(e) => {
-                          if (isTrashView) return;
+                          if (isTrashView || isSharePoolActive) return;
                           e.preventDefault();
                           e.stopPropagation();
                           if (e.dataTransfer) {
@@ -1835,6 +1874,10 @@ export function FileTable({
                   const isDragOverFolder = dragOverRowId === folder.id;
                   const isCut = clipboard?.mode === 'cut' && clipboard.items.some((ci) => ci.id === folder.id);
                   const folderSize = folderSizeMap.get(folder.id) || 0;
+                  const folderBatchLinks =
+                    isSharePoolActive && !isTrashView && getParentDir(folder.virtualPath) === '/'
+                      ? shareLinksByBatch?.[folder.name]
+                      : undefined;
 
                   return (
                     <div
@@ -1866,7 +1909,7 @@ export function FileTable({
                           })
                         }
                         onDragOver={(e) => {
-                          if (isTrashView) return;
+                          if (isTrashView || isSharePoolActive) return;
                           e.preventDefault();
                           e.stopPropagation();
                           if (e.dataTransfer) {
@@ -1929,6 +1972,59 @@ export function FileTable({
                           {formatDate(folder.updatedAt)}
                         </div>
                         <div {...stylex.props(styles.actionsCell)}>
+                          {!isTrashView && !isSharePoolActive && onShareItem && (
+                            <button
+                              type="button"
+                              {...stylex.props(styles.rowBtn)}
+                              aria-label={`Share folder ${folder.name}`}
+                              title="Share folder"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onShareItem({
+                                  kind: 'folder',
+                                  id: folder.id,
+                                  name: folder.name,
+                                  virtualPath: folder.virtualPath,
+                                });
+                              }}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                            >
+                              <IconShare {...stylex.props(styles.actionIcon)} />
+                            </button>
+                          )}
+                          {folderBatchLinks && folderBatchLinks.length > 0 && onCopyShareLinks && (
+                            <button
+                              type="button"
+                              {...stylex.props(
+                                styles.rowBtn,
+                                copiedBatchId === folder.id && styles.rowBtnCopied
+                              )}
+                              aria-label={`Copy share link for ${folder.name}`}
+                              title={
+                                folderBatchLinks.length === 1
+                                  ? `Copy share link: ${folderBatchLinks[0].webViewLink}`
+                                  : `Copy ${folderBatchLinks.length} share links (across ${folderBatchLinks.length} drives)`
+                              }
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                const result = await onCopyShareLinks(folder.name);
+                                if (result !== false) {
+                                  setCopiedBatchId(folder.id);
+                                  if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+                                  copyTimerRef.current = setTimeout(() => {
+                                    setCopiedBatchId((prev) => (prev === folder.id ? null : prev));
+                                  }, COPY_FEEDBACK_DURATION_MS);
+                                }
+                              }}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                            >
+                              {copiedBatchId === folder.id ? (
+                                <IconCheck {...stylex.props(styles.actionIcon)} />
+                              ) : (
+                                <IconLink {...stylex.props(styles.actionIcon)} />
+                              )}
+                            </button>
+                          )}
                           {onDeleteFolder && (
                             <button
                               type="button"
@@ -2030,12 +2126,11 @@ export function FileTable({
                       </div>
 
                       <div {...stylex.props(styles.accountCell)}>
-                        <span
-                          {...stylex.props(styles.accountPill)}
-                          title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
-                        >
-                          {file.accountId}
-                        </span>
+                        <RedactedEmail
+                          email={fileAcc?.email || file.accountId}
+                          tooltip={getAccountTooltip(file.accountId, fileAcc)}
+                          style={styles.accountPill}
+                        />
                       </div>
 
                       <div {...stylex.props(styles.colRight, styles.tabularCell)}>
@@ -2115,7 +2210,7 @@ export function FileTable({
                         })
                       }
                       onDragOver={(e) => {
-                        if (isTrashView) return;
+                        if (isTrashView || isSharePoolActive) return;
                         e.preventDefault();
                         e.stopPropagation();
                         if (e.dataTransfer) {
@@ -2158,7 +2253,7 @@ export function FileTable({
                     </div>
 
                     <div {...stylex.props(styles.accountCell)}>
-                      {accounts && accounts.length > 1 && onTransferFile ? (
+                      {!isSharePoolActive && accounts && accounts.length > 1 && onTransferFile ? (
                         <div {...stylex.props(styles.selectWrapper)}>
                           <select
                             aria-label={`Transfer ${file.name} to another account`}
@@ -2218,12 +2313,11 @@ export function FileTable({
                           </div>
                         </div>
                       ) : (
-                        <span
-                          {...stylex.props(styles.accountPill)}
-                          title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
-                        >
-                          {file.accountId}
-                        </span>
+                        <RedactedEmail
+                          email={fileAcc?.email || file.accountId}
+                          tooltip={getAccountTooltip(file.accountId, fileAcc)}
+                          style={styles.accountPill}
+                        />
                       )}
                     </div>
 
@@ -2236,6 +2330,26 @@ export function FileTable({
                     </div>
 
                     <div {...stylex.props(styles.actionsCell)}>
+                      {!isTrashView && !isSharePoolActive && onShareItem && (
+                        <button
+                          type="button"
+                          {...stylex.props(styles.rowBtn)}
+                          aria-label={`Share file ${file.name}`}
+                          title="Share file"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onShareItem({
+                              kind: 'file',
+                              id: file.id,
+                              name: file.name,
+                              virtualPath: file.virtualPath,
+                            });
+                          }}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          <IconShare {...stylex.props(styles.actionIcon)} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         {...stylex.props(styles.rowBtn)}
@@ -2269,13 +2383,13 @@ export function FileTable({
             <div
               {...stylex.props(styles.emptyDropZone)}
               onDragEnter={(e) => {
-                if (isTrashView || !isExternalFileDrag(e)) return;
+                if (isTrashView || isSharePoolActive || !isExternalFileDrag(e)) return;
                 e.preventDefault();
                 e.stopPropagation();
                 setIsDropZoneActive(true);
               }}
               onDragOver={(e) => {
-                if (isTrashView || !isExternalFileDrag(e)) {
+                if (isTrashView || isSharePoolActive || !isExternalFileDrag(e)) {
                   if (isDropZoneActive) setIsDropZoneActive(false);
                   return;
                 }
@@ -2298,7 +2412,7 @@ export function FileTable({
                 handleDrop(e);
               }}
             >
-              {isDropZoneActive && !isTrashView && (
+              {isDropZoneActive && !isTrashView && !isSharePoolActive && (
                 <div {...stylex.props(styles.dropBox)}>
                   <IconUpload size={32} color={colors.accentGold} strokeWidth={2.5} />
                   <h3 {...stylex.props(styles.dropTitle)}>Drop files to upload</h3>

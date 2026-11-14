@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconFolder, IconChevronDown } from './Icons.js';
-import type { AccountItem, PoolSummary } from './Sidebar.js';
+import { type AccountItem, type PoolSummary } from './Sidebar.js';
+import { sortPools } from '../utils/format.js';
 
 export interface MovePoolModalProps {
   isOpen: boolean;
@@ -243,8 +244,10 @@ export function MovePoolModal({
   activePoolId,
   onConfirm,
 }: MovePoolModalProps) {
+  const sortedPools = useMemo(() => sortPools(pools), [pools]);
   const currentPoolId = account?.poolId ?? activePoolId ?? 1;
-  const candidatePools = pools.filter((p) => p.id !== currentPoolId);
+  const selectablePools = sortedPools.filter((p) => !p.isSharePool || p.id === currentPoolId);
+  const candidatePools = selectablePools.filter((p) => !p.isSharePool && p.id !== currentPoolId);
 
   const [targetPoolId, setTargetPoolId] = useState<number>(() => {
     return candidatePools[0]?.id ?? currentPoolId;
@@ -267,9 +270,14 @@ export function MovePoolModal({
 
   if (!isOpen || !account) return null;
 
+  const selectedTargetPool = selectablePools.find((p) => p.id === targetPoolId);
+  const canMoveToTarget = Boolean(
+    selectedTargetPool && !selectedTargetPool.isSharePool && selectedTargetPool.id !== currentPoolId
+  );
+
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (isLoading || !targetPoolId || targetPoolId === currentPoolId) return;
+    if (isLoading || !canMoveToTarget) return;
 
     setIsLoading(true);
     setError(null);
@@ -335,11 +343,15 @@ export function MovePoolModal({
                     setTargetPoolId(Number(e.target.value));
                     if (error) setError(null);
                   }}
-                  disabled={isLoading || pools.length === 0}
+                  disabled={isLoading || selectablePools.length === 0}
                   {...stylex.props(styles.select)}
                 >
-                  {pools.map((pool) => (
-                    <option key={pool.id} value={pool.id}>
+                  {selectablePools.map((pool) => (
+                    <option
+                      key={pool.id}
+                      value={pool.id}
+                      disabled={pool.id === currentPoolId || Boolean(pool.isSharePool)}
+                    >
                       {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'}){pool.id === currentPoolId ? ' (Current)' : ''}
                     </option>
                   ))}
@@ -364,7 +376,7 @@ export function MovePoolModal({
             <button
               type="submit"
               {...stylex.props(styles.confirmBtn)}
-              disabled={isLoading || !targetPoolId || targetPoolId === currentPoolId}
+              disabled={isLoading || !canMoveToTarget}
             >
               {isLoading ? 'Moving...' : 'Move pool'}
             </button>

@@ -57,6 +57,7 @@ export const colors = stylex.defineVars({
   dangerTextOnSurface: '#82071e',
   dangerHover: '#6a0518',
   dangerText: '#ffffff',
+  modalBackdrop: 'rgba(11, 20, 18, 0.65)',
 });
 
 /**
@@ -107,6 +108,7 @@ export const darkColors = stylex.createTheme(colors, {
   dangerTextOnSurface: '#ff9492',
   dangerHover: '#ffa8a6',
   dangerText: '#1c080a',
+  modalBackdrop: 'rgba(11, 20, 18, 0.65)',
 });
 
 /**
@@ -154,6 +156,10 @@ export const layout = stylex.defineVars({
   mobileRowHeight: '64px',
   mobileTouchTarget: '56px',
   ditherStripHeight: '6px',
+  shareModalWidth: '540px',
+  shareDriveListMaxHeight: '220px',
+  shareResultListMaxHeight: '180px',
+  deliveryBadgeMaxWidth: '200px',
 });
 
 /**

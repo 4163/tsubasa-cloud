@@ -1,10 +1,16 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import type { InferResponseType } from 'hono/client';
 import { client } from './api.js';
 import { colors, darkColors, radius, typography } from './tokens.stylex.js';
 import { Header, type ThemeChoice } from './components/Header.js';
 import { Sidebar, type AccountItem, type AccountTransferStats, type PoolSummary } from './components/Sidebar.js';
-import { ActionPortal, type ActionPortalClipboard, type SelectedAccountGroup } from './components/ActionPortal.js';
+import {
+  ActionPortal,
+  type ActionPortalClipboard,
+  type SelectedAccountGroup,
+  type SelectedShareBatch,
+} from './components/ActionPortal.js';
 import {
   FileTable,
   extractDataTransferEntries,
@@ -20,6 +26,8 @@ import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js
 import { RenameModal, type RenameTarget } from './components/RenameModal.js';
 import { MovePoolModal } from './components/MovePoolModal.js';
 import { MoveFilesModal } from './components/MoveFilesModal.js';
+import { ShareModal, type ShareExecuteResult, type ShareTargetItem } from './components/ShareModal.js';
+import { copyTextToClipboard, SHARE_POOL_RESERVE_ID } from './utils/format.js';
 
 interface AccountSummary {
   id: string;
@@ -67,6 +75,8 @@ interface DiscoveredAccount {
   poolId?: number;
   canSwitchPool?: boolean;
 }
+
+type StoredShareLink = InferResponseType<typeof client.api.share.links.$get, 200>['links'][number];
 
 const styles = stylex.create({
   shell: {
@@ -199,10 +209,22 @@ export function App() {
     }
   }, [activePoolId]);
 
+  const activePool = useMemo(
+    () => pools.find((p) => p.id === activePoolId),
+    [pools, activePoolId]
+  );
+  const isSharePoolActive = Boolean(activePool?.isSharePool);
+
   const [storage, setStorage] = useState<StorageOverview | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredAccount[]>([]);
   const [files, setFiles] = useState<ClientFileRecord[]>([]);
   const [folders, setFolders] = useState<ClientFolder[]>([]);
+  const [loadedFilesPoolId, setLoadedFilesPoolId] = useState<number | null>(null);
+  const [shareLinksByBatch, setShareLinksByBatch] = useState<Record<string, StoredShareLink[]>>({});
+  const [shareLinksPoolId, setShareLinksPoolId] = useState<number | null>(null);
+  const filesRequestSeqRef = useRef(0);
+  const poolsRef = useRef(pools);
+  poolsRef.current = pools;
 
   function getPathUrl(targetPath: string): string {
     if (typeof window === 'undefined') return '';
@@ -405,6 +427,11 @@ export function App() {
   const [trashedFiles, setTrashedFiles] = useState<ClientFileRecord[]>([]);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState<boolean>(false);
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
+  const [shareModalState, setShareModalState] = useState<{
+    items: ShareTargetItem[];
+    sourcePoolId: number;
+  } | null>(null);
+  const [isClearSharePoolOpen, setIsClearSharePoolOpen] = useState<boolean>(false);
   const [pendingDiscrepancies, setPendingDiscrepancies] = useState<Record<string, boolean>>({});
 
   // Synchronize browser history and popstate events (e.g. Mouse Back/Forward, Browser Back/Forward, Alt+Left/Right)
@@ -426,6 +453,8 @@ export function App() {
       if (isExternalChangesOpen) setIsExternalChangesOpen(false);
       if (isNewFolderOpen) setIsNewFolderOpen(false);
       if (confirmEmptyTrash) setConfirmEmptyTrash(false);
+      if (shareModalState) setShareModalState(null);
+      if (isClearSharePoolOpen) setIsClearSharePoolOpen(false);
 
       setCurrentNav('files');
       setCurrentPath(targetPath);
@@ -442,6 +471,8 @@ export function App() {
     isExternalChangesOpen,
     isNewFolderOpen,
     confirmEmptyTrash,
+    shareModalState,
+    isClearSharePoolOpen,
   ]);
 
   const showToast = useCallback((msg: string) => {
@@ -492,7 +523,8 @@ export function App() {
           const poolsData = await poolsRes.json();
           setPools(poolsData.pools);
           if (poolsData.pools.length > 0 && !poolsData.pools.some((p) => p.id === effectivePoolId)) {
-            setActivePoolId(poolsData.pools[0].id);
+            const fallbackPool = poolsData.pools.find((p) => !p.isSharePool) ?? poolsData.pools[0];
+            setActivePoolId(fallbackPool.id);
           }
         }
 
@@ -518,15 +550,46 @@ export function App() {
   );
 
   const loadFiles = useCallback(
-    async (path: string) => {
+    async (path: string, targetPoolId?: number) => {
+      const reqPoolId = targetPoolId ?? activePoolId;
+      const reqSeq = ++filesRequestSeqRef.current;
+      const reqIsSharePool =
+        poolsRef.current.some((p) => p.id === reqPoolId && p.isSharePool) || reqPoolId >= SHARE_POOL_RESERVE_ID;
       try {
-        const res = await client.api.files.$get({ query: { path, poolId: String(activePoolId) } });
+        const [res, linksRes] = await Promise.all([
+          client.api.files.$get({ query: { path, poolId: String(reqPoolId) } }),
+          reqIsSharePool
+            ? client.api.share.links.$get({ query: { poolId: String(reqPoolId) } }).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         if (res.ok) {
-          const data = await res.json();
+          const [data, linksData] = await Promise.all([
+            res.json(),
+            reqIsSharePool && linksRes?.ok ? linksRes.json().catch(() => null) : Promise.resolve(null),
+          ]);
+          if (filesRequestSeqRef.current !== reqSeq) return;
           setFiles(data.files as ClientFileRecord[]);
           setFolders(data.folders as ClientFolder[]);
+          setLoadedFilesPoolId(reqPoolId);
+          if (reqIsSharePool) {
+            if (linksData) {
+              const grouped: Record<string, StoredShareLink[]> = {};
+              for (const link of linksData.links) {
+                if (!grouped[link.batchFolderName]) {
+                  grouped[link.batchFolderName] = [];
+                }
+                grouped[link.batchFolderName].push(link);
+              }
+              setShareLinksByBatch(grouped);
+              setShareLinksPoolId(reqPoolId);
+            }
+          } else {
+            setShareLinksByBatch({});
+            setShareLinksPoolId(reqPoolId);
+          }
         }
       } catch (err) {
+        if (filesRequestSeqRef.current !== reqSeq) return;
         setErrorNotice(err instanceof Error ? err.message : 'Failed to query files');
       }
     },
@@ -654,7 +717,9 @@ export function App() {
           isExternalChangesOpen ||
           confirmEmptyTrash ||
           isNewFolderOpen ||
-          driveActionModal.isOpen
+          driveActionModal.isOpen ||
+          shareModalState ||
+          isClearSharePoolOpen
         );
         if (isAnyModalOpen) return;
 
@@ -692,6 +757,8 @@ export function App() {
     confirmEmptyTrash,
     isNewFolderOpen,
     driveActionModal.isOpen,
+    shareModalState,
+    isClearSharePoolOpen,
   ]);
 
   async function handleAuthorizeAccount(accountId: string) {
@@ -699,6 +766,7 @@ export function App() {
   }
 
   async function handleImportOAuth(file: File) {
+    if (isSharePoolActive) return;
     setIsImporting(true);
     showToast(`Inspecting credentials from ${file.name}...`);
     try {
@@ -745,6 +813,7 @@ export function App() {
   }
 
   async function handleSyncAll() {
+    if (isSharePoolActive) return;
     setIsSyncing(true);
     showToast('Fetching changes from Google Drive...');
     try {
@@ -766,6 +835,7 @@ export function App() {
   }
 
   function handleUploadFiles(fileList: FileList) {
+    if (isSharePoolActive) return;
     const list = Array.from(fileList);
     if (list.length > 0) {
       setStagedFiles(list);
@@ -776,17 +846,19 @@ export function App() {
 
   const handleStageDroppedUpload = useCallback(
     (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }) => {
+      if (isSharePoolActive) return;
       if (dropped.files.length > 0 || dropped.emptyFolders.length > 0) {
         setStagedFiles(dropped.files);
         setStagedEmptyFolders(dropped.emptyFolders);
         setIsUploadDrawerOpen(true);
       }
     },
-    []
+    [isSharePoolActive]
   );
 
   const handleDropExternalToPath = useCallback(
     async (targetPath: string, dataTransfer: DataTransfer) => {
+      if (isSharePoolActive) return;
       const extracted = await extractDataTransferEntries(dataTransfer, targetPath);
       if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
         setStagedFiles(extracted.files);
@@ -794,12 +866,12 @@ export function App() {
         setIsUploadDrawerOpen(true);
       }
     },
-    []
+    [isSharePoolActive]
   );
 
   useEffect(() => {
     const handleWindowDragOver = (e: DragEvent) => {
-      if (currentNav === 'trash') return;
+      if (currentNav === 'trash' || isSharePoolActive) return;
       if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
@@ -808,7 +880,7 @@ export function App() {
     };
 
     const handleWindowDrop = async (e: DragEvent) => {
-      if (currentNav === 'trash') return;
+      if (currentNav === 'trash' || isSharePoolActive) return;
       if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
@@ -829,13 +901,15 @@ export function App() {
       window.removeEventListener('dragover', handleWindowDragOver);
       window.removeEventListener('drop', handleWindowDrop);
     };
-  }, [currentNav, currentPath]);
+  }, [currentNav, currentPath, isSharePoolActive]);
 
   function handleOpenNewFolder() {
+    if (isSharePoolActive) return;
     setIsNewFolderOpen(true);
   }
 
   async function handleCreateFolder(folderName: string) {
+    if (isSharePoolActive) return;
     const newPath = (currentPath === '/' ? '' : currentPath) + '/' + folderName;
     try {
       const res = await client.api.folders.$post({
@@ -966,7 +1040,7 @@ export function App() {
 
   const handleMoveItems = useCallback(
     async (itemsToMove: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
-      if (itemsToMove.length === 0) return;
+      if (isSharePoolActive || itemsToMove.length === 0) return;
       try {
         const res = await client.api.items.move.$post({
           json: { items: itemsToMove, targetFolderPath, poolId: activePoolId },
@@ -1115,6 +1189,7 @@ export function App() {
   );
 
   const handleCutSelected = useCallback(() => {
+    if (isSharePoolActive) return;
     const actionableIds = Array.from(selectedIds).filter((id) => id !== '__parent__');
     if (actionableIds.length === 0 || currentNav === 'trash') return;
     const selectedFolders = folders.filter((f) => actionableIds.includes(f.id));
@@ -1127,9 +1202,10 @@ export function App() {
       setClipboard({ mode: 'cut', items });
       showToast(`Cut ${items.length} ${items.length === 1 ? 'item' : 'items'}. Press Ctrl+V or Paste to move here.`);
     }
-  }, [selectedIds, currentNav, folders, files, showToast]);
+  }, [isSharePoolActive, selectedIds, currentNav, folders, files, showToast]);
 
   const handleCopySelected = useCallback(() => {
+    if (isSharePoolActive) return;
     const actionableIds = Array.from(selectedIds).filter((id) => id !== '__parent__');
     if (actionableIds.length === 0 || currentNav === 'trash') return;
     const selectedFolders = folders.filter((f) => actionableIds.includes(f.id));
@@ -1142,18 +1218,20 @@ export function App() {
       setClipboard({ mode: 'copy', items });
       showToast(`Copied ${items.length} ${items.length === 1 ? 'item' : 'items'}. Press Ctrl+V or Paste to duplicate.`);
     }
-  }, [selectedIds, currentNav, folders, files, showToast]);
+  }, [isSharePoolActive, selectedIds, currentNav, folders, files, showToast]);
 
   const handlePaste = useCallback(() => {
+    if (isSharePoolActive) return;
     if (!clipboard || clipboard.items.length === 0 || currentNav === 'trash') return;
     if (clipboard.mode === 'cut') {
       handleMoveItems(clipboard.items, currentPath);
     } else {
       handleCopyItems(clipboard.items, currentPath);
     }
-  }, [clipboard, currentNav, currentPath, handleMoveItems, handleCopyItems]);
+  }, [isSharePoolActive, clipboard, currentNav, currentPath, handleMoveItems, handleCopyItems]);
 
   const handleOpenRenameSelected = useCallback(() => {
+    if (isSharePoolActive) return;
     if (selectedIds.size !== 1 || selectedIds.has('__parent__')) return;
     const selectedId = Array.from(selectedIds)[0];
     const foundFolder = folders.find((f) => f.id === selectedId);
@@ -1166,7 +1244,7 @@ export function App() {
     if (foundFile) {
       setRenameModalItem({ kind: 'file', id: foundFile.id, name: foundFile.name });
     }
-  }, [selectedIds, currentNav, folders, files, trashedFiles]);
+  }, [isSharePoolActive, selectedIds, currentNav, folders, files, trashedFiles]);
 
   const handleRename = useCallback(
     async (kind: 'file' | 'folder' | 'pool', id: string, newName: string) => {
@@ -1292,7 +1370,7 @@ export function App() {
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
-        if (selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
+        if (!isSharePoolActive && selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
           e.preventDefault();
           handleCutSelected();
         }
@@ -1300,7 +1378,7 @@ export function App() {
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-        if (selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
+        if (!isSharePoolActive && selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
           e.preventDefault();
           handleCopySelected();
         }
@@ -1308,7 +1386,7 @@ export function App() {
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-        if (clipboard && clipboard.items.length > 0 && currentNav !== 'trash') {
+        if (!isSharePoolActive && clipboard && clipboard.items.length > 0 && currentNav !== 'trash') {
           e.preventDefault();
           handlePaste();
         }
@@ -1316,7 +1394,7 @@ export function App() {
       }
 
       if (e.key === 'F2') {
-        if (selectedIds.size === 1 && !selectedIds.has('__parent__')) {
+        if (!isSharePoolActive && selectedIds.size === 1 && !selectedIds.has('__parent__')) {
           e.preventDefault();
           handleOpenRenameSelected();
         }
@@ -1366,6 +1444,7 @@ export function App() {
     handleCopySelected,
     handlePaste,
     handleOpenRenameSelected,
+    isSharePoolActive,
   ]);
 
   async function handleEmptyTrashExecute() {
@@ -1467,6 +1546,7 @@ export function App() {
   }, [discovered, storage, pendingDiscrepancies, activePoolId, accountFileCountMap]);
 
   async function handleTransferFile(fileId: string, targetAccountId: string) {
+    if (isSharePoolActive) return;
     const file = files.find((f) => f.id === fileId);
     const targetAcc = accountItems.find((a) => a.id === targetAccountId);
     const targetName = targetAcc?.displayName || targetAccountId;
@@ -1491,6 +1571,7 @@ export function App() {
   }
 
   async function handleTransferBatch(fileIds: string[], targetAccountId: string) {
+    if (isSharePoolActive) return;
     const targetAcc = accountItems.find((a) => a.id === targetAccountId);
     const targetName = targetAcc?.displayName || targetAccountId;
     try {
@@ -1614,18 +1695,32 @@ export function App() {
       }));
   }, [accountItems, externalChangesAccountId]);
 
+  const clearWorkspaceState = useCallback(() => {
+    setFiles([]);
+    setFolders([]);
+    setTrashedFiles([]);
+    setLoadedFilesPoolId(null);
+    setShareLinksByBatch({});
+    setShareLinksPoolId(null);
+    setFilteredAccountIds(new Set());
+    setSelectedIds(new Set());
+    setClipboard(null);
+  }, []);
+
   const handleSelectPool = useCallback(
     (nextPoolId: number) => {
       if (nextPoolId === activePoolId) return;
+      clearWorkspaceState();
       setActivePoolId(nextPoolId);
-      setFilteredAccountIds(new Set());
       setCurrentPath('/');
-      setSelectedIds(new Set());
-      setClipboard(null);
       setIsUploadDrawerOpen(false);
       setIsExternalChangesOpen(false);
+      setShareModalState(null);
+      setIsClearSharePoolOpen(false);
+      setMoveFilesModalGroup(null);
+      setRenameModalItem(null);
     },
-    [activePoolId]
+    [activePoolId, clearWorkspaceState]
   );
 
   const handleCreatePool = useCallback(async () => {
@@ -1648,12 +1743,13 @@ export function App() {
 
   const handleDeletePool = useCallback(
     async (pool: PoolSummary) => {
-      const currentIndex = pools.findIndex((p) => p.id === pool.id);
-      const remainingPools = pools.filter((p) => p.id !== pool.id);
-      if (remainingPools.length === 0) return;
+      const standardPools = pools.filter((p) => !p.isSharePool);
+      const currentIndex = standardPools.findIndex((p) => p.id === pool.id);
+      const remainingStandardPools = pools.filter((p) => p.id !== pool.id && !p.isSharePool);
+      if (remainingStandardPools.length === 0) return;
 
-      const nextAdjacent = remainingPools[currentIndex];
-      const prevAdjacent = currentIndex > 0 ? remainingPools[currentIndex - 1] : undefined;
+      const nextAdjacent = remainingStandardPools[currentIndex];
+      const prevAdjacent = currentIndex > 0 ? remainingStandardPools[currentIndex - 1] : undefined;
 
       let targetPool: PoolSummary;
       if (nextAdjacent && nextAdjacent.accountCount === 0) {
@@ -1661,11 +1757,11 @@ export function App() {
       } else if (prevAdjacent && prevAdjacent.accountCount === 0) {
         targetPool = prevAdjacent;
       } else {
-        const otherEmpty = remainingPools.find((p) => p.accountCount === 0);
+        const otherEmpty = remainingStandardPools.find((p) => p.accountCount === 0);
         if (otherEmpty) {
           targetPool = otherEmpty;
         } else {
-          targetPool = nextAdjacent || prevAdjacent || remainingPools[0];
+          targetPool = nextAdjacent || prevAdjacent || remainingStandardPools[0];
         }
       }
 
@@ -1675,7 +1771,7 @@ export function App() {
         });
         if (res.ok) {
           showToast(`Deleted pool "${pool.name}".`);
-          setPools(remainingPools);
+          setPools(pools.filter((p) => p.id !== pool.id));
           handleSelectPool(targetPool.id);
           await loadClusterData(targetPool.id);
         } else {
@@ -1713,6 +1809,106 @@ export function App() {
     },
     [pools, showToast, loadClusterData, loadFiles, currentPath, loadTrashFiles]
   );
+
+  const handleShareSelected = useCallback(() => {
+    if (isSharePoolActive || currentNav === 'trash') return;
+    const actionableIds = new Set(Array.from(selectedIds).filter((id) => id !== '__parent__'));
+    if (actionableIds.size === 0) return;
+
+    const selectedFoldersList = folders.filter((f) => actionableIds.has(f.id));
+    const selectedFilesList = files.filter((f) => actionableIds.has(f.id) && !f.isTrashed);
+    const items: ShareTargetItem[] = [
+      ...selectedFoldersList.map((f) => ({
+        kind: 'folder' as const,
+        id: f.id,
+        name: f.name,
+        virtualPath: f.virtualPath,
+      })),
+      ...selectedFilesList.map((f) => ({
+        kind: 'file' as const,
+        id: f.id,
+        name: f.name,
+        virtualPath: f.virtualPath,
+      })),
+    ];
+    if (items.length > 0) {
+      setShareModalState({ items, sourcePoolId: activePoolId });
+    }
+  }, [isSharePoolActive, currentNav, selectedIds, folders, files, activePoolId]);
+
+  const handleShareItem = useCallback(
+    (item: ShareTargetItem) => {
+      if (isSharePoolActive) return;
+      setShareModalState({ items: [item], sourcePoolId: activePoolId });
+    },
+    [isSharePoolActive, activePoolId]
+  );
+
+  const handleShareComplete = useCallback(
+    async (result: ShareExecuteResult) => {
+      clearWorkspaceState();
+      const batchPath = '/' + result.batchFolderName;
+      setActivePoolId(result.sharePoolId);
+      setCurrentNav('files');
+      handleNavigate(batchPath);
+      await Promise.all([loadClusterData(result.sharePoolId), loadFiles(batchPath, result.sharePoolId)]);
+    },
+    [clearWorkspaceState, handleNavigate, loadClusterData, loadFiles]
+  );
+
+  const handleClearSharePoolConfirm = useCallback(async () => {
+    try {
+      const res = await client.api.pools[':id']['clear-share'].$post({
+        param: { id: String(activePoolId) },
+      });
+      if (res.ok) {
+        setIsClearSharePoolOpen(false);
+        showToast('Share Pool cleared. Copied files and folders removed.');
+        await Promise.all([
+          loadFiles(currentPath),
+          loadTrashFiles(),
+          loadClusterData(activePoolId),
+        ]);
+      } else {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        const errMsg = err.error || 'Failed to clear Share Pool';
+        setErrorNotice(errMsg);
+        throw new Error(errMsg);
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setErrorNotice(errMsg);
+      throw err;
+    }
+  }, [activePoolId, currentPath, loadFiles, loadTrashFiles, loadClusterData, showToast]);
+
+  const handleCopyBatchLinks = useCallback(
+    async (batchFolderName: string): Promise<boolean> => {
+      const links = shareLinksByBatch[batchFolderName] ?? [];
+      const urls = links.map((l) => l.webViewLink).filter(Boolean);
+      if (urls.length === 0) return false;
+
+      const text = urls.join('\n');
+      const ok = await copyTextToClipboard(text);
+      if (!ok) return false;
+
+      showToast(
+        urls.length === 1
+          ? `Copied share link for ${batchFolderName}.`
+          : `Copied ${urls.length} share links for ${batchFolderName}.`
+      );
+      return true;
+    },
+    [shareLinksByBatch, showToast]
+  );
+
+  const isSharePoolDataReady = isSharePoolActive && loadedFilesPoolId === activePoolId;
+  const isShareLinksReady = isSharePoolDataReady && shareLinksPoolId === activePoolId;
+  const activeBatchFolderName =
+    isShareLinksReady && currentNav !== 'trash' && currentPath !== '/'
+      ? (currentPath.split('/').filter(Boolean)[0] ?? null)
+      : null;
+  const activeBatchLinks = activeBatchFolderName ? (shareLinksByBatch[activeBatchFolderName] ?? []) : [];
 
   const displayedFiles = useMemo(() => {
     if (filteredAccountIds.size === 0) return files;
@@ -1798,6 +1994,26 @@ export function App() {
     });
   }, [currentNav, selectedFiles, accountItems]);
 
+  const selectedShareBatches: SelectedShareBatch[] = useMemo(() => {
+    if (!isShareLinksReady || currentNav === 'trash' || currentPath !== '/') {
+      return [];
+    }
+    const batches: SelectedShareBatch[] = [];
+    for (const folder of displayedFolders) {
+      if (!selectedIds.has(folder.id)) continue;
+      const segments = folder.virtualPath.split('/').filter(Boolean);
+      if (segments.length !== 1) continue;
+      const batchFolderName = segments[0];
+      const links = shareLinksByBatch[batchFolderName] ?? [];
+      if (links.length === 0) continue;
+      batches.push({
+        batchFolderName,
+        linksCount: links.length,
+      });
+    }
+    return batches;
+  }, [isShareLinksReady, currentNav, currentPath, displayedFolders, selectedIds, shareLinksByBatch]);
+
   const modalFiles = useMemo(() => {
     if (!moveFilesModalGroup) return [];
     const idsSet = new Set(moveFilesModalGroup.fileIds);
@@ -1826,19 +2042,27 @@ export function App() {
         activePoolId={activePoolId}
         onSelectPool={handleSelectPool}
         onCreatePool={handleCreatePool}
-        onRenamePoolPrompt={(pool) => setRenameModalItem({ kind: 'pool', id: String(pool.id), name: pool.name })}
-        onDeletePoolPrompt={handleDeletePool}
+        onRenamePoolPrompt={
+          isSharePoolActive
+            ? undefined
+            : (pool) => setRenameModalItem({ kind: 'pool', id: String(pool.id), name: pool.name })
+        }
+        onDeletePoolPrompt={isSharePoolActive ? undefined : handleDeletePool}
         onSwitchAccountPool={handleSwitchAccountPool}
         onOpenMovePool={(acc) => setMovePoolTargetAccount(acc)}
         currentNav={currentNav}
         onSelectNav={(nav) => setCurrentNav(nav)}
         onAuthorizeAccount={handleAuthorizeAccount}
         onRefreshStorage={loadClusterData}
-        onOpenExternalChanges={(accId) => {
-          setExternalChangesAccountId(accId);
-          setIsExternalChangesOpen(true);
-        }}
-        onImportOAuth={handleImportOAuth}
+        onOpenExternalChanges={
+          isSharePoolActive
+            ? undefined
+            : (accId) => {
+                setExternalChangesAccountId(accId);
+                setIsExternalChangesOpen(true);
+              }
+        }
+        onImportOAuth={isSharePoolActive ? undefined : handleImportOAuth}
         onDisableAccount={(acc) => handleDisableAccount(acc.id)}
         onEnableAccount={handleEnableAccount}
         onRemoveAccount={(acc) => handleOpenDriveAction(acc, 'remove')}
@@ -1846,9 +2070,9 @@ export function App() {
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
         onCloseMobile={() => setIsMobileOpen(false)}
-        onDropItemsToRoot={(items) => handleMoveItems(items, '/')}
+        onDropItemsToRoot={isSharePoolActive ? undefined : (items) => handleMoveItems(items, '/')}
         onDropItemsToTrash={handleTrashItems}
-        onDropExternalToRoot={(dt) => handleDropExternalToPath('/', dt)}
+        onDropExternalToRoot={isSharePoolActive ? undefined : (dt) => handleDropExternalToPath('/', dt)}
       />
 
       <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
@@ -1878,17 +2102,35 @@ export function App() {
           selectedCount={actionableSelectedCount}
           selectedTotalBytes={selectedTotalBytes}
           selectedAccountGroups={selectedAccountGroups}
-          onOpenMoveFilesModal={(group) => setMoveFilesModalGroup(group)}
+          onOpenMoveFilesModal={
+            isSharePoolActive ? undefined : (group) => setMoveFilesModalGroup(group)
+          }
           onClearSelection={() => setSelectedIds(new Set())}
           onDeleteSelected={handleDeleteSelected}
-          onRenamePrompt={handleOpenRenameSelected}
+          onRenamePrompt={isSharePoolActive ? undefined : handleOpenRenameSelected}
           onRestoreSelected={handleBatchRestore}
-          onCutSelected={handleCutSelected}
-          onCopySelected={handleCopySelected}
-          clipboard={clipboard}
-          onPaste={handlePaste}
-          onMoveItemsToPath={handleMoveItems}
-          onDropExternalToPath={handleDropExternalToPath}
+          onCutSelected={isSharePoolActive ? undefined : handleCutSelected}
+          onCopySelected={isSharePoolActive ? undefined : handleCopySelected}
+          clipboard={isSharePoolActive ? null : clipboard}
+          onPaste={isSharePoolActive ? undefined : handlePaste}
+          onMoveItemsToPath={isSharePoolActive ? undefined : handleMoveItems}
+          onDropExternalToPath={isSharePoolActive ? undefined : handleDropExternalToPath}
+          onShareSelected={isSharePoolActive ? undefined : handleShareSelected}
+          isSharePoolActive={isSharePoolActive}
+          sharePoolItemCount={isSharePoolDataReady ? files.length + folders.length : 0}
+          onClearSharePool={
+            isSharePoolDataReady
+              ? () => setIsClearSharePoolOpen(true)
+              : undefined
+          }
+          activeShareLinksCount={activeBatchLinks.length}
+          onCopyActiveShareLinks={
+            activeBatchLinks.length > 0 && activeBatchFolderName
+              ? () => handleCopyBatchLinks(activeBatchFolderName)
+              : undefined
+          }
+          selectedShareBatches={selectedShareBatches}
+          onCopyShareBatchLinks={handleCopyBatchLinks}
         />
 
         <FileTable
@@ -1910,19 +2152,27 @@ export function App() {
           isTrashView={currentNav === 'trash'}
           onRestore={handleRestoreFile}
           onPermanentDelete={handlePermanentDelete}
-          onDropFiles={(droppedFiles) => {
-            if (droppedFiles.length > 0) {
-              setStagedFiles(droppedFiles);
-              setStagedEmptyFolders([]);
-              setIsUploadDrawerOpen(true);
-            }
-          }}
-          onStageDroppedUpload={handleStageDroppedUpload}
-          onMoveItems={handleMoveItems}
-          clipboard={clipboard}
+          onDropFiles={
+            isSharePoolActive
+              ? undefined
+              : (droppedFiles) => {
+                  if (droppedFiles.length > 0) {
+                    setStagedFiles(droppedFiles);
+                    setStagedEmptyFolders([]);
+                    setIsUploadDrawerOpen(true);
+                  }
+                }
+          }
+          onStageDroppedUpload={isSharePoolActive ? undefined : handleStageDroppedUpload}
+          onMoveItems={isSharePoolActive ? undefined : handleMoveItems}
+          clipboard={isSharePoolActive ? null : clipboard}
           accounts={accountItems}
-          onTransferFile={handleTransferFile}
+          onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
           transferringFileId={transferringFileId}
+          onShareItem={isSharePoolActive ? undefined : handleShareItem}
+          isSharePoolActive={isSharePoolActive}
+          shareLinksByBatch={isShareLinksReady ? shareLinksByBatch : undefined}
+          onCopyShareLinks={isShareLinksReady ? handleCopyBatchLinks : undefined}
         />
       </div>
 
@@ -2004,6 +2254,23 @@ export function App() {
         onConfirm={handleEmptyTrashExecute}
         itemCount={trashedFiles.length}
         totalBytes={trashedTotalBytes}
+      />
+
+      <ShareModal
+        isOpen={shareModalState !== null && shareModalState.items.length > 0}
+        onClose={() => setShareModalState(null)}
+        items={shareModalState?.items ?? []}
+        sourcePoolId={shareModalState?.sourcePoolId ?? activePoolId}
+        onComplete={handleShareComplete}
+      />
+
+      <ConfirmPurgeModal
+        isOpen={isClearSharePoolOpen}
+        onClose={() => setIsClearSharePoolOpen(false)}
+        onConfirm={handleClearSharePoolConfirm}
+        itemCount={Math.max(activePool?.fileCount ?? 0, files.length + folders.length)}
+        totalBytes={activePool?.totalBytes ?? files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)}
+        mode="share_pool"
       />
 
       <ConfirmDriveActionModal

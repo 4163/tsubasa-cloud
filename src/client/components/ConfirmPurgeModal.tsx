@@ -10,6 +10,7 @@ interface ConfirmPurgeModalProps {
   onConfirm: () => Promise<void> | void;
   itemCount: number;
   totalBytes?: number;
+  mode?: 'trash' | 'share_pool';
 }
 
 const styles = stylex.create({
@@ -188,9 +189,11 @@ export function ConfirmPurgeModal({
   onConfirm,
   itemCount,
   totalBytes = 0,
+  mode = 'trash',
 }: ConfirmPurgeModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
+  const isSharePool = mode === 'share_pool';
 
   useEffect(() => {
     if (isOpen) {
@@ -227,13 +230,15 @@ export function ConfirmPurgeModal({
         {...stylex.props(styles.modal)}
         role="dialog"
         aria-modal="true"
-        aria-label="Confirm permanent purge"
+        aria-label={isSharePool ? 'Confirm clear Share Pool' : 'Confirm permanent purge'}
         onClick={(e) => e.stopPropagation()}
       >
         <div {...stylex.props(styles.header)}>
           <div {...stylex.props(styles.titleGroup)}>
             <IconTrash size={16} />
-            <h3 {...stylex.props(styles.title)}>Permanently purge trash</h3>
+            <h3 {...stylex.props(styles.title)}>
+              {isSharePool ? 'Clear Share Pool?' : 'Permanently purge trash'}
+            </h3>
           </div>
           <button
             type="button"
@@ -247,17 +252,28 @@ export function ConfirmPurgeModal({
 
         <div {...stylex.props(styles.body)}>
           <div {...stylex.props(styles.pathHint)}>
-            Target: Trash · {itemCount} {itemCount === 1 ? 'file' : 'files'}
-            {totalBytes > 0 ? ` (${formatBytes(totalBytes)} recoverable quota)` : ''}
+            {isSharePool ? (
+              <>
+                Target: Share Pool (_Tsubasa~ Pool share) · {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                {totalBytes > 0 ? ` (${formatBytes(totalBytes)})` : ''}
+              </>
+            ) : (
+              <>
+                Target: Trash · {itemCount} {itemCount === 1 ? 'file' : 'files'}
+                {totalBytes > 0 ? ` (${formatBytes(totalBytes)} recoverable quota)` : ''}
+              </>
+            )}
           </div>
 
           <div {...stylex.props(styles.warningBox)}>
             <div {...stylex.props(styles.warningHeader)}>
               <IconAlertTriangle size={15} />
-              <span>Irreversible action</span>
+              <span>{isSharePool ? 'Permanent deletion' : 'Irreversible action'}</span>
             </div>
             <p {...stylex.props(styles.warningDesc)}>
-              Permanently purge all {itemCount} {itemCount === 1 ? 'file' : 'files'}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.
+              {isSharePool
+                ? 'All copied files and folders in _Tsubasa~ Pool share will be permanently deleted across Share Pool drives. Original files in your storage pools remain untouched.'
+                : `Permanently purge all ${itemCount} ${itemCount === 1 ? 'file' : 'files'}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.`}
             </p>
           </div>
         </div>
@@ -279,7 +295,9 @@ export function ConfirmPurgeModal({
             disabled={isSubmitting}
           >
             <IconTrash size={14} />
-            {isSubmitting ? 'Purging...' : 'Confirm purge'}
+            {isSharePool
+              ? (isSubmitting ? 'Clearing...' : 'Clear Share Pool')
+              : (isSubmitting ? 'Purging...' : 'Confirm purge')}
           </button>
         </div>
       </div>
