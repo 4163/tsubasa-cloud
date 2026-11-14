@@ -16,11 +16,15 @@ export * from './detector.js';
 export * from './rebalance.js';
 export * from './operations.js';
 
-export async function syncAllAccounts(poolId?: number): Promise<{
+export async function syncAllAccounts(poolId = 1): Promise<{
   hydrated: string[];
   synced: string[];
   errors: Array<{ accountId: string; error: string }>;
 }> {
+  if (isSharePoolId(poolId)) {
+    return { hydrated: [], synced: [], errors: [] };
+  }
+
   authPool.scan();
   const records = authPool.getAll();
   const hydrated: string[] = [];
@@ -37,21 +41,22 @@ export async function syncAllAccounts(poolId?: number): Promise<{
       where: eq(accounts.id, accountId),
     });
 
-    if (existingAccount && isSharePoolId(existingAccount.poolId)) {
-      continue;
-    }
-
-    if (poolId !== undefined && existingAccount && existingAccount.poolId !== poolId) {
-      continue;
+    if (existingAccount) {
+      if (isSharePoolId(existingAccount.poolId) || existingAccount.poolId !== poolId) {
+        continue;
+      }
+    } else {
+      const preferredPool = authPool.hasPreferredPool(accountId)
+        ? authPool.getPreferredPool(accountId)
+        : record.config.preferredPoolId;
+      if (preferredPool !== undefined && (isSharePoolId(preferredPool) || preferredPool !== poolId)) {
+        continue;
+      }
     }
 
     try {
       const hydRes = await hydrateAccount(accountId, existingAccount ? undefined : poolId);
-      if (isSharePoolId(hydRes.poolId)) {
-        continue;
-      }
-      if (poolId !== undefined && hydRes.poolId !== poolId) {
-        hydrated.push(hydRes.accountId);
+      if (isSharePoolId(hydRes.poolId) || hydRes.poolId !== poolId) {
         continue;
       }
 
