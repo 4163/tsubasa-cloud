@@ -249,6 +249,9 @@ const styles = stylex.create({
       borderColor: colors.brandAccent,
       color: colors.primaryText,
     },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
+    },
   },
   poolDeleteBtn: {
     ':hover': {
@@ -556,6 +559,10 @@ const styles = stylex.create({
       outline: `2px solid ${colors.focusRing}`,
       outlineOffset: '1px',
     },
+    '@media (pointer: coarse)': {
+      minWidth: '36px',
+      minHeight: '36px',
+    },
   },
   accountFilterBtnActive: {
     backgroundColor: colors.brandAccentSurface,
@@ -651,6 +658,9 @@ const styles = stylex.create({
     marginLeft: 'auto',
   },
   miniChangesBtnRed: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -671,8 +681,14 @@ const styles = stylex.create({
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
     },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
+    },
   },
   miniSyncBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -693,8 +709,14 @@ const styles = stylex.create({
       borderColor: colors.brandAccent,
       color: colors.brandAccent,
     },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
+    },
   },
   miniEnableBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -714,8 +736,14 @@ const styles = stylex.create({
       backgroundColor: colors.successSurface,
       borderColor: colors.success,
     },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
+    },
   },
   miniDangerBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -734,6 +762,9 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
     },
   },
   disabledPill: {

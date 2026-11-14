@@ -38,6 +38,8 @@ const styles = stylex.create({
   },
   mobileMenuBtn: {
     display: 'none',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderWidth: '0px',
     cursor: 'pointer',
@@ -49,6 +51,10 @@ const styles = stylex.create({
     },
     '@media (max-width: 768px)': {
       display: 'inline-flex',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '40px',
+      minHeight: '40px',
     },
   },
   searchContainer: {
@@ -67,7 +73,10 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':focus-within': {
       borderColor: colors.accentGold,
-      boxShadow: `0 0 0 2px ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
   },
   searchIcon: {
@@ -91,6 +100,9 @@ const styles = stylex.create({
     },
   },
   clearBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'transparent',
     borderWidth: '0px',
     cursor: 'pointer',
@@ -100,6 +112,10 @@ const styles = stylex.create({
     lineHeight: '1',
     ':hover': {
       color: colors.primaryText,
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '36px',
+      minHeight: '36px',
     },
   },
   rightGroup: {
@@ -119,6 +135,9 @@ const styles = stylex.create({
     padding: '2px',
     gap: '2px',
     boxSizing: 'border-box',
+    '@media (pointer: coarse)': {
+      height: 'auto',
+    },
   },
   themeBtn: {
     backgroundColor: 'transparent',
@@ -144,6 +163,9 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
     },
   },
   themeBtnActive: {
@@ -190,6 +212,9 @@ const styles = stylex.create({
     ':focus-visible': {
       outline: `2px solid ${colors.focusRing}`,
       outlineOffset: '2px',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
     },
   },
   githubText: {
