@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { db } from '../db/index.js';
+import { db, buildDirectoryPrefixBounds } from '../db/index.js';
 import { accounts, files } from '../db/schema.js';
-import { eq, and, sql, not } from 'drizzle-orm';
+import { eq, and, gte, lt, sql, not } from 'drizzle-orm';
 import {
   calculateHeadroom,
   getAccountTransferStats,
@@ -94,6 +94,65 @@ export async function getEligibleAccounts(
   return candidates;
 }
 
+export interface PoolFolderAffinityMap {
+  getAffinityAccounts(normalizedPath: string): string[];
+  recordAssignment(virtualPath: string, accountId: string): void;
+}
+
+function incrementDirectoryCounts(
+  dirCounts: Map<string, Map<string, number>>,
+  virtualPath: string,
+  accountId: string
+): void {
+  let currentDir = path.posix.dirname(virtualPath);
+  while (currentDir && currentDir !== '.') {
+    let accountCounts = dirCounts.get(currentDir);
+    if (!accountCounts) {
+      accountCounts = new Map<string, number>();
+      dirCounts.set(currentDir, accountCounts);
+    }
+    accountCounts.set(accountId, (accountCounts.get(accountId) ?? 0) + 1);
+
+    if (currentDir === '/') break;
+    currentDir = path.posix.dirname(currentDir);
+  }
+}
+
+export async function buildPoolFolderAffinityMap(poolId: number): Promise<PoolFolderAffinityMap> {
+  const dirCounts = new Map<string, Map<string, number>>();
+  const rows = await db
+    .select({
+      virtualPath: files.virtualPath,
+      accountId: files.accountId,
+    })
+    .from(files)
+    .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false)));
+
+  for (const row of rows) {
+    incrementDirectoryCounts(dirCounts, row.virtualPath, row.accountId);
+  }
+
+  return {
+    getAffinityAccounts(normalizedPath: string): string[] {
+      let currentDir = path.posix.dirname(normalizedPath);
+      while (currentDir && currentDir !== '.') {
+        const accountCounts = dirCounts.get(currentDir);
+        if (accountCounts && accountCounts.size > 0) {
+          return Array.from(accountCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([accountId]) => accountId);
+        }
+        if (currentDir === '/') break;
+        currentDir = path.posix.dirname(currentDir);
+      }
+      return [];
+    },
+    recordAssignment(virtualPath: string, accountId: string): void {
+      incrementDirectoryCounts(dirCounts, virtualPath, accountId);
+    },
+  };
+}
+
 /**
  * Finds accounts holding files in parent or ancestor paths of the virtual target.
  * Returns accounts ordered by number of co-located files descending.
@@ -102,7 +161,7 @@ export async function findFolderAffinityAccounts(normalizedPath: string, poolId 
   let currentDir = path.posix.dirname(normalizedPath);
 
   while (currentDir && currentDir !== '.') {
-    const pathPrefix = currentDir === '/' ? '/' : `${currentDir}/`;
+    const { lower, upper } = buildDirectoryPrefixBounds(currentDir);
 
     const affinityRows = await db
       .select({
@@ -114,7 +173,8 @@ export async function findFolderAffinityAccounts(normalizedPath: string, poolId 
         and(
           eq(files.poolId, poolId),
           eq(files.isTrashed, false),
-          sql`${files.virtualPath} LIKE ${pathPrefix + '%'}`
+          gte(files.virtualPath, lower),
+          lt(files.virtualPath, upper)
         )
       )
       .groupBy(files.accountId)
@@ -136,7 +196,8 @@ async function selectPlacementFromCandidates(
   candidates: CandidateAccount[],
   simulatedHeadrooms?: Map<string, number>,
   simulatedTransferBudgets?: Map<string, number>,
-  poolId?: number
+  poolId?: number,
+  affinityMap?: PoolFolderAffinityMap
 ): Promise<PlacementDecision> {
   const normalizedPath = normalizeVirtualPath(item.virtualPath);
 
@@ -180,8 +241,15 @@ async function selectPlacementFromCandidates(
   }
 
   // Check 1: Folder Affinity (Existing path priority, restricted to provided candidates)
+  // Skip affinity lookup when only one candidate is eligible since it cannot change the selection.
   const affinityAccountIds =
-    poolId !== undefined ? await findFolderAffinityAccounts(normalizedPath, poolId) : [];
+    eligible.length > 1
+      ? affinityMap
+        ? affinityMap.getAffinityAccounts(normalizedPath)
+        : poolId !== undefined
+          ? await findFolderAffinityAccounts(normalizedPath, poolId)
+          : []
+      : [];
   for (const affId of affinityAccountIds) {
     const match = eligible.find((cand) => cand.id === affId);
     if (match) {
@@ -342,6 +410,9 @@ export async function simulateBatchPlacement(
     simulatedTransferBudgets.set(c.id, c.transferStats.remainingUploadBytes24h);
   }
 
+  const affinityMap =
+    poolId !== undefined && candidates.length > 1 ? await buildPoolFolderAffinityMap(poolId) : undefined;
+
   const decisions: PlacementDecision[] = [];
   const accountAllocations: Record<string, { filesCount: number; bytesAllocated: number }> = {};
 
@@ -352,6 +423,7 @@ export async function simulateBatchPlacement(
     }
     accountAllocations[decision.accountId].filesCount++;
     accountAllocations[decision.accountId].bytesAllocated += decision.sizeBytes;
+    affinityMap?.recordAssignment(decision.virtualPath, decision.accountId);
   };
 
   const tree = buildDirectoryTree(items);
@@ -379,7 +451,13 @@ export async function simulateBatchPlacement(
     if (eligibleForBranch.length > 0 && node.fullPath !== '/') {
       // Find affinity or best-fit for the branch as a whole (restricted to provided candidates)
       const affinityIds =
-        poolId !== undefined ? await findFolderAffinityAccounts(node.fullPath, poolId) : [];
+        eligibleForBranch.length > 1
+          ? affinityMap
+            ? affinityMap.getAffinityAccounts(node.fullPath)
+            : poolId !== undefined
+              ? await findFolderAffinityAccounts(node.fullPath, poolId)
+              : []
+          : [];
       let targetAccount: CandidateAccount | undefined;
       for (const affId of affinityIds) {
         const match = eligibleForBranch.find((cand) => cand.id === affId);
@@ -437,7 +515,8 @@ export async function simulateBatchPlacement(
         candidates,
         simulatedHeadrooms,
         simulatedTransferBudgets,
-        poolId
+        poolId,
+        affinityMap
       );
       recordDecision(decision);
     }
