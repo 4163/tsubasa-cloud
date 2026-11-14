@@ -2474,7 +2474,6 @@ export function FileTable({
                           type="button"
                           {...stylex.props(styles.rowBtn)}
                           aria-label={`Share file ${file.name}`}
-                          title="Share file"
                           onClick={(e) => {
                             e.stopPropagation();
                             onShareItem({
