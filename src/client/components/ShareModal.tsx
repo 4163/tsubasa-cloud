@@ -49,7 +49,7 @@ function getDriveStatusBadge(
   if (acc.isDisabled) return { label: 'Disabled', tone: 'danger' };
   if (!acc.authorized) return { label: 'Re-auth needed', tone: 'danger' };
   if (acc.syncState === 'error') return { label: 'Sync error', tone: 'danger' };
-  if (acc.currentPoolIsShare) return { label: 'Already included', tone: 'neutral' };
+  if (acc.currentPoolIsShare) return { label: 'Already in share pool', tone: 'neutral' };
   return null;
 }
 
@@ -510,7 +510,7 @@ const styles = stylex.create({
   driveNeutralStatus: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
+    fontWeight: typography.fontWeightBody,
     color: colors.secondaryText,
     flexShrink: 0,
   },
@@ -1384,9 +1384,11 @@ export function ShareModal({
                                   <span {...stylex.props(styles.driveMetaSep)} aria-hidden="true">
                                     ·
                                   </span>
-                                  <span {...stylex.props(styles.drivePoolMeta)}>
-                                    {acc.currentPoolName}
-                                  </span>
+                                  {!acc.currentPoolIsShare && (
+                                    <span {...stylex.props(styles.drivePoolMeta)}>
+                                      {acc.currentPoolName}
+                                    </span>
+                                  )}
                                   {statusBadge && (
                                     <span
                                       {...stylex.props(
