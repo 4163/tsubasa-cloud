@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons.js';
+import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { useDialogLock } from '../utils/useBeforeUnload.js';
 
@@ -772,7 +772,7 @@ export function ExternalChangesDrawer({
                   <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardOverCeiling)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <IconFile size={16} />
+                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -823,7 +823,7 @@ export function ExternalChangesDrawer({
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <IconFile size={16} />
+                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -872,7 +872,7 @@ export function ExternalChangesDrawer({
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <IconFile size={16} />
+                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -919,7 +919,7 @@ export function ExternalChangesDrawer({
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <IconFile size={16} />
+                        <FileTypeIcon name={item.virtualPath} size={16} />
                         <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                           {item.virtualPath}
                         </span>

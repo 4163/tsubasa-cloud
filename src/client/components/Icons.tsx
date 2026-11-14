@@ -43,8 +43,8 @@ export function IconFolderPlus({ size = 18, ...props }: IconProps) {
 export function IconFile({ size = 18, ...props }: IconProps) {
   return (
     <svg width={size} height={size} {...baseProps} {...props}>
-      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-      <polyline points="13 2 13 9 20 9" />
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
     </svg>
   );
 }
@@ -322,6 +322,614 @@ export function IconScissors({ size = 16, ...props }: IconProps) {
       <path d="M14.8 14.8 20 20" />
     </svg>
   );
+}
+
+export function IconFileVideoCamera({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <rect width="8" height="6" x="2" y="12" rx="1" />
+      <path d="m10 13.843 3.033-1.755a.64.64 0 0 1 .967.56v4.704a.65.65 0 0 1-.967.56L10 16.157" />
+    </svg>
+  );
+}
+
+export function IconFilePlay({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 11l5 3-5 3v-6Z" />
+    </svg>
+  );
+}
+
+export function IconFilm({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M7 3v18" />
+      <path d="M3 7.5h4" />
+      <path d="M3 12h18" />
+      <path d="M3 16.5h4" />
+      <path d="M17 3v18" />
+      <path d="M17 7.5h4" />
+      <path d="M17 16.5h4" />
+    </svg>
+  );
+}
+
+export function IconFileImage({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <circle cx="10" cy="12" r="2" />
+      <path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22" />
+    </svg>
+  );
+}
+
+export function IconImagePlay({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M11 16l-5-5L2 15" />
+      <path d="M14 22H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v7" />
+      <path d="m17 14 5 3-5 3v-6Z" />
+      <circle cx="9" cy="8" r="2" />
+    </svg>
+  );
+}
+
+export function IconVectorSquare({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M19.5 7a24 24 0 0 1 0 10" />
+      <path d="M4.5 7a24 24 0 0 0 0 10" />
+      <path d="M7 19.5a24 24 0 0 0 10 0" />
+      <path d="M7 4.5a24 24 0 0 1 10 0" />
+      <rect x="17" y="17" width="5" height="5" rx="1" />
+      <rect x="17" y="2" width="5" height="5" rx="1" />
+      <rect x="2" y="17" width="5" height="5" rx="1" />
+      <rect x="2" y="2" width="5" height="5" rx="1" />
+    </svg>
+  );
+}
+
+export function IconAperture({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="m14.31 8 5.74 9.94" />
+      <path d="M9.69 8h11.48" />
+      <path d="m7.38 12 5.74-9.94" />
+      <path d="M9.69 16 3.95 6.06" />
+      <path d="M14.31 16H2.83" />
+      <path d="m16.62 12-5.74 9.94" />
+    </svg>
+  );
+}
+
+export function IconFileVolume({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M11 11a5 5 0 0 1 0 6" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M4 6.765V4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-.93-.23" />
+      <path d="M7 10.51a.5.5 0 0 0-.826-.38l-1.893 1.628A1 1 0 0 1 3.63 12H2.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h1.129a1 1 0 0 1 .652.242l1.893 1.63a.5.5 0 0 0 .826-.38z" />
+    </svg>
+  );
+}
+
+export function IconFileMusic({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M10.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v8.4" />
+      <path d="M8 18v-7.7L16 9v7" />
+      <circle cx="14" cy="16" r="2" />
+      <circle cx="6" cy="18" r="2" />
+    </svg>
+  );
+}
+
+export function IconFileSignal({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M8 18v-2" />
+      <path d="M12 18v-4" />
+      <path d="M16 18v-6" />
+    </svg>
+  );
+}
+
+export function IconFileText({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+    </svg>
+  );
+}
+
+export function IconFileSpreadsheet({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M8 13h2" />
+      <path d="M14 13h2" />
+      <path d="M8 17h2" />
+      <path d="M14 17h2" />
+    </svg>
+  );
+}
+
+export function IconFileCode({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M10 12.5 8 15l2 2.5" />
+      <path d="m14 12.5 2 2.5-2 2.5" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
+    </svg>
+  );
+}
+
+export function IconFileBraces({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
+      <path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1" />
+      <path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1" />
+    </svg>
+  );
+}
+
+export function IconFileCog({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="m3.2 12.9-.9-.4" />
+      <path d="m3.2 15.1-.9.4" />
+      <path d="M4.677 21.5a2 2 0 0 0 1.313.5H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v2.5" />
+      <path d="m4.9 11.2-.4-.9" />
+      <path d="m4.9 16.8-.4.9" />
+      <path d="m7.5 10.3-.4.9" />
+      <path d="m7.5 17.7-.4-.9" />
+      <path d="m9.7 12.5-.9.4" />
+      <path d="m9.7 15.5-.9-.4" />
+      <circle cx="6" cy="14" r="3" />
+    </svg>
+  );
+}
+
+export function IconFileDatabase({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M4 6V4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2h-6" />
+      <ellipse cx="6" cy="12" rx="4" ry="1.5" />
+      <path d="M2 12v6c0 .83 1.79 1.5 4 1.5s4-.67 4-1.5v-6" />
+      <path d="M2 15c0 .83 1.79 1.5 4 1.5s4-.67 4-1.5" />
+    </svg>
+  );
+}
+
+export function IconFileArchive({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M10 12v-1" />
+      <path d="M10 18v-2" />
+      <path d="M10 7V6" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M15.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v16a2 2 0 0 0 .274 1.01" />
+      <circle cx="10" cy="20" r="2" />
+    </svg>
+  );
+}
+
+export function IconFolderArchive({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <circle cx="15" cy="19" r="2" />
+      <path d="M20.9 19.8A2 2 0 0 0 22 18V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h5.1" />
+      <path d="M15 11v-1" />
+      <path d="M15 17v-2" />
+    </svg>
+  );
+}
+
+export function IconFileTerminal({ size = 18, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="m8 16 2-2-2-2" />
+      <path d="M12 18h4" />
+    </svg>
+  );
+}
+
+type IconComponent = (props: IconProps) => ReturnType<typeof IconFile>;
+
+const EXTENSION_ICON_MAP: Record<string, IconComponent> = {
+  // Video: Camera & Broadcast (file-video-camera)
+  avi: IconFileVideoCamera,
+  mov: IconFileVideoCamera,
+  ts: IconFileVideoCamera,
+  m2ts: IconFileVideoCamera,
+  mts: IconFileVideoCamera,
+  mxf: IconFileVideoCamera,
+  dv: IconFileVideoCamera,
+  '3gp': IconFileVideoCamera,
+  '3g2': IconFileVideoCamera,
+  tod: IconFileVideoCamera,
+  braw: IconFileVideoCamera,
+  r3d: IconFileVideoCamera,
+
+  // Video: Digital & Web (file-play)
+  mp4: IconFilePlay,
+  m4v: IconFilePlay,
+  webm: IconFilePlay,
+  flv: IconFilePlay,
+  f4v: IconFilePlay,
+  wmv: IconFilePlay,
+  mpg: IconFilePlay,
+  swf: IconFilePlay,
+  mpeg: IconFilePlay,
+  ogv: IconFilePlay,
+  asf: IconFilePlay,
+  amv: IconFilePlay,
+  m4p: IconFilePlay,
+
+  // Video: Cinema & Media (film)
+  mkv: IconFilm,
+  vob: IconFilm,
+  rmvb: IconFilm,
+  divx: IconFilm,
+  m2v: IconFilm,
+  ogm: IconFilm,
+  rm: IconFilm,
+  ifo: IconFilm,
+
+  // Images: Static Raster (file-image)
+  bmp: IconFileImage,
+  jfif: IconFileImage,
+  jpeg: IconFileImage,
+  jpg: IconFileImage,
+  png: IconFileImage,
+  webp: IconFileImage,
+  avif: IconFileImage,
+  tif: IconFileImage,
+  tiff: IconFileImage,
+  heic: IconFileImage,
+  heif: IconFileImage,
+  jxl: IconFileImage,
+  tga: IconFileImage,
+  dds: IconFileImage,
+  qoi: IconFileImage,
+  pcx: IconFileImage,
+
+  // Images: Animated (image-play)
+  gif: IconImagePlay,
+  apng: IconImagePlay,
+  avis: IconImagePlay,
+  mng: IconImagePlay,
+  flif: IconImagePlay,
+
+  // Images: Vectors & Icons (vector-square)
+  svg: IconVectorSquare,
+  ico: IconVectorSquare,
+  svgz: IconVectorSquare,
+  ai: IconVectorSquare,
+  eps: IconVectorSquare,
+  wmf: IconVectorSquare,
+  emf: IconVectorSquare,
+  cdr: IconVectorSquare,
+
+  // Images: Canvas, RAW & HDR (aperture)
+  xcf: IconAperture,
+  kra: IconAperture,
+  psd: IconAperture,
+  psb: IconAperture,
+  clip: IconAperture,
+  sai: IconAperture,
+  sai2: IconAperture,
+  pdn: IconAperture,
+  ase: IconAperture,
+  aseprite: IconAperture,
+  raw: IconAperture,
+  cr2: IconAperture,
+  cr3: IconAperture,
+  nef: IconAperture,
+  arw: IconAperture,
+  dng: IconAperture,
+  orf: IconAperture,
+  rw2: IconAperture,
+  exr: IconAperture,
+  hdr: IconAperture,
+
+  // Audio: Lossy (file-volume)
+  m4a: IconFileVolume,
+  mp3: IconFileVolume,
+  wma: IconFileVolume,
+  aac: IconFileVolume,
+  mp2: IconFileVolume,
+  mpc: IconFileVolume,
+  amr: IconFileVolume,
+  '3ga': IconFileVolume,
+  ac3: IconFileVolume,
+  eac3: IconFileVolume,
+  dts: IconFileVolume,
+  m4b: IconFileVolume,
+  m4r: IconFileVolume,
+  aa: IconFileVolume,
+  aax: IconFileVolume,
+  mid: IconFileVolume,
+  midi: IconFileVolume,
+  kar: IconFileVolume,
+
+  // Audio: Lossless (file-music)
+  flac: IconFileMusic,
+  alac: IconFileMusic,
+  dsf: IconFileMusic,
+  dff: IconFileMusic,
+  dsd: IconFileMusic,
+  mqa: IconFileMusic,
+
+  // Audio: Lossless Alt & Wave (file-signal)
+  wav: IconFileSignal,
+  ape: IconFileSignal,
+  ogg: IconFileSignal,
+  opus: IconFileSignal,
+  wv: IconFileSignal,
+  wave: IconFileSignal,
+  aif: IconFileSignal,
+  aiff: IconFileSignal,
+  aifc: IconFileSignal,
+  pcm: IconFileSignal,
+  tak: IconFileSignal,
+  tta: IconFileSignal,
+  shn: IconFileSignal,
+  ofr: IconFileSignal,
+  caf: IconFileSignal,
+  w64: IconFileSignal,
+  au: IconFileSignal,
+  oga: IconFileSignal,
+  mogg: IconFileSignal,
+  mka: IconFileSignal,
+  mod: IconFileSignal,
+  xm: IconFileSignal,
+  it: IconFileSignal,
+  s3m: IconFileSignal,
+
+  // Text & Documents (file-text)
+  log: IconFileText,
+  nfo: IconFileText,
+  txt: IconFileText,
+  pdf: IconFileText,
+  docx: IconFileText,
+  md: IconFileText,
+  markdown: IconFileText,
+  rst: IconFileText,
+  tex: IconFileText,
+  srt: IconFileText,
+  vtt: IconFileText,
+  lrc: IconFileText,
+  sub: IconFileText,
+  doc: IconFileText,
+  odt: IconFileText,
+  rtf: IconFileText,
+  pages: IconFileText,
+  epub: IconFileText,
+  mobi: IconFileText,
+  azw3: IconFileText,
+  djvu: IconFileText,
+  ppt: IconFileText,
+  pptx: IconFileText,
+  odp: IconFileText,
+  key: IconFileText,
+
+  // Spreadsheets & Tabular (file-spreadsheet)
+  xlsx: IconFileSpreadsheet,
+  csv: IconFileSpreadsheet,
+  xls: IconFileSpreadsheet,
+  xlsm: IconFileSpreadsheet,
+  xlsb: IconFileSpreadsheet,
+  xltx: IconFileSpreadsheet,
+  ods: IconFileSpreadsheet,
+  numbers: IconFileSpreadsheet,
+  tsv: IconFileSpreadsheet,
+  tab: IconFileSpreadsheet,
+  parquet: IconFileSpreadsheet,
+
+  // Web & Source Code (file-code)
+  html: IconFileCode,
+  mhtml: IconFileCode,
+  css: IconFileCode,
+  py: IconFileCode,
+  js: IconFileCode,
+  htm: IconFileCode,
+  xhtml: IconFileCode,
+  scss: IconFileCode,
+  sass: IconFileCode,
+  less: IconFileCode,
+  tsx: IconFileCode,
+  jsx: IconFileCode,
+  mjs: IconFileCode,
+  cjs: IconFileCode,
+  vue: IconFileCode,
+  svelte: IconFileCode,
+  php: IconFileCode,
+  rb: IconFileCode,
+  go: IconFileCode,
+  rs: IconFileCode,
+  c: IconFileCode,
+  cpp: IconFileCode,
+  h: IconFileCode,
+  hpp: IconFileCode,
+  cs: IconFileCode,
+  java: IconFileCode,
+  kt: IconFileCode,
+  swift: IconFileCode,
+  lua: IconFileCode,
+  xml: IconFileCode,
+  wasm: IconFileCode,
+
+  // Structured Data (file-braces)
+  json: IconFileBraces,
+  jsonc: IconFileBraces,
+  json5: IconFileBraces,
+  jsonl: IconFileBraces,
+  ndjson: IconFileBraces,
+  geojson: IconFileBraces,
+  graphql: IconFileBraces,
+  gql: IconFileBraces,
+  proto: IconFileBraces,
+
+  // Config (file-cog)
+  ini: IconFileCog,
+  cfg: IconFileCog,
+  conf: IconFileCog,
+  config: IconFileCog,
+  toml: IconFileCog,
+  yaml: IconFileCog,
+  yml: IconFileCog,
+  properties: IconFileCog,
+  env: IconFileCog,
+  editorconfig: IconFileCog,
+  gitignore: IconFileCog,
+  gitattributes: IconFileCog,
+  npmrc: IconFileCog,
+  yarnrc: IconFileCog,
+  prettierrc: IconFileCog,
+  eslintrc: IconFileCog,
+  plist: IconFileCog,
+  reg: IconFileCog,
+  service: IconFileCog,
+
+  // Database (file-database)
+  db: IconFileDatabase,
+  sqlite: IconFileDatabase,
+  sqlite3: IconFileDatabase,
+  db3: IconFileDatabase,
+  s3db: IconFileDatabase,
+  mdb: IconFileDatabase,
+  accdb: IconFileDatabase,
+  dbf: IconFileDatabase,
+  mdf: IconFileDatabase,
+  ldf: IconFileDatabase,
+  ndf: IconFileDatabase,
+  rdb: IconFileDatabase,
+  duckdb: IconFileDatabase,
+  realm: IconFileDatabase,
+  kdbx: IconFileDatabase,
+  sql: IconFileDatabase,
+  dump: IconFileDatabase,
+  bak: IconFileDatabase,
+
+  // Archives: General & Comic (file-archive)
+  '7z': IconFileArchive,
+  zip: IconFileArchive,
+  rar: IconFileArchive,
+  cbz: IconFileArchive,
+  cbr: IconFileArchive,
+  cb7: IconFileArchive,
+  gz: IconFileArchive,
+  bz2: IconFileArchive,
+  xz: IconFileArchive,
+  zst: IconFileArchive,
+  lz4: IconFileArchive,
+  cab: IconFileArchive,
+  arj: IconFileArchive,
+  lzh: IconFileArchive,
+  cba: IconFileArchive,
+  jar: IconFileArchive,
+  apk: IconFileArchive,
+  vpk: IconFileArchive,
+  pak: IconFileArchive,
+
+  // Archives: Tarballs & CBT (folder-archive)
+  tar: IconFolderArchive,
+  cbt: IconFolderArchive,
+  tgz: IconFolderArchive,
+  tbz: IconFolderArchive,
+  tbz2: IconFolderArchive,
+  txz: IconFolderArchive,
+  tzst: IconFolderArchive,
+  tlz: IconFolderArchive,
+
+  // Applications & Scripts (file-terminal)
+  bat: IconFileTerminal,
+  exe: IconFileTerminal,
+  cmd: IconFileTerminal,
+  ps1: IconFileTerminal,
+  sh: IconFileTerminal,
+  bash: IconFileTerminal,
+  zsh: IconFileTerminal,
+  vbs: IconFileTerminal,
+  msi: IconFileTerminal,
+  msix: IconFileTerminal,
+  appx: IconFileTerminal,
+  dmg: IconFileTerminal,
+  pkg: IconFileTerminal,
+  deb: IconFileTerminal,
+  rpm: IconFileTerminal,
+  appimage: IconFileTerminal,
+  com: IconFileTerminal,
+  dll: IconFileTerminal,
+  sys: IconFileTerminal,
+  so: IconFileTerminal,
+  dylib: IconFileTerminal,
+
+  // Explicit Default / Misc exclusions (file)
+  accurip: IconFile,
+  ass: IconFile,
+  bin: IconFile,
+  cue: IconFile,
+  m3u: IconFile,
+  iso: IconFile,
+  mds: IconFile,
+  xspf: IconFile,
+  ani: IconFile,
+  cur: IconFile,
+  eot: IconFile,
+  inf: IconFile,
+  moc: IconFile,
+  sample: IconFile,
+  scr: IconFile,
+  skel: IconFile,
+  ttf: IconFile,
+  woff: IconFile,
+  woff2: IconFile,
+};
+
+export type FileTypeIconProps = IconProps & {
+  name: string;
+};
+
+export function resolveFileIcon(nameOrPath: string): IconComponent {
+  if (!nameOrPath) return IconFile;
+  const slashIdx = Math.max(nameOrPath.lastIndexOf('/'), nameOrPath.lastIndexOf('\\'));
+  const baseStart = slashIdx + 1;
+  const dotIdx = nameOrPath.lastIndexOf('.');
+  if (dotIdx < baseStart || dotIdx >= nameOrPath.length - 1) {
+    return IconFile;
+  }
+  const ext = nameOrPath.slice(dotIdx + 1).toLowerCase();
+  return Object.hasOwn(EXTENSION_ICON_MAP, ext) ? EXTENSION_ICON_MAP[ext] : IconFile;
+}
+
+export function FileTypeIcon({ name, ...props }: FileTypeIconProps) {
+  const ResolvedIcon = resolveFileIcon(name);
+  return <ResolvedIcon {...props} />;
 }
 
 

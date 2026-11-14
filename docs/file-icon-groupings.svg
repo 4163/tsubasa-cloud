@@ -1,0 +1,870 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 2452" width="1360" height="2452">
+  <rect width="1360" height="2452" fill="#0b1412"/>
+  <rect x="32" y="24" width="1296" height="82" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <text x="52" y="54" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="20" font-weight="700">Tsubasa~ Cloud: File Type Icon Groupings</text>
+  <text x="52" y="78" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="13">20 Lucide icon buckets  |  82 core extensions  |  228 suggested additions  |  310 total mapped extensions</text>
+  <rect x="905" y="44" width="14" height="14" rx="3" fill="#deb76c"/>
+  <text x="925" y="55" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="600">Core (your explicit list)</text>
+  <rect x="1105" y="44" width="14" height="14" rx="3" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="1125" y="55" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12" font-weight="600">Suggested additions</text>
+  <text x="905" y="80" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11.5">WCAG AAA palette: Sage-Mint dark surfaces + Hanekawa gold accents</text>
+<g transform="translate(32, 124)">
+  <rect width="638" height="190" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><rect width="8" height="6" x="2" y="12" rx="1"/><path d="m10 13.843 3.033-1.755a.64.64 0 0 1 .967.56v4.704a.65.65 0 0 1-.967.56L10 16.157"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Video: Camera &amp; Broadcast</text>
+  <rect x="479" y="19" width="139" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="548.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-video-camera</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Physical cameras, transport streams, and raw camcorder captures.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (4)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.avi</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mov</text>
+  <rect x="122" y="100" width="38" height="22" rx="4" fill="#deb76c"/>
+  <text x="141" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ts</text>
+  <rect x="166" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="192" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.m2ts</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (8)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mts</text>
+  <rect x="71" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mxf</text>
+  <rect x="122" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="141" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dv</text>
+  <rect x="166" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="188.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.3gp</text>
+  <rect x="217" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="239.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.3g2</text>
+  <rect x="268" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="290.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tod</text>
+  <rect x="319" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="345" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.braw</text>
+  <rect x="377" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="399.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.r3d</text>
+</g>
+<g transform="translate(690, 124)">
+  <rect width="638" height="190" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 11l5 3-5 3v-6Z"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Video: Digital &amp; Web</text>
+  <rect x="537" y="19" width="81" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="577.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-play</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Web streams, digital containers, and interactive swf playback.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (8)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mp4</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.m4v</text>
+  <rect x="122" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="148" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.webm</text>
+  <rect x="180" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="202.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.flv</text>
+  <rect x="231" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="253.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.f4v</text>
+  <rect x="282" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="304.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.wmv</text>
+  <rect x="333" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="355.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mpg</text>
+  <rect x="384" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="406.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.swf</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (5)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mpeg</text>
+  <rect x="78" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="100.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ogv</text>
+  <rect x="129" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="151.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.asf</text>
+  <rect x="180" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="202.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.amv</text>
+  <rect x="231" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="253.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.m4p</text>
+</g>
+<g transform="translate(32, 330)">
+  <rect width="638" height="190" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Video: Cinema &amp; Media</text>
+  <rect x="573" y="19" width="45" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="595.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">film</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Feature-length media containers, disc rips, and release muxes.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (3)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mkv</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.vob</text>
+  <rect x="122" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="148" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.rmvb</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (5)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.divx</text>
+  <rect x="78" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="100.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.m2v</text>
+  <rect x="129" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="151.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ogm</text>
+  <rect x="180" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="199" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rm</text>
+  <rect x="224" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="246.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ifo</text>
+</g>
+<g transform="translate(690, 330)">
+  <rect width="638" height="190" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><circle cx="10" cy="12" r="2"/><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Images: Static Raster</text>
+  <rect x="530" y="19" width="88" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="574" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-image</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Still bitmaps, game textures, and lossless or web raster images.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (7)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.bmp</text>
+  <rect x="71" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="97" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.jfif</text>
+  <rect x="129" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="155" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.jpeg</text>
+  <rect x="187" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="209.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.jpg</text>
+  <rect x="238" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="260.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.png</text>
+  <rect x="289" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="315" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.webp</text>
+  <rect x="347" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="373" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.avif</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (9)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tif</text>
+  <rect x="71" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="97" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tiff</text>
+  <rect x="129" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="155" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.heic</text>
+  <rect x="187" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="213" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.heif</text>
+  <rect x="245" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="267.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.jxl</text>
+  <rect x="296" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="318.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tga</text>
+  <rect x="347" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="369.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dds</text>
+  <rect x="398" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="420.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.qoi</text>
+  <rect x="449" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="471.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pcx</text>
+</g>
+<g transform="translate(32, 536)">
+  <rect width="638" height="190" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 16l-5-5L2 15"/><path d="M14 22H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v7"/><path d="m17 14 5 3-5 3v-6Z"/><circle cx="9" cy="8" r="2"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Images: Animated</text>
+  <rect x="530" y="19" width="88" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="574" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">image-play</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Animated raster frames and multi-frame image sequences.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.gif</text>
+  <rect x="71" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="97" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.apng</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (3)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.avis</text>
+  <rect x="78" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="100.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mng</text>
+  <rect x="129" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="155" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.flif</text>
+</g>
+<g transform="translate(690, 536)">
+  <rect width="638" height="190" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 7a24 24 0 0 1 0 10"/><path d="M4.5 7a24 24 0 0 0 0 10"/><path d="M7 19.5a24 24 0 0 0 10 0"/><path d="M7 4.5a24 24 0 0 1 10 0"/><rect x="17" y="17" width="5" height="5" rx="1"/><rect x="17" y="2" width="5" height="5" rx="1"/><rect x="2" y="17" width="5" height="5" rx="1"/><rect x="2" y="2" width="5" height="5" rx="1"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Images: Vectors &amp; Icons</text>
+  <rect x="508" y="19" width="110" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="563" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">vector-square</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Scalable vector graphics, desktop icon sets, and clipart.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.svg</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ico</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (6)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.svgz</text>
+  <rect x="78" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="97" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ai</text>
+  <rect x="122" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="144.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.eps</text>
+  <rect x="173" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="195.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.wmf</text>
+  <rect x="224" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="246.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.emf</text>
+  <rect x="275" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="297.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cdr</text>
+</g>
+<g transform="translate(32, 742)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94"/><path d="M9.69 8h11.48"/><path d="m7.38 12 5.74-9.94"/><path d="M9.69 16 3.95 6.06"/><path d="M14.31 16H2.83"/><path d="m16.62 12-5.74 9.94"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Images: Canvas, RAW &amp; HDR</text>
+  <rect x="544" y="19" width="74" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="581" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">aperture</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Layered editor canvases, pixel art sources, and camera RAWs.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.xcf</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.kra</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (18)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.psd</text>
+  <rect x="71" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.psb</text>
+  <rect x="122" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="148" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.clip</text>
+  <rect x="180" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="202.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sai</text>
+  <rect x="231" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="257" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sai2</text>
+  <rect x="289" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="311.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pdn</text>
+  <rect x="340" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="362.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ase</text>
+  <rect x="391" y="148" width="81" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="431.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aseprite</text>
+  <rect x="478" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="500.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.raw</text>
+  <rect x="529" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="551.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cr2</text>
+  <rect x="20" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cr3</text>
+  <rect x="71" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.nef</text>
+  <rect x="122" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="144.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.arw</text>
+  <rect x="173" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="195.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dng</text>
+  <rect x="224" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="246.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.orf</text>
+  <rect x="275" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="297.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rw2</text>
+  <rect x="326" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="348.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.exr</text>
+  <rect x="377" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="399.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.hdr</text>
+</g>
+<g transform="translate(690, 742)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 11a5 5 0 0 1 0 6"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M4 6.765V4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-.93-.23"/><path d="M7 10.51a.5.5 0 0 0-.826-.38l-1.893 1.628A1 1 0 0 1 3.63 12H2.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h1.129a1 1 0 0 1 .652.242l1.893 1.63a.5.5 0 0 0 .826-.38z"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Audio: Lossy</text>
+  <rect x="522" y="19" width="96" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="570" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-volume</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Compressed distribution formats, podcasts, and MIDI tracks.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (3)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.m4a</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mp3</text>
+  <rect x="122" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="144.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.wma</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (15)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aac</text>
+  <rect x="71" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mp2</text>
+  <rect x="122" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="144.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mpc</text>
+  <rect x="173" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="195.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.amr</text>
+  <rect x="224" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="246.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.3ga</text>
+  <rect x="275" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="297.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ac3</text>
+  <rect x="326" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="352" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.eac3</text>
+  <rect x="384" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="406.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dts</text>
+  <rect x="435" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="457.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.m4b</text>
+  <rect x="486" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="508.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.m4r</text>
+  <rect x="537" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="556" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aa</text>
+  <rect x="20" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aax</text>
+  <rect x="71" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mid</text>
+  <rect x="122" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="148" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.midi</text>
+  <rect x="180" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="202.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.kar</text>
+</g>
+<g transform="translate(32, 976)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v8.4"/><path d="M8 18v-7.7L16 9v7"/><circle cx="14" cy="16" r="2"/><circle cx="6" cy="18" r="2"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Audio: Lossless</text>
+  <rect x="530" y="19" width="88" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="574" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-music</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Primary lossless archival releases and high-resolution master audio.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (1)</text>
+  <rect x="20" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="46" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.flac</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (5)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.alac</text>
+  <rect x="78" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="100.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dsf</text>
+  <rect x="129" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="151.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dff</text>
+  <rect x="180" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="202.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dsd</text>
+  <rect x="231" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="253.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mqa</text>
+</g>
+<g transform="translate(690, 976)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 18v-2"/><path d="M12 18v-4"/><path d="M16 18v-6"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Audio: Lossless Alt &amp; Wave</text>
+  <rect x="522" y="19" width="96" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="570" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-signal</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Uncompressed PCM waves, alternate lossless codecs, and tracker audio.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (5)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.wav</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ape</text>
+  <rect x="122" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="144.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ogg</text>
+  <rect x="173" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="199" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.opus</text>
+  <rect x="231" y="100" width="38" height="22" rx="4" fill="#deb76c"/>
+  <text x="250" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.wv</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (19)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.wave</text>
+  <rect x="78" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="100.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aif</text>
+  <rect x="129" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="155" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aiff</text>
+  <rect x="187" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="213" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.aifc</text>
+  <rect x="245" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="267.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pcm</text>
+  <rect x="296" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="318.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tak</text>
+  <rect x="347" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="369.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tta</text>
+  <rect x="398" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="420.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.shn</text>
+  <rect x="449" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="471.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ofr</text>
+  <rect x="500" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="522.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.caf</text>
+  <rect x="551" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="573.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.w64</text>
+  <rect x="20" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="39" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.au</text>
+  <rect x="64" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="86.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.oga</text>
+  <rect x="115" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="141" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mogg</text>
+  <rect x="173" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="195.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mka</text>
+  <rect x="224" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="246.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mod</text>
+  <rect x="275" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="294" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xm</text>
+  <rect x="319" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="338" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.it</text>
+  <rect x="363" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="385.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.s3m</text>
+</g>
+<g transform="translate(32, 1210)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Text &amp; Documents</text>
+  <rect x="537" y="19" width="81" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="577.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-text</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Plain text, logs, subtitles, ebooks, PDFs, and word processor files.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (5)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.log</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.nfo</text>
+  <rect x="122" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="144.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.txt</text>
+  <rect x="173" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="195.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.pdf</text>
+  <rect x="224" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="250" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.docx</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (20)</text>
+  <rect x="20" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="39" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.md</text>
+  <rect x="64" y="148" width="81" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="104.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.markdown</text>
+  <rect x="151" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="173.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rst</text>
+  <rect x="202" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="224.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tex</text>
+  <rect x="253" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="275.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.srt</text>
+  <rect x="304" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="326.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.vtt</text>
+  <rect x="355" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="377.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.lrc</text>
+  <rect x="406" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="428.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sub</text>
+  <rect x="457" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="479.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.doc</text>
+  <rect x="508" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="530.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.odt</text>
+  <rect x="559" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="581.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rtf</text>
+  <rect x="20" y="176" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="50" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pages</text>
+  <rect x="86" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="112" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.epub</text>
+  <rect x="144" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="170" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mobi</text>
+  <rect x="202" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="228" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.azw3</text>
+  <rect x="260" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="286" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.djvu</text>
+  <rect x="318" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="340.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ppt</text>
+  <rect x="369" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="395" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pptx</text>
+  <rect x="427" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="449.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.odp</text>
+  <rect x="478" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="500.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.key</text>
+</g>
+<g transform="translate(690, 1210)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Spreadsheets &amp; Tabular</text>
+  <rect x="486" y="19" width="132" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="552" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-spreadsheet</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Workbooks, delimited exports, and columnar data tables.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="46" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.xlsx</text>
+  <rect x="78" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="100.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.csv</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (9)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xls</text>
+  <rect x="71" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="97" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xlsm</text>
+  <rect x="129" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="155" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xlsb</text>
+  <rect x="187" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="213" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xltx</text>
+  <rect x="245" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="267.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ods</text>
+  <rect x="296" y="148" width="74" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="333" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.numbers</text>
+  <rect x="376" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="398.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tsv</text>
+  <rect x="427" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="449.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tab</text>
+  <rect x="478" y="148" width="74" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="515" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.parquet</text>
+</g>
+<g transform="translate(32, 1444)">
+  <rect width="638" height="246" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Web &amp; Source Code</text>
+  <rect x="537" y="19" width="81" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="577.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-code</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Markup, stylesheets, scripts, and compiled language source files.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (5)</text>
+  <rect x="20" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="46" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.html</text>
+  <rect x="78" y="100" width="60" height="22" rx="4" fill="#deb76c"/>
+  <text x="108" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mhtml</text>
+  <rect x="144" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="166.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.css</text>
+  <rect x="195" y="100" width="38" height="22" rx="4" fill="#deb76c"/>
+  <text x="214" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.py</text>
+  <rect x="239" y="100" width="38" height="22" rx="4" fill="#deb76c"/>
+  <text x="258" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.js</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (26)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.htm</text>
+  <rect x="71" y="148" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="101" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xhtml</text>
+  <rect x="137" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="163" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.scss</text>
+  <rect x="195" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="221" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sass</text>
+  <rect x="253" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="279" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.less</text>
+  <rect x="311" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="333.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tsx</text>
+  <rect x="362" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="384.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.jsx</text>
+  <rect x="413" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="435.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mjs</text>
+  <rect x="464" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="486.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cjs</text>
+  <rect x="515" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="537.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.vue</text>
+  <rect x="20" y="176" width="67" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="53.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.svelte</text>
+  <rect x="93" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="115.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.php</text>
+  <rect x="144" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="163" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rb</text>
+  <rect x="188" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="207" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.go</text>
+  <rect x="232" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="251" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rs</text>
+  <rect x="276" y="176" width="31" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="291.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.c</text>
+  <rect x="313" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="335.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cpp</text>
+  <rect x="364" y="176" width="31" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="379.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.h</text>
+  <rect x="401" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="423.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.hpp</text>
+  <rect x="452" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="471" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cs</text>
+  <rect x="496" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="522" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.java</text>
+  <rect x="554" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="573" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.kt</text>
+  <rect x="20" y="204" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="50" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.swift</text>
+  <rect x="86" y="204" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="108.5" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.lua</text>
+  <rect x="137" y="204" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="159.5" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xml</text>
+  <rect x="188" y="204" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="214" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.wasm</text>
+</g>
+<g transform="translate(690, 1444)">
+  <rect width="638" height="246" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/><path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Structured Data</text>
+  <rect x="522" y="19" width="96" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="570" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-braces</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">JSON payloads, schema definitions, and structured API definitions.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (1)</text>
+  <rect x="20" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="46" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.json</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (8)</text>
+  <rect x="20" y="148" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="50" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.jsonc</text>
+  <rect x="86" y="148" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="116" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.json5</text>
+  <rect x="152" y="148" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="182" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.jsonl</text>
+  <rect x="218" y="148" width="67" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="251.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ndjson</text>
+  <rect x="291" y="148" width="74" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="328" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.geojson</text>
+  <rect x="371" y="148" width="74" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="408" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.graphql</text>
+  <rect x="451" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="473.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.gql</text>
+  <rect x="502" y="148" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="532" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.proto</text>
+</g>
+<g transform="translate(32, 1706)">
+  <rect width="638" height="246" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m3.2 12.9-.9-.4"/><path d="m3.2 15.1-.9.4"/><path d="M4.677 21.5a2 2 0 0 0 1.313.5H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v2.5"/><path d="m4.9 11.2-.4-.9"/><path d="m4.9 16.8-.4.9"/><path d="m7.5 10.3-.4.9"/><path d="m7.5 17.7-.4-.9"/><path d="m9.7 12.5-.9.4"/><path d="m9.7 15.5-.9-.4"/><circle cx="6" cy="14" r="3"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Config</text>
+  <rect x="544" y="19" width="74" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="581" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-cog</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">INI/CFG settings, environment files, manifests, and dotfiles.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ini</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cfg</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (17)</text>
+  <rect x="20" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="46" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.conf</text>
+  <rect x="78" y="148" width="67" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="111.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.config</text>
+  <rect x="151" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="177" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.toml</text>
+  <rect x="209" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="235" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.yaml</text>
+  <rect x="267" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="289.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.yml</text>
+  <rect x="318" y="148" width="96" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="366" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.properties</text>
+  <rect x="420" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="442.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.env</text>
+  <rect x="471" y="148" width="110" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="526" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.editorconfig</text>
+  <rect x="20" y="176" width="88" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="64" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.gitignore</text>
+  <rect x="114" y="176" width="117" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="172.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.gitattributes</text>
+  <rect x="237" y="176" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="267" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.npmrc</text>
+  <rect x="303" y="176" width="67" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="336.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.yarnrc</text>
+  <rect x="376" y="176" width="96" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="424" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.prettierrc</text>
+  <rect x="478" y="176" width="81" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="518.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.eslintrc</text>
+  <rect x="20" y="204" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="50" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.plist</text>
+  <rect x="86" y="204" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="108.5" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.reg</text>
+  <rect x="137" y="204" width="74" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="174" y="219" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.service</text>
+</g>
+<g transform="translate(690, 1706)">
+  <rect width="638" height="246" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M4 6V4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2h-6"/><ellipse cx="6" cy="12" rx="4" ry="1.5"/><path d="M2 12v6c0 .83 1.79 1.5 4 1.5s4-.67 4-1.5v-6"/><path d="M2 15c0 .83 1.79 1.5 4 1.5s4-.67 4-1.5"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Database</text>
+  <rect x="508" y="19" width="110" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="563" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-database</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">SQLite stores, SQL dumps, key vaults, and database backups.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (1)</text>
+  <rect x="20" y="100" width="38" height="22" rx="4" fill="#deb76c"/>
+  <text x="39" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.db</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (17)</text>
+  <rect x="20" y="148" width="67" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="53.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sqlite</text>
+  <rect x="93" y="148" width="74" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="130" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sqlite3</text>
+  <rect x="173" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="195.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.db3</text>
+  <rect x="224" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="250" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.s3db</text>
+  <rect x="282" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="304.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mdb</text>
+  <rect x="333" y="148" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="363" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.accdb</text>
+  <rect x="399" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="421.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dbf</text>
+  <rect x="450" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="472.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.mdf</text>
+  <rect x="501" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="523.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ldf</text>
+  <rect x="552" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="574.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ndf</text>
+  <rect x="20" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rdb</text>
+  <rect x="71" y="176" width="67" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="104.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.duckdb</text>
+  <rect x="144" y="176" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="174" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.realm</text>
+  <rect x="210" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="236" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.kdbx</text>
+  <rect x="268" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="290.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sql</text>
+  <rect x="319" y="176" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="345" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dump</text>
+  <rect x="377" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="399.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.bak</text>
+</g>
+<g transform="translate(32, 1968)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12v-1"/><path d="M10 18v-2"/><path d="M10 7V6"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v16a2 2 0 0 0 .274 1.01"/><circle cx="10" cy="20" r="2"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Archives: General &amp; Comic</text>
+  <rect x="515" y="19" width="103" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="566.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-archive</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Standard compressed packages, game paks, and comic book archives.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (6)</text>
+  <rect x="20" y="100" width="38" height="22" rx="4" fill="#deb76c"/>
+  <text x="39" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.7z</text>
+  <rect x="64" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="86.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.zip</text>
+  <rect x="115" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="137.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.rar</text>
+  <rect x="166" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="188.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cbz</text>
+  <rect x="217" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="239.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cbr</text>
+  <rect x="268" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="290.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cb7</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (13)</text>
+  <rect x="20" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="39" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.gz</text>
+  <rect x="64" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="86.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.bz2</text>
+  <rect x="115" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="134" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.xz</text>
+  <rect x="159" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="181.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.zst</text>
+  <rect x="210" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="232.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.lz4</text>
+  <rect x="261" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="283.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cab</text>
+  <rect x="312" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="334.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.arj</text>
+  <rect x="363" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="385.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.lzh</text>
+  <rect x="414" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="436.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cba</text>
+  <rect x="465" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="487.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.jar</text>
+  <rect x="516" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="538.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.apk</text>
+  <rect x="567" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="589.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.vpk</text>
+  <rect x="20" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pak</text>
+</g>
+<g transform="translate(690, 1968)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="19" r="2"/><path d="M20.9 19.8A2 2 0 0 0 22 18V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h5.1"/><path d="M15 11v-1"/><path d="M15 17v-2"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Archives: Tarballs &amp; CBT</text>
+  <rect x="501" y="19" width="117" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="559.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">folder-archive</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Tape archives, compressed tar streams, and tar-backed comic volumes.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.tar</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cbt</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (6)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tgz</text>
+  <rect x="71" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tbz</text>
+  <rect x="122" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="148" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tbz2</text>
+  <rect x="180" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="202.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.txz</text>
+  <rect x="231" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="257" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tzst</text>
+  <rect x="289" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="311.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.tlz</text>
+</g>
+<g transform="translate(32, 2202)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m8 16 2-2-2-2"/><path d="M12 18h4"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Applications &amp; Scripts</text>
+  <rect x="508" y="19" width="110" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="563" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file-terminal</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Executables, shell scripts, installers, and shared native libraries.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (2)</text>
+  <rect x="20" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.bat</text>
+  <rect x="71" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.exe</text>
+  <text x="20" y="140" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">SUGGESTED ADDITIONS (19)</text>
+  <rect x="20" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.cmd</text>
+  <rect x="71" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.ps1</text>
+  <rect x="122" y="148" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="141" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sh</text>
+  <rect x="166" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="192" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.bash</text>
+  <rect x="224" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="246.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.zsh</text>
+  <rect x="275" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="297.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.vbs</text>
+  <rect x="326" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="348.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.msi</text>
+  <rect x="377" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="403" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.msix</text>
+  <rect x="435" y="148" width="52" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="461" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.appx</text>
+  <rect x="493" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="515.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dmg</text>
+  <rect x="544" y="148" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="566.5" y="163" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.pkg</text>
+  <rect x="20" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="42.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.deb</text>
+  <rect x="71" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="93.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.rpm</text>
+  <rect x="122" y="176" width="81" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="162.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.appimage</text>
+  <rect x="209" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="231.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.com</text>
+  <rect x="260" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="282.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dll</text>
+  <rect x="311" y="176" width="45" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="333.5" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.sys</text>
+  <rect x="362" y="176" width="38" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="381" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.so</text>
+  <rect x="406" y="176" width="60" height="22" rx="4" fill="#1b3b32" stroke="#2d453b" stroke-width="1"/>
+  <text x="436" y="191" text-anchor="middle" fill="#e5f2eb" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500">.dylib</text>
+</g>
+<g transform="translate(690, 2202)">
+  <rect width="638" height="218" rx="6" fill="#12211d" stroke="#2d453b" stroke-width="1"/>
+  <rect x="20" y="18" width="44" height="44" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <g transform="translate(30, 28)" fill="none" stroke="#deb76c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></g>
+  <text x="76" y="34" fill="#e5f2eb" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" font-weight="600">Default / Misc (Fallback)</text>
+  <rect x="573" y="19" width="45" height="22" rx="4" fill="#0b1412" stroke="#2d453b" stroke-width="1"/>
+  <text x="595.5" y="34" text-anchor="middle" fill="#deb76c" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">file</text>
+  <text x="76" y="55" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="12">Explicit misc exclusions plus catch-all fallback for all unmatched extensions.</text>
+  <line x1="20" y1="74" x2="618" y2="74" stroke="#1e302a" stroke-width="1"/>
+  <text x="20" y="92" fill="#9bb8ab" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.06em">CORE (19)</text>
+  <rect x="20" y="100" width="74" height="22" rx="4" fill="#deb76c"/>
+  <text x="57" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.accurip</text>
+  <rect x="100" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="122.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ass</text>
+  <rect x="151" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="173.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.bin</text>
+  <rect x="202" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="224.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cue</text>
+  <rect x="253" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="275.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.m3u</text>
+  <rect x="304" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="326.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.iso</text>
+  <rect x="355" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="377.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.mds</text>
+  <rect x="406" y="100" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="432" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.xspf</text>
+  <rect x="464" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="486.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ani</text>
+  <rect x="515" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="537.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.cur</text>
+  <rect x="566" y="100" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="588.5" y="115" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.eot</text>
+  <rect x="20" y="128" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="42.5" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.inf</text>
+  <rect x="71" y="128" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="93.5" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.moc</text>
+  <rect x="122" y="128" width="67" height="22" rx="4" fill="#deb76c"/>
+  <text x="155.5" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.sample</text>
+  <rect x="195" y="128" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="217.5" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.scr</text>
+  <rect x="246" y="128" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="272" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.skel</text>
+  <rect x="304" y="128" width="45" height="22" rx="4" fill="#deb76c"/>
+  <text x="326.5" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.ttf</text>
+  <rect x="355" y="128" width="52" height="22" rx="4" fill="#deb76c"/>
+  <text x="381" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.woff</text>
+  <rect x="413" y="128" width="60" height="22" rx="4" fill="#deb76c"/>
+  <text x="443" y="143" text-anchor="middle" fill="#111d18" font-family="'Cascadia Mono', Consolas, ui-monospace, monospace" font-size="11.5" font-weight="600">.woff2</text>
+</g>
+</svg>

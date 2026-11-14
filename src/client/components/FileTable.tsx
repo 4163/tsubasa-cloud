@@ -4,7 +4,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import {
   IconFolderFilled,
-  IconFile,
+  FileTypeIcon,
   IconDownload,
   IconTrash,
   IconChevronRight,
@@ -2222,7 +2222,7 @@ export function FileTable({
                       </div>
 
                       <div {...stylex.props(styles.nameCell)} title={file.virtualPath}>
-                        <IconFile {...stylex.props(styles.itemIcon)} />
+                        <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(styles.itemIcon)} />
                         <span
                           {...stylex.props(styles.itemLabel)}
                           title={`Original location: ${file.virtualPath}`}
@@ -2352,7 +2352,7 @@ export function FileTable({
                     </div>
 
                     <div {...stylex.props(styles.nameCell)} title={file.virtualPath}>
-                      <IconFile {...stylex.props(styles.itemIcon)} />
+                      <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(styles.itemIcon)} />
                       <span {...stylex.props(styles.itemLabel)}>
                         {isSearching ? file.virtualPath : file.name}
                       </span>

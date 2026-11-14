@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconUpload, IconFile, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder } from './Icons.js';
+import { IconClose, IconUpload, FileTypeIcon, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { useDialogLock } from '../utils/useBeforeUnload.js';
 import type { AccountItem } from './Sidebar.js';
@@ -928,7 +928,7 @@ export function UploadDrawer({
                 {/* Header row: file name + size or completion status */}
                 <div {...stylex.props(styles.fileCardHeader)}>
                   <div {...stylex.props(styles.fileInfoGroup)}>
-                    <IconFile size={16} {...stylex.props(styles.fileIcon)} />
+                    <FileTypeIcon name={item.file.name || item.virtualPath} size={16} {...stylex.props(styles.fileIcon)} />
                     <div {...stylex.props(styles.fileTitleCol)}>
                       <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                         {item.file.name}

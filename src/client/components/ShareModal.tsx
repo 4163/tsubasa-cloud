@@ -9,7 +9,7 @@ import {
   IconShare,
   IconLink,
   IconFolderFilled,
-  IconFile,
+  FileTypeIcon,
   IconCheck,
   IconCopy,
   IconAlertTriangle,
@@ -1226,7 +1226,7 @@ export function ShareModal({
                       summaryHasFolder && styles.summaryIconFolder
                     )}
                   >
-                    {summaryHasFolder ? <IconFolderFilled size={18} /> : <IconFile size={16} />}
+                    {summaryHasFolder ? <IconFolderFilled size={18} /> : <FileTypeIcon name={items[0].name || items[0].virtualPath} size={16} />}
                   </span>
                   <div {...stylex.props(styles.summaryTextCol)}>
                     <span {...stylex.props(styles.summaryTitle)} title={summaryTitle}>
