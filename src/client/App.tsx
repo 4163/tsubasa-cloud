@@ -130,7 +130,7 @@ const styles = stylex.create({
   },
 });
 
-let lastDiscrepancyScanMs = 0;
+const lastDiscrepancyScanByPool = new Map<number, number>();
 const DISCREPANCY_COOLDOWN_MS = 60_000;
 
 export function App() {
@@ -226,8 +226,17 @@ export function App() {
   const [shareLinksPoolId, setShareLinksPoolId] = useState<number | null>(null);
   const filesRequestSeqRef = useRef(0);
   const trashRequestSeqRef = useRef(0);
+  const clusterRequestSeqRef = useRef(0);
+  const discrepancyRequestSeqRef = useRef(0);
+  const activePoolIdRef = useRef(activePoolId);
+  activePoolIdRef.current = activePoolId;
   const poolsRef = useRef(pools);
   poolsRef.current = pools;
+  const isPoolSharePool = useCallback(
+    (poolId: number): boolean =>
+      poolsRef.current.some((p) => p.id === poolId && p.isSharePool) || poolId >= SHARE_POOL_RESERVE_ID,
+    []
+  );
 
   function getPathUrl(targetPath: string): string {
     if (typeof window === 'undefined') return '';
@@ -500,46 +509,69 @@ export function App() {
     }, 4000);
   }, []);
 
-  const checkAccountDiscrepancies = useCallback(async (accountList: DiscoveredAccount[], force = false) => {
-    const now = Date.now();
-    if (!force && now - lastDiscrepancyScanMs < DISCREPANCY_COOLDOWN_MS) {
-      return;
-    }
-    lastDiscrepancyScanMs = now;
-    const authAccounts = accountList.filter((a) => a.authorized);
-    await Promise.all(
-      authAccounts.map(async (acc) => {
-        try {
-          const res = await client.api.sync['external-changes'][':accountId'].$get({
-            param: { accountId: acc.accountId },
-          });
-          if (res.ok) {
-            const report = await res.json();
-            const count =
-              (report?.conflicts?.length ?? 0) +
-              (report?.overCeiling?.length ?? 0) +
-              (report?.unindexed?.length ?? 0) +
-              (report?.modified?.length ?? 0) +
-              (report?.missingRemote?.length ?? 0);
-            setPendingDiscrepancies((prev) => ({
-              ...prev,
-              [acc.accountId]: count > 0,
-            }));
+  const checkAccountDiscrepancies = useCallback(
+    async (accountList: DiscoveredAccount[], force = false, targetPoolId?: number) => {
+      const poolId = targetPoolId ?? activePoolIdRef.current;
+      if (isPoolSharePool(poolId)) {
+        return;
+      }
+      const authAccounts = accountList.filter(
+        (a) => (a.poolId ?? poolId) === poolId && a.authorized
+      );
+      if (authAccounts.length === 0) {
+        return;
+      }
+      const now = Date.now();
+      const lastScanMs = lastDiscrepancyScanByPool.get(poolId) ?? 0;
+      if (!force && now - lastScanMs < DISCREPANCY_COOLDOWN_MS) {
+        return;
+      }
+      lastDiscrepancyScanByPool.set(poolId, now);
+      const reqSeq = ++discrepancyRequestSeqRef.current;
+      await Promise.all(
+        authAccounts.map(async (acc) => {
+          try {
+            const res = await client.api.sync['external-changes'][':accountId'].$get({
+              param: { accountId: acc.accountId },
+            });
+            if (activePoolIdRef.current !== poolId || discrepancyRequestSeqRef.current !== reqSeq) {
+              return;
+            }
+            if (res.ok) {
+              const report = await res.json();
+              if (activePoolIdRef.current !== poolId || discrepancyRequestSeqRef.current !== reqSeq) {
+                return;
+              }
+              const count =
+                (report?.conflicts?.length ?? 0) +
+                (report?.overCeiling?.length ?? 0) +
+                (report?.unindexed?.length ?? 0) +
+                (report?.modified?.length ?? 0) +
+                (report?.missingRemote?.length ?? 0);
+              setPendingDiscrepancies((prev) => ({
+                ...prev,
+                [acc.accountId]: count > 0,
+              }));
+            }
+          } catch {
+            // Silently skip if network or scan is unavailable
           }
-        } catch {
-          // Silently skip if network or scan is unavailable
-        }
-      })
-    );
-  }, []);
+        })
+      );
+    },
+    [isPoolSharePool]
+  );
 
   const loadClusterData = useCallback(
     async (targetPoolId?: number): Promise<DiscoveredAccount[] | undefined> => {
-      const effectivePoolId = targetPoolId ?? activePoolId;
+      const effectivePoolId = targetPoolId ?? activePoolIdRef.current;
+      const reqSeq = ++clusterRequestSeqRef.current;
       try {
         const poolsRes = await client.api.pools.$get();
+        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
         if (poolsRes.ok) {
           const poolsData = await poolsRes.json();
+          if (clusterRequestSeqRef.current !== reqSeq) return undefined;
           setPools(poolsData.pools);
           if (poolsData.pools.length > 0 && !poolsData.pools.some((p) => p.id === effectivePoolId)) {
             const fallbackPool = poolsData.pools.find((p) => !p.isSharePool) ?? poolsData.pools[0];
@@ -550,24 +582,30 @@ export function App() {
         const storageRes = await client.api.storage.overview.$get({
           query: { poolId: String(effectivePoolId) },
         });
+        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
         if (storageRes.ok) {
-          setStorage(await storageRes.json());
+          const storageData = await storageRes.json();
+          if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+          setStorage(storageData);
         }
 
         const poolRes = await client.api.accounts.pool.$get({
           query: { poolId: String(effectivePoolId) },
         });
+        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
         if (poolRes.ok) {
           const poolData = await poolRes.json();
+          if (clusterRequestSeqRef.current !== reqSeq) return undefined;
           setDiscovered(poolData.accounts);
           return poolData.accounts as DiscoveredAccount[];
         }
       } catch (err) {
+        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
         setErrorNotice(err instanceof Error ? err.message : 'Cluster offline');
       }
       return undefined;
     },
-    [activePoolId]
+    []
   );
 
   const loadFiles = useCallback(
@@ -650,12 +688,14 @@ export function App() {
   }, [loadClusterData, loadFiles]);
 
   useEffect(() => {
-    if (discovered.length > 0) {
-      void checkAccountDiscrepancies(discovered, false);
+    if (!isSharePoolActive && discovered.length > 0) {
+      void checkAccountDiscrepancies(discovered, false, activePoolId);
     }
-  }, [discovered, checkAccountDiscrepancies]);
+  }, [discovered, isSharePoolActive, activePoolId, checkAccountDiscrepancies]);
 
   const clearWorkspaceState = useCallback(() => {
+    clusterRequestSeqRef.current++;
+    discrepancyRequestSeqRef.current++;
     setFiles([]);
     setFolders([]);
     setTrashedFiles([]);
@@ -666,11 +706,14 @@ export function App() {
     setFilteredAccountIds(new Set());
     setSelectedIds(new Set());
     setClipboard(null);
+    setPendingDiscrepancies({});
   }, []);
 
   const handleSelectPool = useCallback(
     (nextPoolId: number) => {
       if (nextPoolId === activePoolId) return;
+      clusterRequestSeqRef.current++;
+      discrepancyRequestSeqRef.current++;
       clearWorkspaceState();
       setActivePoolId(nextPoolId);
       setCurrentPath('/');
@@ -702,13 +745,13 @@ export function App() {
       if (targetPool !== activePoolId) {
         handleSelectPool(targetPool);
       }
-      lastDiscrepancyScanMs = 0;
+      lastDiscrepancyScanByPool.set(targetPool, 0);
       const [freshAccounts] = await Promise.all([
         loadClusterData(targetPool),
         loadFiles(nextPath, targetPool),
       ]);
       if (freshAccounts) {
-        await checkAccountDiscrepancies(freshAccounts, true);
+        await checkAccountDiscrepancies(freshAccounts, true, targetPool);
       }
       if (conflictsCount > 0) {
         showToast(conflictToast);
@@ -752,6 +795,40 @@ export function App() {
       });
     }
   }, [activePoolId, presentAuthorizedAccount]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+    const channel = new BroadcastChannel('tsubasa-instance-channel');
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: string; account?: string; poolId?: number; conflicts?: number }
+        | null
+        | undefined;
+      if (!data || data.type !== 'AUTH_COMPLETED') return;
+      const rawAccount = typeof data.account === 'string' && data.account ? data.account : undefined;
+      const accountLabel = rawAccount || 'Google account';
+      const targetPool =
+        typeof data.poolId === 'number' && Number.isFinite(data.poolId) && data.poolId > 0
+          ? data.poolId
+          : activePoolIdRef.current;
+      const conflictsCount =
+        typeof data.conflicts === 'number' && Number.isFinite(data.conflicts) && data.conflicts > 0
+          ? data.conflicts
+          : 0;
+      void presentAuthorizedAccount({
+        accountFilterId: rawAccount,
+        targetPool,
+        conflictsCount,
+        conflictToast: `Account "${accountLabel}" authorized with ${conflictsCount} file ${conflictsCount === 1 ? 'conflict' : 'conflicts'}.`,
+        cleanToast: `Account "${accountLabel}" successfully authorized.`,
+      });
+    };
+    channel.addEventListener('message', handleMessage);
+    return () => {
+      channel.removeEventListener('message', handleMessage);
+      channel.close();
+    };
+  }, [presentAuthorizedAccount]);
 
   useEffect(() => {
     function handleFocus() {
@@ -949,21 +1026,28 @@ export function App() {
   }
 
   async function handleSyncAll() {
-    if (isSharePoolActive) return;
+    const reqPoolId = activePoolId;
+    if (isPoolSharePool(reqPoolId)) return;
     setIsSyncing(true);
     showToast('Fetching changes from Google Drive...');
     try {
       const res = await client.api.sync.all.$post({
-        query: { poolId: String(activePoolId) },
+        query: { poolId: String(reqPoolId) },
       });
+      if (activePoolIdRef.current !== reqPoolId) return;
       if (res.ok) {
         const report = await res.json();
+        if (activePoolIdRef.current !== reqPoolId) return;
         showToast(`Update complete: ${report.synced.length} drives checked.`);
-        await loadClusterData();
-        await loadFiles(currentPath);
-        await checkAccountDiscrepancies(discovered, true);
+        const [freshAccounts] = await Promise.all([
+          loadClusterData(reqPoolId),
+          loadFiles(currentPathRef.current, reqPoolId),
+        ]);
+        if (activePoolIdRef.current !== reqPoolId) return;
+        await checkAccountDiscrepancies(freshAccounts ?? discovered, true, reqPoolId);
       }
     } catch (err) {
+      if (activePoolIdRef.current !== reqPoolId) return;
       setErrorNotice(err instanceof Error ? err.message : 'Fetch changes failed');
     } finally {
       setIsSyncing(false);
