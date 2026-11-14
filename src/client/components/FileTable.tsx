@@ -108,6 +108,7 @@ const styles = stylex.create({
     color: colors.secondaryText,
     userSelect: 'none',
     boxSizing: 'border-box',
+    overflow: 'hidden',
     flexShrink: 0,
     '@media (max-width: 768px)': {
       display: 'none',
@@ -562,9 +563,13 @@ const styles = stylex.create({
     flexDirection: 'column',
     minHeight: '100%',
     width: '100%',
+    minWidth: '787px',
     position: 'relative',
     boxSizing: 'border-box',
     userSelect: 'none',
+    '@media (max-width: 768px)': {
+      minWidth: 0,
+    },
   },
   emptyDropZone: {
     flex: 1,
@@ -1576,9 +1581,71 @@ export function FileTable({
     getActiveIndex,
   ]);
 
+  const headerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const viewport = parentRef.current;
+    if (!viewport) return;
+    const header = headerRef.current;
+
+    const canScrollY = (el: HTMLElement, deltaY: number) => {
+      if (el.scrollHeight <= el.clientHeight) return false;
+      if (deltaY > 0) {
+        return el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      }
+      return el.scrollTop > 0;
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.deltaX !== 0 || e.deltaY === 0) return;
+      if (viewport.scrollWidth <= viewport.clientWidth) return;
+
+      const delta =
+        e.deltaMode === 1
+          ? e.deltaY * 40
+          : e.deltaMode === 2
+            ? e.deltaY * viewport.clientWidth
+            : e.deltaY;
+
+      const rect = viewport.getBoundingClientRect();
+      const isOverHorizontalScrollbar =
+        e.clientY >= rect.top + viewport.clientTop + viewport.clientHeight &&
+        e.clientY <= rect.bottom &&
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right;
+      const isOverHeader =
+        header !== null &&
+        e.target instanceof Node &&
+        (e.currentTarget === header || header.contains(e.target));
+
+      if (!isOverHeader && !isOverHorizontalScrollbar && canScrollY(viewport, delta)) {
+        return;
+      }
+
+      const prevScrollLeft = viewport.scrollLeft;
+      viewport.scrollLeft += delta;
+      if (viewport.scrollLeft !== prevScrollLeft) {
+        if (header) {
+          header.scrollLeft = viewport.scrollLeft;
+        }
+        e.preventDefault();
+      } else if (isOverHorizontalScrollbar) {
+        e.preventDefault();
+      }
+    };
+
+    viewport.addEventListener('wheel', handleWheel, { passive: false });
+    header?.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      viewport.removeEventListener('wheel', handleWheel);
+      header?.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
+
   return (
     <div {...stylex.props(styles.container)} aria-busy={isLoading ? 'true' : undefined}>
-      <div {...stylex.props(styles.headerRow)}>
+      <div ref={headerRef} {...stylex.props(styles.headerRow)}>
         <div {...stylex.props(styles.headerGutter)} data-marquee-gutter="true" aria-hidden="true" />
         <div {...stylex.props(styles.checkboxCell)}>
           <button
@@ -1711,6 +1778,11 @@ export function FileTable({
       <div
         ref={parentRef}
         {...stylex.props(styles.scrollViewport)}
+        onScroll={(e) => {
+          if (headerRef.current) {
+            headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+          }
+        }}
         onMouseDown={handleMouseDown}
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
