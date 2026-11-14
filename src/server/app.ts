@@ -481,9 +481,6 @@ const routes = app
     async (c) => {
       const accountId = c.req.param('id');
       const { poolId } = c.req.valid('json');
-      if (isSharePoolId(poolId)) {
-        return c.json(sharePoolReadOnlyError('Moving accounts directly into Share Pool is disabled'), 403);
-      }
       try {
         const result = await switchAccountPool(accountId, poolId);
         return c.json(result);
@@ -510,12 +507,6 @@ const routes = app
     }),
     async (c) => {
       const { filename, content, poolId = 1 } = c.req.valid('json');
-      if (isSharePoolId(poolId)) {
-        return c.json(
-          sharePoolReadOnlyError('Importing OAuth credentials directly into Share Pool is disabled'),
-          403
-        );
-      }
       try {
         const result = await authPool.importCredentials(filename, content, poolId);
         if (!result.success) {
@@ -613,15 +604,6 @@ const routes = app
     const accountId = c.req.param('id');
     const rawPoolId = c.req.query('poolId');
     const preferredPoolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
-    if (
-      (preferredPoolId !== undefined && isSharePoolId(preferredPoolId)) ||
-      isAccountInSharePool(accountId)
-    ) {
-      return c.json(
-        sharePoolReadOnlyError('Hydrating accounts directly into Share Pool is disabled'),
-        403
-      );
-    }
     try {
       const result = await hydrateAccount(accountId, preferredPoolId);
       return c.json(result);

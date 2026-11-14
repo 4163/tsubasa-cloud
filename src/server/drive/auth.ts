@@ -105,6 +105,15 @@ class AuthPool {
         const email = extractEmailFromIdToken(parsed.tokens.id_token);
         if (email && email.toLowerCase() !== parsed.accountId.toLowerCase()) {
           const oldId = parsed.accountId;
+          const prevPreferred =
+            this.preferredPools.get(oldId) ??
+            this.pool.get(oldId)?.config.preferredPoolId;
+          if (prevPreferred !== undefined && !this.preferredPools.has(email)) {
+            this.preferredPools.set(email, prevPreferred);
+          }
+          this.preferredPools.delete(oldId);
+          this.pool.delete(oldId);
+
           const ext = path.extname(parsed.sourceFile).toLowerCase() || '.json';
           const newSourceFile = path.join(this.oauthDir, `${email}${ext}`);
           const oldTokenFile = path.join(this.oauthDir, `${oldId}.tokens.json`);
@@ -265,6 +274,13 @@ class AuthPool {
     if (record) {
       record.config.preferredPoolId = poolId;
     }
+  }
+
+  public hasPreferredPool(accountId: string): boolean {
+    return (
+      this.preferredPools.has(accountId) ||
+      this.pool.get(accountId)?.config.preferredPoolId !== undefined
+    );
   }
 
   public getPreferredPool(accountId: string): number {

@@ -133,6 +133,10 @@ export function parsePoolIdFromFolderName(name: string): number | null {
 }
 
 export function ensurePoolExistsInDb(poolId: number): void {
+  if (poolId === SHARE_POOL_RESERVE_ID) {
+    ensureSharePoolExistsInDb();
+    return;
+  }
   const folderName = getPoolDriveFolderName(poolId);
   sqlite
     .prepare(
@@ -165,9 +169,85 @@ export function ensureSharePoolExistsInDb(): number {
   })();
 }
 
+async function checkRemoteRootFolderEmpty(
+  drive: drive_v3.Drive,
+  rootFolderId: string | null
+): Promise<{ empty: true } | { empty: false; reason: 'managed' | 'folder_files' }> {
+  const managedCheck = await drive.files.list({
+    q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder' and trashed = false",
+    pageSize: 1,
+    fields: 'files(id, name)',
+    spaces: 'drive',
+    supportsAllDrives: false,
+  });
+
+  if ((managedCheck.data.files || []).length > 0) {
+    return { empty: false, reason: 'managed' };
+  }
+
+  if (rootFolderId) {
+    const tree = await resolveRemoteFolderTree(drive, rootFolderId);
+    const folderIdArray = Array.from(tree.folderIds);
+    for (let i = 0; i < folderIdArray.length; i += 20) {
+      const chunk = folderIdArray.slice(i, i + 20);
+      const parentQuery = chunk.map((fid) => `'${fid}' in parents`).join(' or ');
+      const checkRes = await drive.files.list({
+        q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+        pageSize: 1,
+        fields: 'files(id, name)',
+        spaces: 'drive',
+        supportsAllDrives: false,
+      });
+
+      if ((checkRes.data.files || []).length > 0) {
+        return { empty: false, reason: 'folder_files' };
+      }
+    }
+  }
+
+  return { empty: true };
+}
+
+async function retargetRemoteRootFolder(
+  drive: drive_v3.Drive,
+  rootFolderId: string,
+  targetPoolId: number
+): Promise<void> {
+  const childFoldersRes = await drive.files.list({
+    q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder'`,
+    fields: 'files(id, name)',
+    pageSize: 100,
+    spaces: 'drive',
+    supportsAllDrives: false,
+  });
+
+  for (const folder of childFoldersRes.data.files || []) {
+    if (folder.id) {
+      try {
+        await drive.files.delete({ fileId: folder.id, supportsAllDrives: false });
+      } catch (delErr) {
+        console.warn(`Failed to clean empty subfolder ${folder.id} during pool switch:`, delErr);
+      }
+    }
+  }
+
+  await drive.files.update({
+    fileId: rootFolderId,
+    requestBody: {
+      name: resolvePoolDriveFolderName(targetPoolId),
+      appProperties: {
+        tsubasa_root: 'true',
+        tsubasa_pool_id: String(targetPoolId),
+      },
+    },
+    supportsAllDrives: false,
+  });
+}
+
 export async function ensureRootFolder(
   drive: drive_v3.Drive,
-  preferredPoolId = 1
+  preferredPoolId = 1,
+  preferTargetWhenEmpty = false
 ): Promise<{ rootFolderId: string; poolId: number }> {
   const query = `mimeType = 'application/vnd.google-apps.folder' and name contains '_Tsubasa~ Pool ' and 'root' in parents and trashed = false`;
   const searchRes = await drive.files.list({
@@ -202,17 +282,29 @@ export async function ensureRootFolder(
     }
   }
 
-  if (matchingFolders.length > 0) {
-    const existingSharePool = sqlite
-      .prepare('SELECT id FROM pools WHERE is_share_pool = 1 LIMIT 1')
-      .get() as { id: number } | undefined;
+  const existingSharePool = sqlite
+    .prepare('SELECT id FROM pools WHERE is_share_pool = 1 LIMIT 1')
+    .get() as { id: number } | undefined;
+  const isPreferredSharePool =
+    preferredPoolId === SHARE_POOL_RESERVE_ID || existingSharePool?.id === preferredPoolId;
 
-    const chosen =
-      matchingFolders.find((f) =>
-        f.isSharePool
-          ? existingSharePool?.id === preferredPoolId
-          : f.poolId === preferredPoolId
-      ) || matchingFolders[0];
+  if (matchingFolders.length > 0) {
+    const exactMatch = matchingFolders.find((f) =>
+      f.isSharePool ? isPreferredSharePool : f.poolId === preferredPoolId
+    );
+
+    if (!exactMatch && preferTargetWhenEmpty) {
+      const emptyCheck = await checkRemoteRootFolderEmpty(drive, matchingFolders[0].id);
+      if (emptyCheck.empty) {
+        const resolvedPoolId = isPreferredSharePool
+          ? ensureSharePoolExistsInDb()
+          : (ensurePoolExistsInDb(preferredPoolId), preferredPoolId);
+        await retargetRemoteRootFolder(drive, matchingFolders[0].id, resolvedPoolId);
+        return { rootFolderId: matchingFolders[0].id, poolId: resolvedPoolId };
+      }
+    }
+
+    const chosen = exactMatch || matchingFolders[0];
 
     if (chosen.isSharePool) {
       const sharePoolId = ensureSharePoolExistsInDb();
@@ -223,8 +315,10 @@ export async function ensureRootFolder(
     return { rootFolderId: chosen.id, poolId: chosen.poolId! };
   }
 
-  ensurePoolExistsInDb(preferredPoolId);
-  const folderName = resolvePoolDriveFolderName(preferredPoolId);
+  const resolvedPoolId = isPreferredSharePool
+    ? ensureSharePoolExistsInDb()
+    : (ensurePoolExistsInDb(preferredPoolId), preferredPoolId);
+  const folderName = resolvePoolDriveFolderName(resolvedPoolId);
   const createRes = await drive.files.create({
     requestBody: {
       name: folderName,
@@ -232,7 +326,7 @@ export async function ensureRootFolder(
       parents: ['root'],
       appProperties: {
         tsubasa_root: 'true',
-        tsubasa_pool_id: String(preferredPoolId),
+        tsubasa_pool_id: String(resolvedPoolId),
       },
     },
     fields: 'id, name',
@@ -243,7 +337,7 @@ export async function ensureRootFolder(
     throw new Error(`Failed to create ${folderName} root folder in Google Drive`);
   }
 
-  return { rootFolderId: createRes.data.id, poolId: preferredPoolId };
+  return { rootFolderId: createRes.data.id, poolId: resolvedPoolId };
 }
 
 export async function hydrateAccount(
@@ -275,10 +369,28 @@ export async function hydrateAccount(
     where: eq(accounts.id, canonicalAccountId),
   });
 
-  const targetPoolId =
-    preferredPoolId ?? existingAccount?.poolId ?? authPool.getPreferredPool(canonicalAccountId) ?? 1;
+  const fileCountRow = sqlite
+    .prepare('SELECT count(*) as c FROM files WHERE account_id = ?')
+    .get(canonicalAccountId) as { c: number } | undefined;
+  const hasLocalFiles = (fileCountRow?.c ?? 0) > 0;
 
-  const { rootFolderId, poolId } = await ensureRootFolder(drive, targetPoolId);
+  const explicitPoolId =
+    preferredPoolId ??
+    (authPool.hasPreferredPool(canonicalAccountId)
+      ? authPool.getPreferredPool(canonicalAccountId)
+      : undefined);
+
+  const targetPoolId =
+    existingAccount && hasLocalFiles
+      ? existingAccount.poolId
+      : (explicitPoolId ?? existingAccount?.poolId ?? 1);
+  const preferTargetWhenEmpty = !hasLocalFiles && explicitPoolId !== undefined;
+
+  const { rootFolderId, poolId } = await ensureRootFolder(
+    drive,
+    targetPoolId,
+    preferTargetWhenEmpty
+  );
   authPool.setPreferredPool(canonicalAccountId, poolId);
 
   const quotaLimit = storage?.limit ? Number(storage.limit) : 16106127360; // 15 GB fallback
@@ -466,6 +578,10 @@ export async function switchAccountPool(
   accountId: string,
   targetPoolId: number
 ): Promise<{ accountId: string; poolId: number; rootFolderId: string | null }> {
+  if (targetPoolId === SHARE_POOL_RESERVE_ID) {
+    ensureSharePoolExistsInDb();
+  }
+
   const poolRow = sqlite
     .prepare('SELECT id FROM pools WHERE id = ?')
     .get(targetPoolId) as { id: number } | undefined;
@@ -501,73 +617,19 @@ export async function switchAccountPool(
   const authRecord = authPool.getRecord(accountId);
   if (authRecord?.authorized) {
     const drive = getDriveClient(accountId);
-
-    const managedCheck: any = await drive.files.list({
-      q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder' and trashed = false",
-      pageSize: 1,
-      fields: 'files(id, name)',
-      spaces: 'drive',
-      supportsAllDrives: false,
-    });
-
-    if ((managedCheck.data.files || []).length > 0) {
+    const emptyCheck = await checkRemoteRootFolderEmpty(drive, resolvedRootFolderId);
+    if (!emptyCheck.empty) {
       throw new AccountPoolLockedError(
-        'Cannot switch pool: this account already has Tsubasa files in Google Drive.'
+        emptyCheck.reason === 'managed'
+          ? 'Cannot switch pool: this account already has Tsubasa files in Google Drive.'
+          : 'Cannot switch pool: this account has files inside its Tsubasa folder on Google Drive.'
       );
     }
 
     if (resolvedRootFolderId) {
-      const tree = await resolveRemoteFolderTree(drive, resolvedRootFolderId);
-      const folderIdArray = Array.from(tree.folderIds);
-      for (let i = 0; i < folderIdArray.length; i += 20) {
-        const chunk = folderIdArray.slice(i, i + 20);
-        const parentQuery = chunk.map((fid) => `'${fid}' in parents`).join(' or ');
-        const checkRes: any = await drive.files.list({
-          q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
-          pageSize: 1,
-          fields: 'files(id, name)',
-          spaces: 'drive',
-          supportsAllDrives: false,
-        });
-
-        if ((checkRes.data.files || []).length > 0) {
-          throw new AccountPoolLockedError(
-            'Cannot switch pool: this account has files inside its Tsubasa folder on Google Drive.'
-          );
-        }
-      }
-
-      const childFoldersRes: any = await drive.files.list({
-        q: `'${resolvedRootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder'`,
-        fields: 'files(id, name)',
-        pageSize: 100,
-        spaces: 'drive',
-        supportsAllDrives: false,
-      });
-
-      for (const folder of childFoldersRes.data.files || []) {
-        if (folder.id) {
-          try {
-            await drive.files.delete({ fileId: folder.id, supportsAllDrives: false });
-          } catch (delErr) {
-            console.warn(`Failed to clean empty subfolder ${folder.id} during pool switch:`, delErr);
-          }
-        }
-      }
-
-      await drive.files.update({
-        fileId: resolvedRootFolderId,
-        requestBody: {
-          name: resolvePoolDriveFolderName(targetPoolId),
-          appProperties: {
-            tsubasa_root: 'true',
-            tsubasa_pool_id: String(targetPoolId),
-          },
-        },
-        supportsAllDrives: false,
-      });
+      await retargetRemoteRootFolder(drive, resolvedRootFolderId, targetPoolId);
     } else {
-      const ensured = await ensureRootFolder(drive, targetPoolId);
+      const ensured = await ensureRootFolder(drive, targetPoolId, true);
       resolvedRootFolderId = ensured.rootFolderId;
     }
   }
@@ -576,6 +638,7 @@ export async function switchAccountPool(
     .update(accounts)
     .set({ poolId: targetPoolId, rootFolderId: resolvedRootFolderId, updatedAt: new Date() })
     .where(eq(accounts.id, accountId));
+  sqlite.prepare('DELETE FROM share_links WHERE account_id = ?').run(accountId);
 
   authPool.setPreferredPool(accountId, targetPoolId);
 

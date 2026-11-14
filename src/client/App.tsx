@@ -795,7 +795,6 @@ export function App() {
   }
 
   async function handleImportOAuth(file: File) {
-    if (isSharePoolActive) return;
     setIsImporting(true);
     showToast(`Inspecting credentials from ${file.name}...`);
     try {
@@ -2158,7 +2157,7 @@ export function App() {
                 setIsExternalChangesOpen(true);
               }
         }
-        onImportOAuth={isSharePoolActive ? undefined : handleImportOAuth}
+        onImportOAuth={handleImportOAuth}
         onDisableAccount={(acc) => handleDisableAccount(acc.id)}
         onEnableAccount={handleEnableAccount}
         onRemoveAccount={(acc) => handleOpenDriveAction(acc, 'remove')}

@@ -263,8 +263,7 @@ export function MovePoolModal({
 }: MovePoolModalProps) {
   const sortedPools = useMemo(() => sortPools(pools), [pools]);
   const currentPoolId = account?.poolId ?? activePoolId ?? 1;
-  const selectablePools = sortedPools.filter((p) => !p.isSharePool || p.id === currentPoolId);
-  const candidatePools = selectablePools.filter((p) => !p.isSharePool && p.id !== currentPoolId);
+  const candidatePools = sortedPools.filter((p) => p.id !== currentPoolId);
 
   const [targetPoolId, setTargetPoolId] = useState<number>(() => {
     return candidatePools[0]?.id ?? currentPoolId;
@@ -289,9 +288,9 @@ export function MovePoolModal({
 
   if (!isOpen || !account) return null;
 
-  const selectedTargetPool = selectablePools.find((p) => p.id === targetPoolId);
+  const selectedTargetPool = sortedPools.find((p) => p.id === targetPoolId);
   const canMoveToTarget = Boolean(
-    selectedTargetPool && !selectedTargetPool.isSharePool && selectedTargetPool.id !== currentPoolId
+    selectedTargetPool && selectedTargetPool.id !== currentPoolId
   );
 
   const handleSubmit = async (e?: React.FormEvent) => {
@@ -360,14 +359,14 @@ export function MovePoolModal({
                     setTargetPoolId(Number(e.target.value));
                     if (error) setError(null);
                   }}
-                  disabled={isLoading || selectablePools.length === 0}
+                  disabled={isLoading || candidatePools.length === 0}
                   {...stylex.props(styles.select)}
                 >
-                  {selectablePools.map((pool) => (
+                  {sortedPools.map((pool) => (
                     <option
                       key={pool.id}
                       value={pool.id}
-                      disabled={pool.id === currentPoolId || Boolean(pool.isSharePool)}
+                      disabled={pool.id === currentPoolId}
                     >
                       {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'}){pool.id === currentPoolId ? ' (Current)' : ''}
                     </option>

@@ -1334,7 +1334,7 @@ export function Sidebar({
             Connected accounts ({authorizedCount})
           </div>
 
-        {!activePool?.isSharePool && onImportOAuth && (
+        {onImportOAuth && (
           <div {...stylex.props(styles.addAccountWrapper)}>
             <button
               type="button"
