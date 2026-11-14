@@ -54,6 +54,16 @@ function prepareRenameStatements() {
              AND target.batch_folder_name = share_links.batch_folder_name
          )`
     ),
+    updatePendingDriveSyncAccount: sqlite.prepare('UPDATE pending_drive_sync SET account_id = ? WHERE account_id = ?'),
+    deleteConflictingPendingDriveSync: sqlite.prepare(
+      `DELETE FROM pending_drive_sync
+       WHERE account_id = ?
+         AND EXISTS (
+           SELECT 1 FROM pending_drive_sync AS target
+           WHERE target.account_id = ?
+             AND target.drive_file_id = pending_drive_sync.drive_file_id
+         )`
+    ),
   };
 }
 
@@ -86,20 +96,26 @@ export function renameAccountInDb(oldId: string, newId: string): void {
       if (existingWithNewId || existingWithNewEmail) {
         const targetId = existingWithNewId?.id ?? existingWithNewEmail?.id ?? newId;
         stmts.deleteConflictingShareLinks.run(oldId, targetId);
+        stmts.deleteConflictingPendingDriveSync.run(oldId, targetId);
         stmts.updateFilesAccount.run(targetId, oldId);
         stmts.updateTransferLogsAccount.run(targetId, oldId);
         stmts.updateShareLinksAccount.run(targetId, oldId);
+        stmts.updatePendingDriveSyncAccount.run(targetId, oldId);
         stmts.deleteAccountById.run(oldId);
       } else {
+        stmts.deleteConflictingPendingDriveSync.run(oldId, newId);
         stmts.updateAccountIdAndEmail.run(newId, newId, oldId);
         stmts.updateFilesAccount.run(newId, oldId);
         stmts.updateTransferLogsAccount.run(newId, oldId);
         stmts.updateShareLinksAccount.run(newId, oldId);
+        stmts.updatePendingDriveSyncAccount.run(newId, oldId);
       }
     } else {
+      stmts.deleteConflictingPendingDriveSync.run(oldId, newId);
       stmts.updateFilesAccount.run(newId, oldId);
       stmts.updateTransferLogsAccount.run(newId, oldId);
       stmts.updateShareLinksAccount.run(newId, oldId);
+      stmts.updatePendingDriveSyncAccount.run(newId, oldId);
     }
   }).immediate();
 }

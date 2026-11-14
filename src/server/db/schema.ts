@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
 export const pools = sqliteTable('pools', {
   id: integer('id').primaryKey(),
@@ -95,6 +95,20 @@ export const shareLinks = sqliteTable('share_links', {
   index('share_links_account_idx').on(table.accountId),
 ]);
 
+export const pendingDriveSync = sqliteTable('pending_drive_sync', {
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  driveFileId: text('drive_file_id').notNull(),
+  virtualPath: text('virtual_path').notNull(),
+  fileId: text('file_id').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  nextRetryAt: integer('next_retry_at').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.driveFileId] }),
+  index('pending_drive_sync_retry_idx').on(table.accountId, table.nextRetryAt),
+]);
+
 export type Pool = typeof pools.$inferSelect;
 export type NewPool = typeof pools.$inferInsert;
 
@@ -109,5 +123,8 @@ export type NewFileRecord = typeof files.$inferInsert;
 
 export type TransferLog = typeof transferLogs.$inferSelect;
 export type NewTransferLog = typeof transferLogs.$inferInsert;
+
+export type PendingDriveSync = typeof pendingDriveSync.$inferSelect;
+export type NewPendingDriveSync = typeof pendingDriveSync.$inferInsert;
 
 

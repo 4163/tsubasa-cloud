@@ -1,6 +1,6 @@
 import { sqlite } from './index.js';
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 export function initializeDatabase(): void {
   const currentVersion = sqlite.pragma('user_version', { simple: true }) as number;
@@ -83,6 +83,18 @@ export function initializeDatabase(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
+    CREATE TABLE IF NOT EXISTS pending_drive_sync (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      drive_file_id TEXT NOT NULL,
+      virtual_path TEXT NOT NULL,
+      file_id TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      next_retry_at INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (account_id, drive_file_id)
+    );
+
     CREATE INDEX IF NOT EXISTS accounts_pool_idx ON accounts(pool_id);
     CREATE UNIQUE INDEX IF NOT EXISTS folders_pool_path_idx ON folders(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS folders_pool_parent_idx ON folders(pool_id, parent_folder_id);
@@ -100,6 +112,7 @@ export function initializeDatabase(): void {
     CREATE UNIQUE INDEX IF NOT EXISTS share_links_pool_batch_account_idx ON share_links(pool_id, batch_folder_name, account_id);
     CREATE INDEX IF NOT EXISTS share_links_pool_batch_idx ON share_links(pool_id, batch_folder_name);
     CREATE INDEX IF NOT EXISTS share_links_account_idx ON share_links(account_id);
+    CREATE INDEX IF NOT EXISTS pending_drive_sync_retry_idx ON pending_drive_sync(account_id, next_retry_at);
 
     DROP INDEX IF EXISTS folders_parent_idx;
     DROP INDEX IF EXISTS folders_path_idx;
