@@ -145,6 +145,16 @@ export function ensurePoolExistsInDb(poolId: number): void {
     .run(poolId, `Pool ${poolId}`, folderName);
 }
 
+export function isSharePoolId(poolId: number): boolean {
+  if (poolId === SHARE_POOL_RESERVE_ID) {
+    return true;
+  }
+  const row = sqlite
+    .prepare('SELECT is_share_pool as isSharePool FROM pools WHERE id = ? LIMIT 1')
+    .get(poolId) as { isSharePool: number } | undefined;
+  return Boolean(row?.isSharePool);
+}
+
 export function ensureSharePoolExistsInDb(): number {
   return sqlite.transaction(() => {
     const existing = sqlite
@@ -380,11 +390,11 @@ export async function hydrateAccount(
       ? authPool.getPreferredPool(canonicalAccountId)
       : undefined);
 
-  const targetPoolId =
-    existingAccount && hasLocalFiles
-      ? existingAccount.poolId
-      : (explicitPoolId ?? existingAccount?.poolId ?? 1);
-  const preferTargetWhenEmpty = !hasLocalFiles && explicitPoolId !== undefined;
+  const targetPoolId = existingAccount
+    ? existingAccount.poolId
+    : (explicitPoolId ?? 1);
+  const preferTargetWhenEmpty =
+    !hasLocalFiles && (existingAccount !== undefined || explicitPoolId !== undefined);
 
   const { rootFolderId, poolId } = await ensureRootFolder(
     drive,
@@ -574,6 +584,28 @@ export async function getAccountRootFolderId(accountId: string): Promise<string>
   return rootFolderId;
 }
 
+async function inspectRemoteRootFolder(
+  drive: drive_v3.Drive,
+  folderId: string | null
+): Promise<{ exists: boolean; name: string | null }> {
+  if (!folderId) {
+    return { exists: false, name: null };
+  }
+  try {
+    const res = await drive.files.get({
+      fileId: folderId,
+      fields: 'id, name, trashed',
+      supportsAllDrives: false,
+    });
+    if (!res.data.id || res.data.trashed) {
+      return { exists: false, name: null };
+    }
+    return { exists: true, name: res.data.name ?? null };
+  } catch {
+    return { exists: false, name: null };
+  }
+}
+
 export async function switchAccountPool(
   accountId: string,
   targetPoolId: number
@@ -601,22 +633,42 @@ export async function switchAccountPool(
   const accountRecord = await db.query.accounts.findFirst({
     where: eq(accounts.id, accountId),
   });
+  const authRecord = authPool.getRecord(accountId);
 
   if (!accountRecord) {
     authPool.setPreferredPool(accountId, targetPoolId);
+    if (authRecord?.authorized) {
+      const ensured = await ensureRootFolder(getDriveClient(accountId), targetPoolId, true);
+      if (ensured.poolId !== targetPoolId) {
+        throw new AccountPoolLockedError(
+          'Cannot switch pool: this account already has files inside its Tsubasa folder on Google Drive.'
+        );
+      }
+      return { accountId, poolId: targetPoolId, rootFolderId: ensured.rootFolderId };
+    }
     return { accountId, poolId: targetPoolId, rootFolderId: null };
-  }
-
-  if (accountRecord.poolId === targetPoolId) {
-    authPool.setPreferredPool(accountId, targetPoolId);
-    return { accountId, poolId: targetPoolId, rootFolderId: accountRecord.rootFolderId };
   }
 
   let resolvedRootFolderId = accountRecord.rootFolderId;
 
-  const authRecord = authPool.getRecord(accountId);
   if (authRecord?.authorized) {
     const drive = getDriveClient(accountId);
+    const expectedFolderName = resolvePoolDriveFolderName(targetPoolId);
+    const remoteFolder = await inspectRemoteRootFolder(drive, resolvedRootFolderId);
+
+    if (
+      accountRecord.poolId === targetPoolId &&
+      remoteFolder.exists &&
+      remoteFolder.name === expectedFolderName
+    ) {
+      authPool.setPreferredPool(accountId, targetPoolId);
+      return { accountId, poolId: targetPoolId, rootFolderId: resolvedRootFolderId };
+    }
+
+    if (!remoteFolder.exists) {
+      resolvedRootFolderId = null;
+    }
+
     const emptyCheck = await checkRemoteRootFolderEmpty(drive, resolvedRootFolderId);
     if (!emptyCheck.empty) {
       throw new AccountPoolLockedError(
@@ -630,8 +682,16 @@ export async function switchAccountPool(
       await retargetRemoteRootFolder(drive, resolvedRootFolderId, targetPoolId);
     } else {
       const ensured = await ensureRootFolder(drive, targetPoolId, true);
+      if (ensured.poolId !== targetPoolId) {
+        throw new AccountPoolLockedError(
+          'Cannot switch pool: this account already has files inside its Tsubasa folder on Google Drive.'
+        );
+      }
       resolvedRootFolderId = ensured.rootFolderId;
     }
+  } else if (accountRecord.poolId === targetPoolId) {
+    authPool.setPreferredPool(accountId, targetPoolId);
+    return { accountId, poolId: targetPoolId, rootFolderId: accountRecord.rootFolderId };
   }
 
   await db

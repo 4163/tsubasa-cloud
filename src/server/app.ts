@@ -42,6 +42,7 @@ import {
   switchAccountPool,
   getPoolDriveFolderName,
   formatFolderId,
+  isSharePoolId,
 } from './drive/index.js';
 import {
   getPooledStorageOverview,
@@ -65,13 +66,6 @@ import {
 function parsePoolId(raw: unknown): number {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : 1;
-}
-
-function isSharePoolId(poolId: number): boolean {
-  const row = sqlite
-    .prepare('SELECT is_share_pool as isSharePool FROM pools WHERE id = ? LIMIT 1')
-    .get(poolId) as { isSharePool: number } | undefined;
-  return Boolean(row?.isSharePool);
 }
 
 function sharePoolReadOnlyError(message: string) {
