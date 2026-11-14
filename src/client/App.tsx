@@ -28,6 +28,7 @@ import { MovePoolModal } from './components/MovePoolModal.js';
 import { MoveFilesModal } from './components/MoveFilesModal.js';
 import { ShareModal, type ShareExecuteResult, type ShareTargetItem } from './components/ShareModal.js';
 import { copyTextToClipboard, SHARE_POOL_RESERVE_ID } from './utils/format.js';
+import { useBeforeUnload, useMediaQuery } from './utils/useBeforeUnload.js';
 
 interface AccountSummary {
   id: string;
@@ -220,9 +221,11 @@ export function App() {
   const [files, setFiles] = useState<ClientFileRecord[]>([]);
   const [folders, setFolders] = useState<ClientFolder[]>([]);
   const [loadedFilesPoolId, setLoadedFilesPoolId] = useState<number | null>(null);
+  const [loadedTrashPoolId, setLoadedTrashPoolId] = useState<number | null>(null);
   const [shareLinksByBatch, setShareLinksByBatch] = useState<Record<string, StoredShareLink[]>>({});
   const [shareLinksPoolId, setShareLinksPoolId] = useState<number | null>(null);
   const filesRequestSeqRef = useRef(0);
+  const trashRequestSeqRef = useRef(0);
   const poolsRef = useRef(pools);
   poolsRef.current = pools;
 
@@ -365,6 +368,7 @@ export function App() {
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [pendingOpsCount, setPendingOpsCount] = useState<number>(0);
   const [isMobileOpen, setIsMobileOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [transferringFileId, setTransferringFileId] = useState<string | null>(null);
@@ -382,22 +386,30 @@ export function App() {
     errorMessage: null,
   });
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const mql = window.matchMedia('(max-width: 768px)');
-    const handleMediaChange = (e: MediaQueryListEvent) => {
-      if (!e.matches) {
-        setIsMobileOpen(false);
-      }
-    };
-    if (mql.addEventListener) {
-      mql.addEventListener('change', handleMediaChange);
-      return () => mql.removeEventListener('change', handleMediaChange);
-    } else if (mql.addListener) {
-      mql.addListener(handleMediaChange);
-      return () => mql.removeListener(handleMediaChange);
+  const runPendingOp = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    setPendingOpsCount((c) => c + 1);
+    try {
+      return await fn();
+    } finally {
+      setPendingOpsCount((c) => Math.max(0, c - 1));
     }
   }, []);
+
+  const hasInFlightAppProcess =
+    isSyncing ||
+    isImporting ||
+    transferringFileId !== null ||
+    driveActionModal.isLoading ||
+    pendingOpsCount > 0;
+
+  useBeforeUnload(hasInFlightAppProcess);
+
+  const isMobileViewport = useMediaQuery('(max-width: 768px)');
+  useEffect(() => {
+    if (!isMobileViewport) {
+      setIsMobileOpen(false);
+    }
+  }, [isMobileViewport]);
 
   useEffect(() => {
     let resizeTimer: ReturnType<typeof setTimeout>;
@@ -444,6 +456,10 @@ export function App() {
     }
 
     function handlePopState(e: PopStateEvent) {
+      if (driveActionModal.isLoading || pendingOpsCount > 0) {
+        window.history.pushState({ path: currentPath }, '', getPathUrl(currentPath));
+        return;
+      }
       const params = new URLSearchParams(window.location.search);
       const targetPath = e.state?.path || params.get('path') || '/';
 
@@ -473,6 +489,8 @@ export function App() {
     confirmEmptyTrash,
     shareModalState,
     isClearSharePoolOpen,
+    driveActionModal.isLoading,
+    pendingOpsCount,
   ]);
 
   const showToast = useCallback((msg: string) => {
@@ -587,24 +605,35 @@ export function App() {
             setShareLinksByBatch({});
             setShareLinksPoolId(reqPoolId);
           }
+        } else {
+          if (filesRequestSeqRef.current !== reqSeq) return;
+          setLoadedFilesPoolId(reqPoolId);
         }
       } catch (err) {
         if (filesRequestSeqRef.current !== reqSeq) return;
         setErrorNotice(err instanceof Error ? err.message : 'Failed to query files');
+        setLoadedFilesPoolId(reqPoolId);
       }
     },
     [activePoolId]
   );
 
-  const loadTrashFiles = useCallback(async () => {
+  const loadTrashFiles = useCallback(async (targetPoolId?: number) => {
+    const reqPoolId = targetPoolId ?? activePoolId;
+    const reqSeq = ++trashRequestSeqRef.current;
     try {
-      const res = await client.api.trash.$get({ query: { poolId: String(activePoolId) } });
+      const res = await client.api.trash.$get({ query: { poolId: String(reqPoolId) } });
+      if (trashRequestSeqRef.current !== reqSeq) return;
       if (res.ok) {
         const data = await res.json();
+        if (trashRequestSeqRef.current !== reqSeq) return;
         setTrashedFiles((data.files as ClientFileRecord[]) || []);
       }
+      setLoadedTrashPoolId(reqPoolId);
     } catch (err) {
+      if (trashRequestSeqRef.current !== reqSeq) return;
       setErrorNotice(err instanceof Error ? err.message : 'Failed to query trash');
+      setLoadedTrashPoolId(reqPoolId);
     }
   }, [activePoolId]);
 
@@ -1024,54 +1053,58 @@ export function App() {
     const selectedFolders = folders.filter((f) => idsToDelete.has(f.id));
     const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => idsToDelete.has(f.id));
 
-    if (currentNav === 'trash') {
-      for (const f of selectedFiles) {
-        await handlePermanentDelete(f);
+    await runPendingOp(async () => {
+      if (currentNav === 'trash') {
+        for (const f of selectedFiles) {
+          await handlePermanentDelete(f);
+        }
+      } else {
+        for (const folder of selectedFolders) {
+          await handleDeleteFolder(folder);
+        }
+        for (const file of selectedFiles) {
+          await handleTrash(file);
+        }
       }
-    } else {
-      for (const folder of selectedFolders) {
-        await handleDeleteFolder(folder);
-      }
-      for (const file of selectedFiles) {
-        await handleTrash(file);
-      }
-    }
+    });
   }
 
   const handleMoveItems = useCallback(
     async (itemsToMove: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
       if (isSharePoolActive || itemsToMove.length === 0) return;
-      try {
-        const res = await client.api.items.move.$post({
-          json: { items: itemsToMove, targetFolderPath, poolId: activePoolId },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
-          const successCount = results.filter((r: any) => r.success).length;
-          const failed = results.filter((r: any) => !r.success);
-          if (failed.length > 0) {
-            setErrorNotice(failed[0].error || 'Some items could not be moved');
-          }
-          if (successCount > 0) {
-            showToast(`Moved ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
-          }
-          setClipboard((prev) => {
-            if (!prev || prev.mode !== 'cut') return prev;
-            const movedIds = new Set(itemsToMove.map((i) => i.id));
-            const remaining = prev.items.filter((i) => !movedIds.has(i.id));
-            return remaining.length > 0 ? { ...prev, items: remaining } : null;
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.items.move.$post({
+            json: { items: itemsToMove, targetFolderPath, poolId: activePoolId },
           });
-          setSelectedIds(new Set());
-          await Promise.all([loadFiles(currentPath), loadTrashFiles(), loadClusterData()]);
-        } else {
-          setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to move items');
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
+            const successCount = results.filter((r: any) => r.success).length;
+            const failed = results.filter((r: any) => !r.success);
+            if (failed.length > 0) {
+              setErrorNotice(failed[0].error || 'Some items could not be moved');
+            }
+            if (successCount > 0) {
+              showToast(`Moved ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
+            }
+            setClipboard((prev) => {
+              if (!prev || prev.mode !== 'cut') return prev;
+              const movedIds = new Set(itemsToMove.map((i) => i.id));
+              const remaining = prev.items.filter((i) => !movedIds.has(i.id));
+              return remaining.length > 0 ? { ...prev, items: remaining } : null;
+            });
+            setSelectedIds(new Set());
+            await Promise.all([loadFiles(currentPath), loadTrashFiles(), loadClusterData()]);
+          } else {
+            setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to move items');
+          }
+        } catch (err) {
+          setErrorNotice(err instanceof Error ? err.message : String(err));
         }
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-      }
+      });
     },
-    [currentPath, loadFiles, loadTrashFiles, loadClusterData, showToast, activePoolId]
+    [currentPath, loadFiles, loadTrashFiles, loadClusterData, showToast, activePoolId, isSharePoolActive, runPendingOp]
   );
 
   const handleTrashItems = useCallback(
@@ -1093,99 +1126,103 @@ export function App() {
       let effectivePath = currentPath;
       const trashedIds = new Set<string>();
 
-      try {
-        for (const folder of trashedFolders) {
-          const fPath = folder.virtualPath || folder.id;
-          const res = await client.api.folders.$delete({
-            query: { virtualPath: fPath, poolId: String(activePoolId) },
-          });
-          if (res.ok) {
-            trashedIds.add(folder.id);
-            if (fPath && (effectivePath === fPath || effectivePath.startsWith(fPath + '/'))) {
-              const parts = fPath.split('/').filter(Boolean);
-              effectivePath = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
+      await runPendingOp(async () => {
+        try {
+          for (const folder of trashedFolders) {
+            const fPath = folder.virtualPath || folder.id;
+            const res = await client.api.folders.$delete({
+              query: { virtualPath: fPath, poolId: String(activePoolId) },
+            });
+            if (res.ok) {
+              trashedIds.add(folder.id);
+              if (fPath && (effectivePath === fPath || effectivePath.startsWith(fPath + '/'))) {
+                const parts = fPath.split('/').filter(Boolean);
+                effectivePath = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
+              }
             }
           }
-        }
 
-        for (const file of trashedFilesList) {
-          const res = await client.api.files[':id'].trash.$post({
-            param: { id: file.id },
-          });
-          if (res.ok) {
-            trashedIds.add(file.id);
-          }
-        }
-
-        if (trashedIds.size > 0) {
-          setSelectedIds((prev) => {
-            const next = new Set(prev);
-            for (const id of trashedIds) {
-              next.delete(id);
+          for (const file of trashedFilesList) {
+            const res = await client.api.files[':id'].trash.$post({
+              param: { id: file.id },
+            });
+            if (res.ok) {
+              trashedIds.add(file.id);
             }
-            return next;
-          });
-
-          setClipboard((prev) => {
-            if (!prev || prev.mode !== 'cut') return prev;
-            const remaining = prev.items.filter((i) => !trashedIds.has(i.id));
-            return remaining.length > 0 ? { ...prev, items: remaining } : null;
-          });
-
-          if (effectivePath !== currentPath) {
-            handleNavigate(effectivePath);
           }
 
-          await Promise.all([
-            loadFiles(effectivePath),
-            loadTrashFiles(),
-            loadClusterData(),
-          ]);
+          if (trashedIds.size > 0) {
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of trashedIds) {
+                next.delete(id);
+              }
+              return next;
+            });
 
-          if (trashedIds.size === 1) {
-            const single = activeItems.find((i) => trashedIds.has(i.id));
-            const singleName = single?.name || (single?.virtualPath ? single.virtualPath.split('/').pop() : 'item');
-            showToast(`Moved "${singleName}" to trash.`);
-          } else {
-            showToast(`Moved ${trashedIds.size} items to trash.`);
+            setClipboard((prev) => {
+              if (!prev || prev.mode !== 'cut') return prev;
+              const remaining = prev.items.filter((i) => !trashedIds.has(i.id));
+              return remaining.length > 0 ? { ...prev, items: remaining } : null;
+            });
+
+            if (effectivePath !== currentPath) {
+              handleNavigate(effectivePath);
+            }
+
+            await Promise.all([
+              loadFiles(effectivePath),
+              loadTrashFiles(),
+              loadClusterData(),
+            ]);
+
+            if (trashedIds.size === 1) {
+              const single = activeItems.find((i) => trashedIds.has(i.id));
+              const singleName = single?.name || (single?.virtualPath ? single.virtualPath.split('/').pop() : 'item');
+              showToast(`Moved "${singleName}" to trash.`);
+            } else {
+              showToast(`Moved ${trashedIds.size} items to trash.`);
+            }
           }
+        } catch (err) {
+          setErrorNotice(err instanceof Error ? err.message : String(err));
         }
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-      }
+      });
     },
-    [currentPath, handleNavigate, loadFiles, loadTrashFiles, loadClusterData, showToast, activePoolId]
+    [currentPath, handleNavigate, loadFiles, loadTrashFiles, loadClusterData, showToast, activePoolId, runPendingOp]
   );
 
   const handleCopyItems = useCallback(
     async (itemsToCopy: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
       if (itemsToCopy.length === 0) return;
-      try {
-        showToast(`Copying ${itemsToCopy.length} ${itemsToCopy.length === 1 ? 'item' : 'items'}...`);
-        const res = await client.api.items.copy.$post({
-          json: { items: itemsToCopy, targetFolderPath, poolId: activePoolId },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
-          const successCount = results.filter((r: any) => r.success).length;
-          const failed = results.filter((r: any) => !r.success);
-          if (failed.length > 0) {
-            setErrorNotice(failed[0].error || 'Some items could not be copied');
+      await runPendingOp(async () => {
+        try {
+          showToast(`Copying ${itemsToCopy.length} ${itemsToCopy.length === 1 ? 'item' : 'items'}...`);
+          const res = await client.api.items.copy.$post({
+            json: { items: itemsToCopy, targetFolderPath, poolId: activePoolId },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
+            const successCount = results.filter((r: any) => r.success).length;
+            const failed = results.filter((r: any) => !r.success);
+            if (failed.length > 0) {
+              setErrorNotice(failed[0].error || 'Some items could not be copied');
+            }
+            if (successCount > 0) {
+              showToast(`Copied ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
+            }
+            setSelectedIds(new Set());
+            await Promise.all([loadFiles(currentPath), loadClusterData()]);
+          } else {
+            setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to copy items');
           }
-          if (successCount > 0) {
-            showToast(`Copied ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
-          }
-          setSelectedIds(new Set());
-          await Promise.all([loadFiles(currentPath), loadClusterData()]);
-        } else {
-          setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to copy items');
+        } catch (err) {
+          setErrorNotice(err instanceof Error ? err.message : String(err));
         }
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-      }
+      });
     },
-    [currentPath, loadFiles, loadClusterData, showToast, activePoolId]
+    [currentPath, loadFiles, loadClusterData, showToast, activePoolId, runPendingOp]
   );
 
   const handleCutSelected = useCallback(() => {
@@ -1312,12 +1349,14 @@ export function App() {
     if (actionableIds.length === 0 || currentNav !== 'trash') return;
     const toRestore = trashedFiles.filter((f) => actionableIds.includes(f.id));
     if (toRestore.length === 0) return;
-    for (const file of toRestore) {
-      await handleRestoreFile(file);
-    }
-    setSelectedIds(new Set());
-    showToast(`Restored ${toRestore.length} ${toRestore.length === 1 ? 'file' : 'files'}.`);
-  }, [selectedIds, currentNav, trashedFiles, handleRestoreFile, showToast]);
+    await runPendingOp(async () => {
+      for (const file of toRestore) {
+        await handleRestoreFile(file);
+      }
+      setSelectedIds(new Set());
+      showToast(`Restored ${toRestore.length} ${toRestore.length === 1 ? 'file' : 'files'}.`);
+    });
+  }, [selectedIds, currentNav, trashedFiles, handleRestoreFile, showToast, runPendingOp]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -1343,14 +1382,7 @@ export function App() {
       }
 
       if (e.key === 'Escape') {
-        if (renameModalItem) {
-          e.preventDefault();
-          setRenameModalItem(null);
-          return;
-        }
-        if (movePoolTargetAccount) {
-          e.preventDefault();
-          setMovePoolTargetAccount(null);
+        if (document.querySelector('[role="dialog"]')) {
           return;
         }
         if (selectedIds.size > 0) {
@@ -1436,8 +1468,6 @@ export function App() {
     trashedFiles,
     currentNav,
     clipboard,
-    renameModalItem,
-    movePoolTargetAccount,
     currentPath,
     handleNavigate,
     handleCutSelected,
@@ -1448,22 +1478,25 @@ export function App() {
   ]);
 
   async function handleEmptyTrashExecute() {
-    try {
-      const res = await client.api.trash.empty.$delete({
-        query: { poolId: String(activePoolId) },
-      });
-      if (res.ok) {
-        setConfirmEmptyTrash(false);
-        showToast('Trash emptied. Storage permanently reclaimed.');
-        await loadTrashFiles();
-        await loadClusterData();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Empty trash failed');
+    await runPendingOp(async () => {
+      try {
+        const res = await client.api.trash.empty.$delete({
+          query: { poolId: String(activePoolId) },
+        });
+        if (res.ok) {
+          setConfirmEmptyTrash(false);
+          setSelectedIds(new Set());
+          showToast('Trash emptied. Storage permanently reclaimed.');
+          await loadTrashFiles();
+          await loadClusterData();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setErrorNotice(('error' in err ? err.error : null) || 'Empty trash failed');
+        }
+      } catch (err) {
+        setErrorNotice(`Empty trash error: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      setErrorNotice(`Empty trash error: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    });
   }
 
   // Count active files per account to show the filter toggle only on accounts with files in the pool
@@ -1574,27 +1607,29 @@ export function App() {
     if (isSharePoolActive) return;
     const targetAcc = accountItems.find((a) => a.id === targetAccountId);
     const targetName = targetAcc?.displayName || targetAccountId;
-    try {
-      const res = await client.api.sync.rebalance.batch.$post({
-        json: { fileIds, targetAccountId },
-      });
-      if (res.ok) {
-        showToast(`Transferred ${fileIds.length} file${fileIds.length === 1 ? '' : 's'} to ${targetName}.`);
-        setMoveFilesModalGroup(null);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        const errorMsg = ('error' in err ? (err.error as string) : null) || 'Failed to transfer files';
-        setErrorNotice(errorMsg);
-        throw new Error(errorMsg);
+    await runPendingOp(async () => {
+      try {
+        const res = await client.api.sync.rebalance.batch.$post({
+          json: { fileIds, targetAccountId },
+        });
+        if (res.ok) {
+          showToast(`Transferred ${fileIds.length} file${fileIds.length === 1 ? '' : 's'} to ${targetName}.`);
+          setMoveFilesModalGroup(null);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          const errorMsg = ('error' in err ? (err.error as string) : null) || 'Failed to transfer files';
+          setErrorNotice(errorMsg);
+          throw new Error(errorMsg);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setErrorNotice(msg);
+        throw err;
+      } finally {
+        await loadFiles(currentPath);
+        await loadClusterData();
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorNotice(msg);
-      throw err;
-    } finally {
-      await loadFiles(currentPath);
-      await loadClusterData();
-    }
+    });
   }
 
   async function handleDisableAccount(accountId: string) {
@@ -1700,6 +1735,7 @@ export function App() {
     setFolders([]);
     setTrashedFiles([]);
     setLoadedFilesPoolId(null);
+    setLoadedTrashPoolId(null);
     setShareLinksByBatch({});
     setShareLinksPoolId(null);
     setFilteredAccountIds(new Set());
@@ -1724,22 +1760,24 @@ export function App() {
   );
 
   const handleCreatePool = useCallback(async () => {
-    try {
-      const res = await client.api.pools.$post({ json: { name: undefined } });
-      if (res.ok) {
-        const created = await res.json();
-        showToast(`Created "${created.name}".`);
-        setPools((prev) => [...prev, created]);
-        handleSelectPool(created.id);
-        await loadClusterData(created.id);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? (err.error as string) : null) || 'Failed to create pool');
+    await runPendingOp(async () => {
+      try {
+        const res = await client.api.pools.$post({ json: { name: undefined } });
+        if (res.ok) {
+          const created = await res.json();
+          showToast(`Created "${created.name}".`);
+          setPools((prev) => [...prev, created]);
+          handleSelectPool(created.id);
+          await loadClusterData(created.id);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setErrorNotice(('error' in err ? (err.error as string) : null) || 'Failed to create pool');
+        }
+      } catch (err) {
+        setErrorNotice(err instanceof Error ? err.message : String(err));
       }
-    } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : String(err));
-    }
-  }, [showToast, handleSelectPool, loadClusterData]);
+    });
+  }, [showToast, handleSelectPool, loadClusterData, runPendingOp]);
 
   const handleDeletePool = useCallback(
     async (pool: PoolSummary) => {
@@ -1765,49 +1803,53 @@ export function App() {
         }
       }
 
-      try {
-        const res = await client.api.pools[':id'].$delete({
-          param: { id: String(pool.id) },
-        });
-        if (res.ok) {
-          showToast(`Deleted pool "${pool.name}".`);
-          setPools(pools.filter((p) => p.id !== pool.id));
-          handleSelectPool(targetPool.id);
-          await loadClusterData(targetPool.id);
-        } else {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          setErrorNotice(err.error || 'Failed to delete pool');
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.pools[':id'].$delete({
+            param: { id: String(pool.id) },
+          });
+          if (res.ok) {
+            showToast(`Deleted pool "${pool.name}".`);
+            setPools(pools.filter((p) => p.id !== pool.id));
+            handleSelectPool(targetPool.id);
+            await loadClusterData(targetPool.id);
+          } else {
+            const err = (await res.json().catch(() => ({}))) as { error?: string };
+            setErrorNotice(err.error || 'Failed to delete pool');
+          }
+        } catch (err) {
+          setErrorNotice(err instanceof Error ? err.message : String(err));
         }
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-      }
+      });
     },
-    [pools, showToast, handleSelectPool, loadClusterData]
+    [pools, showToast, handleSelectPool, loadClusterData, runPendingOp]
   );
 
   const handleSwitchAccountPool = useCallback(
     async (accountId: string, targetPoolId: number) => {
-      try {
-        const res = await client.api.accounts[':id'].pool.$post({
-          param: { id: accountId },
-          json: { poolId: targetPoolId },
-        });
-        if (res.ok) {
-          const targetPool = pools.find((p) => p.id === targetPoolId);
-          showToast(`Moved "${accountId}" to ${targetPool?.name || 'Pool ' + targetPoolId}.`);
-          await Promise.all([loadClusterData(), loadFiles(currentPath), loadTrashFiles()]);
-        } else {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          const errMsg = err.error || 'Cannot switch account pool';
-          setErrorNotice(errMsg);
-          throw new Error(errMsg);
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.accounts[':id'].pool.$post({
+            param: { id: accountId },
+            json: { poolId: targetPoolId },
+          });
+          if (res.ok) {
+            const targetPool = pools.find((p) => p.id === targetPoolId);
+            showToast(`Moved "${accountId}" to ${targetPool?.name || 'Pool ' + targetPoolId}.`);
+            await Promise.all([loadClusterData(), loadFiles(currentPath), loadTrashFiles()]);
+          } else {
+            const err = (await res.json().catch(() => ({}))) as { error?: string };
+            const errMsg = err.error || 'Cannot switch account pool';
+            setErrorNotice(errMsg);
+            throw new Error(errMsg);
+          }
+        } catch (err) {
+          setErrorNotice(err instanceof Error ? err.message : String(err));
+          throw err;
         }
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-        throw err;
-      }
+      });
     },
-    [pools, showToast, loadClusterData, loadFiles, currentPath, loadTrashFiles]
+    [pools, showToast, loadClusterData, loadFiles, currentPath, loadTrashFiles, runPendingOp]
   );
 
   const handleShareSelected = useCallback(() => {
@@ -1857,30 +1899,38 @@ export function App() {
   );
 
   const handleClearSharePoolConfirm = useCallback(async () => {
-    try {
-      const res = await client.api.pools[':id']['clear-share'].$post({
-        param: { id: String(activePoolId) },
-      });
-      if (res.ok) {
-        setIsClearSharePoolOpen(false);
-        showToast('Share Pool cleared. Copied files and folders removed.');
-        await Promise.all([
-          loadFiles(currentPath),
-          loadTrashFiles(),
-          loadClusterData(activePoolId),
-        ]);
-      } else {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        const errMsg = err.error || 'Failed to clear Share Pool';
+    await runPendingOp(async () => {
+      try {
+        const res = await client.api.pools[':id']['clear-share'].$post({
+          param: { id: String(activePoolId) },
+        });
+        if (res.ok) {
+          setIsClearSharePoolOpen(false);
+          setSelectedIds(new Set());
+          setShareLinksByBatch({});
+          const nextPath = '/';
+          if (currentPath !== nextPath) {
+            handleNavigate(nextPath);
+          }
+          showToast('Share Pool cleared. Copied files and folders removed.');
+          await Promise.all([
+            loadFiles(nextPath),
+            loadTrashFiles(),
+            loadClusterData(activePoolId),
+          ]);
+        } else {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          const errMsg = err.error || 'Failed to clear Share Pool';
+          setErrorNotice(errMsg);
+          throw new Error(errMsg);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         setErrorNotice(errMsg);
-        throw new Error(errMsg);
+        throw err;
       }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      setErrorNotice(errMsg);
-      throw err;
-    }
-  }, [activePoolId, currentPath, loadFiles, loadTrashFiles, loadClusterData, showToast]);
+    });
+  }, [activePoolId, currentPath, handleNavigate, loadFiles, loadTrashFiles, loadClusterData, showToast, runPendingOp]);
 
   const handleCopyBatchLinks = useCallback(
     async (batchFolderName: string): Promise<boolean> => {
@@ -1904,6 +1954,8 @@ export function App() {
 
   const isSharePoolDataReady = isSharePoolActive && loadedFilesPoolId === activePoolId;
   const isShareLinksReady = isSharePoolDataReady && shareLinksPoolId === activePoolId;
+  const isTableLoading =
+    currentNav === 'trash' ? loadedTrashPoolId !== activePoolId : loadedFilesPoolId !== activePoolId;
   const activeBatchFolderName =
     isShareLinksReady && currentNav !== 'trash' && currentPath !== '/'
       ? (currentPath.split('/').filter(Boolean)[0] ?? null)
@@ -1957,9 +2009,53 @@ export function App() {
     });
   }, [folders, displayedFiles, filteredAccountIds]);
 
+  const visibleSelectableIds = useMemo(() => {
+    const validIds = new Set<string>();
+    if (currentNav === 'trash') {
+      for (const f of displayedTrashedFiles) validIds.add(f.id);
+    } else {
+      for (const f of displayedFiles) validIds.add(f.id);
+      for (const folder of displayedFolders) validIds.add(folder.id);
+    }
+    return validIds;
+  }, [currentNav, displayedTrashedFiles, displayedFiles, displayedFolders]);
+
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    if (currentNav === 'trash') {
+      if (loadedTrashPoolId !== activePoolId) return;
+    } else if (loadedFilesPoolId !== activePoolId) {
+      return;
+    }
+
+    let changed = false;
+    for (const id of selectedIds) {
+      if (id !== '__parent__' && !visibleSelectableIds.has(id)) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return;
+
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (id === '__parent__' || visibleSelectableIds.has(id)) next.add(id);
+      }
+      return next;
+    });
+  }, [selectedIds, currentNav, activePoolId, loadedFilesPoolId, loadedTrashPoolId, visibleSelectableIds]);
+
   const actionableSelectedCount = useMemo(() => {
-    return Array.from(selectedIds).filter((id) => id !== '__parent__').length;
-  }, [selectedIds]);
+    if (selectedIds.size === 0) return 0;
+    let count = 0;
+    for (const id of selectedIds) {
+      if (id !== '__parent__' && visibleSelectableIds.has(id)) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [selectedIds, visibleSelectableIds]);
 
   const selectedFiles = useMemo(() => {
     const source = currentNav === 'trash' ? displayedTrashedFiles : displayedFiles;
@@ -2136,6 +2232,7 @@ export function App() {
         <FileTable
           files={currentNav === 'trash' ? displayedTrashedFiles : displayedFiles}
           folders={currentNav === 'trash' ? [] : displayedFolders}
+          isLoading={isTableLoading}
           currentPath={currentPath}
           searchQuery={searchQuery}
           selectedIds={selectedIds}

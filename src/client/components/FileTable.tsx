@@ -18,7 +18,11 @@ import {
   IconLink,
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
+import { useMediaQuery } from '../utils/useBeforeUnload.js';
 import { RedactedEmail } from './RedactedEmail.js';
+
+const TABLE_ROW_HEIGHT_DESKTOP = 36;
+const TABLE_ROW_HEIGHT_MOBILE = 64;
 import type { FileRecord, FolderRecord } from '../api.js';
 import type { AccountItem } from './Sidebar.js';
 
@@ -64,6 +68,7 @@ interface FileTableProps {
   onSortChange?: (column: SortColumn, direction: SortDirection) => void;
   onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
   isSharePoolActive?: boolean;
+  isLoading?: boolean;
   shareLinksByBatch?: Record<string, Array<{ webViewLink: string; accountId: string }>>;
   onCopyShareLinks?: (batchFolderName: string) => Promise<boolean> | void;
 }
@@ -207,7 +212,7 @@ const styles = stylex.create({
     cursor: 'default',
     backgroundColor: 'transparent',
     userSelect: 'none',
-    '@media (pointer: coarse)': {
+    '@media (max-width: 768px)': {
       display: 'none',
     },
   },
@@ -216,7 +221,7 @@ const styles = stylex.create({
     top: 0,
     left: 0,
     width: '100%',
-    height: '36px',
+    height: layout.tableRowHeight,
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
@@ -233,7 +238,7 @@ const styles = stylex.create({
     },
     userSelect: 'none',
     transition: motion.transitionFast,
-    '@media (pointer: coarse)': {
+    '@media (max-width: 768px)': {
       height: layout.mobileRowHeight,
     },
   },
@@ -268,10 +273,12 @@ const styles = stylex.create({
     fontFamily: typography.fontFamilyBody,
     backgroundColor: 'transparent',
     transition: motion.transitionFast,
-    '@media (pointer: coarse)': {
-      gridTemplateColumns: '36px 32px 1fr 36px',
+    '@media (max-width: 768px)': {
+      gridTemplateColumns: '36px minmax(0, 1fr) auto',
       paddingLeft: spacing.space2,
       paddingRight: spacing.space3,
+    },
+    '@media (pointer: coarse)': {
       ':active': {
         backgroundColor: colors.rowHover,
         transition: motion.transitionTap,
@@ -326,7 +333,7 @@ const styles = stylex.create({
   checkboxChecked: {
     backgroundColor: colors.accentGold,
     borderColor: colors.accentGold,
-    color: '#111d18',
+    color: colors.accentGoldText,
     ':hover': {
       backgroundColor: colors.accentGold,
       borderColor: colors.accentGold,
@@ -386,6 +393,9 @@ const styles = stylex.create({
     paddingLeft: spacing.space1,
     paddingRight: spacing.space1,
     overflow: 'hidden',
+    '@media (max-width: 768px)': {
+      display: 'none',
+    },
   },
   selectWrapper: {
     position: 'relative',
@@ -476,6 +486,9 @@ const styles = stylex.create({
     fontVariantNumeric: 'tabular-nums',
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
+    '@media (max-width: 768px)': {
+      display: 'none',
+    },
   },
   actionsCell: {
     display: 'flex',
@@ -612,6 +625,15 @@ const styles = stylex.create({
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
     marginTop: spacing.space1,
+  },
+  loadingSpinner: {
+    position: 'relative',
+    width: layout.loadingSpinnerSize,
+    height: layout.loadingSpinnerSize,
+    borderRadius: radius.pill,
+    appearance: 'none',
+    color: colors.brandAccent,
+    backgroundColor: colors.progressTrack,
   },
 });
 
@@ -882,6 +904,7 @@ export function FileTable({
   onSortChange,
   onShareItem,
   isSharePoolActive = false,
+  isLoading = false,
   shareLinksByBatch,
   onCopyShareLinks,
 }: FileTableProps) {
@@ -895,6 +918,8 @@ export function FileTable({
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
+  const isMobile = useMediaQuery('(max-width: 768px)');
+  const rowHeight = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT_DESKTOP;
 
   useEffect(() => {
     return () => {
@@ -1313,7 +1338,6 @@ export function FileTable({
 
       setMarqueeRect({ left, top, width, height });
 
-      const rowHeight = 36;
       const newSelected = isModifier ? new Set(initialSelected) : new Set<string>();
 
       items.forEach((item, index) => {
@@ -1391,9 +1415,13 @@ export function FileTable({
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 36,
+    estimateSize: () => rowHeight,
     overscan: 10,
   });
+
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [rowHeight, rowVirtualizer]);
 
   const getActiveIndex = useCallback((): number => {
     if (
@@ -1549,7 +1577,7 @@ export function FileTable({
   ]);
 
   return (
-    <div {...stylex.props(styles.container)}>
+    <div {...stylex.props(styles.container)} aria-busy={isLoading ? 'true' : undefined}>
       <div {...stylex.props(styles.headerRow)}>
         <div {...stylex.props(styles.headerGutter)} data-marquee-gutter="true" aria-hidden="true" />
         <div {...stylex.props(styles.checkboxCell)}>
@@ -1746,6 +1774,12 @@ export function FileTable({
                   Target: {cleanPath}
                 </span>
               </div>
+            ) : isLoading ? (
+              <progress
+                aria-label={isTrashView ? 'Loading trash' : 'Loading folder contents'}
+                data-loading-spinner="true"
+                {...stylex.props(styles.loadingSpinner)}
+              />
             ) : (
               <>
                 <h3 {...stylex.props(styles.emptyTitle)}>

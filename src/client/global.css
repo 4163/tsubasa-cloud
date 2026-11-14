@@ -148,9 +148,132 @@ html, body {
     transition: filter 0.1s ease;
   }
 
-  a:active {
+    a:active {
     text-decoration: underline;
     transition: text-decoration 0.1s ease;
+  }
+}
+
+/* Delayed indeterminate loading ring for table pool/initial loads so fast local SQLite reads keep LCP unpolluted */
+@property --arc-start {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --arc-end {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --progress-dash-animation {
+  syntax: "*";
+  inherits: false;
+  initial-value: , tsubasa-progress-dash 3s ease-in-out infinite;
+}
+
+progress[data-loading-spinner='true']:indeterminate::-webkit-progress-bar {
+  display: none;
+  background: none;
+}
+
+progress[data-loading-spinner='true']:indeterminate::-webkit-progress-value {
+  display: none;
+  background: none;
+}
+
+progress[data-loading-spinner='true']:indeterminate::-moz-progress-bar {
+  display: none;
+  background: none;
+}
+
+progress[data-loading-spinner='true']:indeterminate::slider-fill {
+  display: none;
+  background: none;
+}
+
+progress[data-loading-spinner='true']:indeterminate {
+  --_from: calc(90deg + var(--arc-start, 0deg));
+  --_to: calc(90deg + var(--arc-end, 158deg));
+  --thickness: 2px;
+  --spinner-duration: 1.5s;
+  --_used-spinner-duration: var(--spinner-duration);
+
+  opacity: 0;
+
+  background-image: conic-gradient(
+    from var(--_from),
+    currentColor calc(var(--_to) - var(--_from)),
+    transparent 0
+  );
+
+  animation:
+    tsubasa-spinner-fade-in 150ms ease 150ms forwards,
+    tsubasa-progress-spin var(--_used-spinner-duration) linear infinite
+    var(--progress-dash-animation, );
+}
+
+@supports (background-clip: border-area) {
+  progress[data-loading-spinner='true']:indeterminate {
+    background-clip: border-area;
+    border: var(--thickness) solid transparent;
+    background-origin: border-box;
+  }
+}
+
+@supports not (background-clip: border-area) {
+  progress[data-loading-spinner='true']:indeterminate {
+    --clip-boundary: calc(100% - var(--thickness));
+    mask-image: radial-gradient(
+      farthest-side,
+      transparent var(--clip-boundary),
+      black var(--clip-boundary)
+    );
+    border: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  progress[data-loading-spinner='true']:indeterminate {
+    forced-color-adjust: none;
+    color: CanvasText;
+    background-color: Canvas;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress[data-loading-spinner='true']:indeterminate {
+    --_used-spinner-duration: 6s;
+    --progress-dash-animation: ;
+    --arc-end: 158deg;
+  }
+}
+
+@keyframes tsubasa-spinner-fade-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tsubasa-progress-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes tsubasa-progress-dash {
+  from {
+    --arc-start: 0deg;
+    --arc-end: 3deg;
+  }
+  50% {
+    --arc-start: 100deg;
+    --arc-end: 358deg;
+  }
+  to {
+    --arc-start: 360deg;
+    --arc-end: 363deg;
   }
 }
 
