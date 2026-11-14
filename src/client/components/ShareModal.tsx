@@ -794,14 +794,13 @@ export function ShareModal({
 }: ShareModalProps) {
   const [inspectData, setInspectData] = useState<InspectResponse | null>(null);
   const [isInspecting, setIsInspecting] = useState(false);
-  const [inspectError, setInspectError] = useState<string | null>(null);
 
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [validationData, setValidationData] = useState<ValidateResponse | null>(null);
   const [isValidating, setIsValidating] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [executeResult, setExecuteResult] = useState<ExecuteResponse | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
@@ -830,12 +829,11 @@ export function ShareModal({
     if (!isOpen || items.length === 0) {
       setInspectData(null);
       setIsInspecting(false);
-      setInspectError(null);
       setSelectedAccountIds([]);
       setValidationData(null);
       setIsValidating(false);
       setIsSubmitting(false);
-      setSubmitError(null);
+      setError(null);
       setExecuteResult(null);
       setCopiedKey(null);
       return;
@@ -844,12 +842,11 @@ export function ShareModal({
     let cancelled = false;
     setInspectData(null);
     setIsInspecting(true);
-    setInspectError(null);
     setSelectedAccountIds([]);
     setValidationData(null);
     setIsValidating(false);
     setIsSubmitting(false);
-    setSubmitError(null);
+    setError(null);
     setExecuteResult(null);
     setCopiedKey(null);
 
@@ -866,13 +863,13 @@ export function ShareModal({
         if (res.ok) {
           setInspectData(data as InspectResponse);
         } else {
-          setInspectError(
+          setError(
             ('error' in data ? (data.error as string) : null) || 'Failed to inspect share targets'
           );
         }
       } catch (err) {
         if (!cancelled) {
-          setInspectError(err instanceof Error ? err.message : String(err));
+          setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
         if (!cancelled) {
@@ -993,7 +990,7 @@ export function ShareModal({
   const handleToggleAccount = useCallback(
     (acc: EmptyShareAccount) => {
       if (isSubmitting || !isDriveSelectable(acc)) return;
-      setSubmitError(null);
+      setError(null);
       setSelectedAccountIds((prev) =>
         prev.includes(acc.id) ? prev.filter((id) => id !== acc.id) : [...prev, acc.id]
       );
@@ -1003,7 +1000,7 @@ export function ShareModal({
 
   const handleAutoSelect = useCallback(() => {
     if (eligibleEmptyAccounts.length === 0) return;
-    setSubmitError(null);
+    setError(null);
     const sorted = [...eligibleEmptyAccounts].sort((a, b) => {
       if (b.headroomBytes !== a.headroomBytes) {
         return b.headroomBytes - a.headroomBytes;
@@ -1076,7 +1073,7 @@ export function ShareModal({
     if (!allocationReady) return;
 
     setIsSubmitting(true);
-    setSubmitError(null);
+    setError(null);
 
     try {
       const res = await client.api.share.execute.$post({
@@ -1092,12 +1089,12 @@ export function ShareModal({
         setExecuteResult(executed);
         void onComplete(executed);
       } else {
-        setSubmitError(
+        setError(
           ('error' in data ? (data.error as string) : null) || 'Failed to share items'
         );
       }
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -1290,16 +1287,6 @@ export function ShareModal({
                 </div>
               )}
 
-              {inspectError && (
-                <div {...stylex.props(styles.dangerBanner)}>
-                  <div {...stylex.props(styles.dangerBannerHeader)}>
-                    <IconAlertTriangle size={15} />
-                    <span>Inspection failed</span>
-                  </div>
-                  <p {...stylex.props(styles.dangerBannerText)}>{inspectError}</p>
-                </div>
-              )}
-
               {inspectData && hasOverCeiling && (
                 <div {...stylex.props(styles.dangerBanner)}>
                   <div {...stylex.props(styles.dangerBannerHeader)}>
@@ -1458,13 +1445,13 @@ export function ShareModal({
                 </div>
               )}
 
-              {submitError && (
+              {error && (
                 <div {...stylex.props(styles.dangerBanner)}>
                   <div {...stylex.props(styles.dangerBannerHeader)}>
                     <IconAlertTriangle size={15} />
-                    <span>Share failed</span>
+                    <span>Unable to share</span>
                   </div>
-                  <p {...stylex.props(styles.dangerBannerText)}>{submitError}</p>
+                  <p {...stylex.props(styles.dangerBannerText)}>{error}</p>
                 </div>
               )}
             </div>
