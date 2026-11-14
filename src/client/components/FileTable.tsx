@@ -23,6 +23,7 @@ import { RedactedEmail } from './RedactedEmail.js';
 
 const TABLE_ROW_HEIGHT_DESKTOP = 36;
 const TABLE_ROW_HEIGHT_MOBILE = 64;
+const DOUBLE_CLICK_MS = 500;
 import type { FileRecord, FolderRecord } from '../api.js';
 import type { AccountItem } from './Sidebar.js';
 
@@ -923,6 +924,8 @@ export function FileTable({
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
+  // Tracked manually because native dblclick is suppressed once the clicked row unmounts mid-sequence.
+  const lastClickRef = useRef<{ id: string; path: string; time: number } | null>(null);
   const isMobile = useMediaQuery('(max-width: 768px)');
   const rowHeight = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT_DESKTOP;
 
@@ -1128,6 +1131,7 @@ export function FileTable({
     anchorIndexRef.current = -1;
     focusIndexRef.current = -1;
     lastSelectedIdRef.current = null;
+    lastClickRef.current = null;
   }, [cleanPath]);
 
   // Build items array
@@ -1208,8 +1212,29 @@ export function FileTable({
     }
   };
 
+  const getNavigationTarget = (id: string): string | null => {
+    if (id === '__parent__') return getParentDir(cleanPath);
+    const item = items.find((it) => it.kind === 'folder' && it.data.id === id);
+    return item?.kind === 'folder' ? item.data.virtualPath : null;
+  };
+
   const handleItemClick = (id: string, e: React.MouseEvent) => {
     if (justFinishedMarquee.current) return;
+
+    const hasModifier = e.shiftKey || e.ctrlKey || e.metaKey;
+    const navTarget = hasModifier ? null : getNavigationTarget(id);
+    if (navTarget === null) {
+      lastClickRef.current = null;
+    } else {
+      const now = performance.now();
+      const last = lastClickRef.current;
+      if (last && last.id === id && last.path === cleanPath && now - last.time <= DOUBLE_CLICK_MS) {
+        lastClickRef.current = null;
+        onNavigate(navTarget);
+        return;
+      }
+      lastClickRef.current = { id, path: cleanPath, time: now };
+    }
 
     if (id === '__parent__') {
       anchorIndexRef.current = 0;
@@ -1926,7 +1951,6 @@ export function FileTable({
                           e.stopPropagation();
                           handleItemClick('__parent__', e);
                         }}
-                        onDoubleClick={() => onNavigate(item.path)}
                         onDragOver={(e) => {
                           if (isTrashView || isSharePoolActive) return;
                           e.preventDefault();
@@ -2042,7 +2066,6 @@ export function FileTable({
                           e.stopPropagation();
                           handleItemClick(folder.id, e);
                         }}
-                        onDoubleClick={() => onNavigate(folder.virtualPath)}
                       >
                         <div {...stylex.props(styles.checkboxCell)}>
                           <button

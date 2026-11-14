@@ -640,10 +640,14 @@ export function App() {
     }
   }, [activePoolId]);
 
+  // /api/files returns the whole pool, so path changes within a pool need no refetch.
+  const currentPathRef = useRef(currentPath);
+  currentPathRef.current = currentPath;
+
   useEffect(() => {
     loadClusterData();
-    loadFiles(currentPath);
-  }, [loadClusterData, loadFiles, currentPath]);
+    loadFiles(currentPathRef.current);
+  }, [loadClusterData, loadFiles]);
 
   useEffect(() => {
     if (discovered.length > 0) {
