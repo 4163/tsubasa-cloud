@@ -11,6 +11,7 @@ const baseProps = {
   strokeWidth: 2,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
+  'aria-hidden': true as const,
 };
 
 export function IconFolder({ size = 18, ...props }: IconProps) {
@@ -23,7 +24,7 @@ export function IconFolder({ size = 18, ...props }: IconProps) {
 
 export function IconFolderFilled({ size = 18, ...props }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
       <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
     </svg>
   );
@@ -217,7 +218,7 @@ export function IconRotateCcw({ size = 14, ...props }: IconProps) {
 
 export function IconGitHub({ size = 14, ...props }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
       <path
         fillRule="evenodd"
         clipRule="evenodd"
@@ -307,6 +308,18 @@ export function IconLink({ size = 16, ...props }: IconProps) {
     <svg width={size} height={size} {...baseProps} {...props}>
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+
+export function IconScissors({ size = 16, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} {...baseProps} {...props}>
+      <circle cx="6" cy="6" r="3" />
+      <path d="M8.12 8.12 12 12" />
+      <path d="M20 4 8.12 15.88" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M14.8 14.8 20 20" />
     </svg>
   );
 }
