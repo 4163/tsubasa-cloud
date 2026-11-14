@@ -6,106 +6,46 @@ argument-hint: "<task, feature, or refactor to accomplish>"
 
 # Orchestrate
 
-Use this skill when handed a feature, bugfix, refactor, or migration to complete through coordinated subagents.
+Coordinate a feature, bugfix, refactor, or migration across subagents.
 
-The orchestrator owns the upfront architectural analysis, the implementation audit document, slice design, runtime verification, and the final working tree diff evaluation. Subagents run Gemini 3.8 Flash at high reasoning to execute the concrete code changes and compiler verification within their assigned slices. This split uses the orchestrator's frontier reasoning for high-leverage planning and verification while keeping token usage and conversation context lean during implementation.
+The orchestrator analyzes the scope, decides how to tackle the work, splits it into slices for subagents, runs runtime checks on the combined result, and audits the final diff. Subagents write the code and run local checks inside their assigned slices. This keeps the main context lean while the orchestrator focuses on design, integration, and verification.
 
-## Orchestrator guardrails
+## Guardrails
 
-The orchestrator must adhere to these constraints throughout the workflow:
-
-1. **No code editing during implementation.** Never write or modify source files while subagents are running their slices. Let subagents own all implementation changes.
-2. **Concise orchestration updates.** Do not narrate or re-explain subagent code changes in conversation messages. State only task dispatches, test results, blockers, and status updates.
-3. **No polling.** Do not query task status in a loop. Rely on the reactive wakeup system to resume when subagents finish.
-4. **No premature finalization.** Never declare a task complete on your own. Wait for user confirmation.
+1. **Do not load the `swarm` skill.** Use the `swarm` tool only to spawn, message, and stop workers. Follow this workflow instead, and do not add `narrator`, `monitor`, or verifier workers.
+2. **Do not edit code during implementation.** Let subagents own all source changes while they run their slices.
+3. **Keep updates brief.** Report task dispatches, test results, blockers, and status changes without repeating subagent diffs in chat.
+4. **Do not poll.** End the turn after dispatching work, or call `swarm_wait` instead of polling `read_board` in a loop.
 
 ## Workflow
 
-### 1. Architectural analysis and implementation audit document
+### 1. Analyze scope and approach
 
-The orchestrator conducts a deep upfront analysis of the affected subsystems before any code is modified:
+Read the affected files before delegating anything. Understand how the existing modules, data flow, and contracts fit together, and check any repository guidelines that apply. Decide what needs to change, which edge cases matter, and how to split the work cleanly. Do not generate a separate audit or planning document unless the user asks for one.
 
-1. Investigate the relevant schemas, storage placement logic, RPC routes, and frontend components. Read existing code to understand invariants, constraints, and data flows.
-2. Produce a comprehensive audit and implementation plan document under `.agents/<subject>-implementation-audit.md` (for example, `.agents/auth-cleanup-implementation-audit.md`).
-3. Ensure the document provides full engineering specifications rather than just a shallow scope list:
-   - Map affected table schemas, constraints, foreign keys, and indexes.
-   - Specify RPC route contracts, payload structures, and response shapes.
-   - Define concrete, step-by-step implementation instructions for each slice, including failure modes and edge cases.
-   - Establish strict, mutually exclusive file ownership boundaries for each slice.
-   - Define clear runtime verification criteria.
+### 2. Divide the task and delegate
 
-### 2. Slice design and subagent delegation
+Break the work into slices and spawn workers with `swarm{action:"add", name, model, workspace:"inherit", brief}`. Default `model` to `"gemini-4-hydrogen-medium"` unless the user specifies another model or reasoning level from `swarm{action:"models"}`.
 
-Split the implementation into logical slices based on the audit document:
+- **Give each slice exclusive files.** Two workers running at the same time must never touch the same file.
+- **Pick parallel or sequential order from dependencies.** Add independent slices together so they run in parallel. Add dependent slices only after the earlier slice reports `@coordinator [done]` on the board, or assign the follow-up to that worker with `post_message`.
+- **Scope each brief tightly.** State what to build, which files the worker may edit, which files are off-limits, and that it must post `@coordinator [done]` with a short summary rather than `@all`.
+- **Require code verification.** Each worker must prove its slice compiles and passes targeted syntax, type, or unit checks before reporting back.
+- **Respect the first-turn board delay.** `post_message`, `read_board`, and `swarm_wait` appear on the turn after your first `swarm{action:"add"}`, while `add` delivers each `brief` immediately. End the first spawn turn instead of looking for board tools, then read results with `read_board` once workers post.
 
-1. Assign distinct sets of files to each slice so concurrent subagents never edit the same files.
-2. Launch subagents using `invoke_subagent` with `Model: "flash"` (which runs Gemini 3.8 Flash at high reasoning).
-3. Decide whether to launch subagents in parallel or sequentially:
-   - Run in parallel when slices modify completely independent files (such as backend storage helpers and frontend StyleX components).
-   - Run sequentially when a later slice depends directly on types, schemas, or exports generated by an earlier slice (such as wiring RPC routes after creating backend endpoints).
-4. Give each subagent explicit instructions and constraints:
-   - Provide the exact list of allowed files to edit.
-   - Forbid modifying files outside the assigned scope.
-   - Require code verification with `npx tsc --noEmit` before reporting back.
-   - Ask for a short summary of changes and verification output.
+### 3. Verify at runtime
 
-### 3. Runtime verification by the orchestrator
+Once all slices finish and pass their local checks, verify the integrated changes yourself.
 
-Once all assigned subagents finish code verification, the orchestrator verifies runtime behavior:
+1. Run the project build, integration tests, or live runtime checks that exercise the new behavior end to end.
+2. Probe edge cases, error paths, and state transitions across the boundaries between slices.
+3. If a check fails, do not patch the implementation yourself. Send the exact error and reproduction details back to the responsible worker via `post_message` with `@<name>`, or add a focused worker, wait for it to fix and re-verify its code checks, then repeat runtime verification.
 
-1. Run production bundle checks (`npm run build`).
-2. Run runtime scripts via `npx tsx -e "..."` to test endpoint responses, latency, database constraints, and state transitions.
-3. If a runtime test fails:
-   - Do not fix the code directly.
-   - Message the relevant subagent or launch a targeted subagent with the exact runtime error and failure log.
-   - Let the subagent resolve the issue and verify with `npx tsc --noEmit`.
-   - Re-run the runtime check once the subagent reports back.
+### 4. Audit the diff
 
-### 4. Working tree diff audit and surgical cleanup
+After runtime checks pass, kill active slice workers with `swarm{action:"kill"}` and inspect the working tree with `git diff` and `git status`.
 
-After runtime verification and build checks pass:
-
-1. Run `git diff` against the working tree to inspect every change.
-2. Compare the actual diff against the specifications in `.agents/<subject>-implementation-audit.md`.
-3. Check for architectural drift, stray files, unnecessary abstractions, unslop violations, or lingering debug code.
-4. **Surgical cleanup exception.** This is the only phase where the orchestrator may edit code directly. Because subagents and runtime tests have already proven the logic works, the orchestrator can make small adjustments (such as removing a stray helper file, aligning an import, or tidying docs) without launching another subagent.
-5. Update `.agents/<subject>-implementation-audit.md`, marking completed items with `[x]` and updating the verdict.
-6. Present the summary to the user with clickable `file:///` links and await direction.
-
-## Audit document structure
-
-When creating `.agents/<subject>-implementation-audit.md`, follow this layout:
-
-```markdown
-# <Subject> implementation audit
-
-## 1. Scope and architecture analysis
-
-**Objective:** (Clear description of what the work achieves)
-**Affected subsystems:** (List affected backend, storage, database, or client areas)
-**Database and contract impact:** (List table schemas, migrations, or RPC routes touched)
-**Architectural constraints:** (Key rules from AGENTS.md and domain invariants to uphold)
-
-## 2. Logical implementation slices
-
-### Slice 1: <Name>
-- **File ownership:** (Exact paths this slice owns)
-- **Detailed implementation plan:** (Step-by-step engineering tasks, logic flow, and edge cases)
-- **Tasks:**
-  - [ ] Task 1
-  - [ ] Task 2
-- **Verification:** (Commands to verify, e.g. npx tsc --noEmit)
-
-### Slice 2: <Name>
-- **File ownership:** (Exact paths this slice owns)
-- **Detailed implementation plan:** (Step-by-step engineering tasks, logic flow, and edge cases)
-- **Tasks:**
-  - [ ] Task 1
-- **Verification:** (Commands to verify)
-
-## 3. Runtime verification plan
-(Specific scripts, endpoints, database assertions, and checks the orchestrator will run)
-
-## 4. Final audit and verdict
-(Updated after diff review: Pass / Fail, with notes on any cleanups applied)
-```
+1. Check that the changes match the initial scope and the planned approach.
+2. Look for rule violations, unintended behavior changes, stray files, dead code, or leftover debug output.
+3. **Surgical cleanup.** During this final audit only, you may make small direct edits such as deleting a stray file, fixing an import, or tidying a comment without spinning up another worker. If a deeper logic issue turns up, assign the fix to a worker and re-verify.
+4. Present a concise summary of the verified changes and audit findings to the user.
