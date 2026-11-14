@@ -70,7 +70,18 @@ interface ExternalChangesDrawerProps {
     tsubasaUsedBytes?: number;
   }>;
   initialAccountId?: string;
-  onResolved: () => Promise<void>;
+  onResolved: (summary?: { accountId: string; remainingCount: number; refreshFiles?: boolean }) => Promise<void>;
+}
+
+function countDiscrepancies(report: DiscrepancyReport | null | undefined): number {
+  if (!report) return 0;
+  return (
+    (report.conflicts?.length ?? 0) +
+    (report.overCeiling?.length ?? 0) +
+    (report.unindexed?.length ?? 0) +
+    (report.modified?.length ?? 0) +
+    (report.missingRemote?.length ?? 0)
+  );
 }
 
 const styles = stylex.create({
@@ -684,8 +695,8 @@ export function ExternalChangesDrawer({
     }
   }, [initialAccountId, accounts]);
 
-  const scanAccount = useCallback(async (accId: string) => {
-    if (!accId) return;
+  const scanAccount = useCallback(async (accId: string, forceRefresh = false): Promise<DiscrepancyReport | null> => {
+    if (!accId) return null;
     activeScanRef.current = accId;
     setIsScanning(true);
     setReport(null);
@@ -695,13 +706,15 @@ export function ExternalChangesDrawer({
     try {
       const res = await client.api.sync['external-changes'][':accountId'].$get({
         param: { accountId: accId },
+        query: forceRefresh ? { refresh: '1' } : {},
       });
-      if (activeScanRef.current !== accId) return;
+      if (activeScanRef.current !== accId) return null;
 
       if (res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as DiscrepancyReport;
         if (activeScanRef.current === accId) {
-          setReport(data as DiscrepancyReport);
+          setReport(data);
+          return data;
         }
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -718,6 +731,7 @@ export function ExternalChangesDrawer({
         setIsScanning(false);
       }
     }
+    return null;
   }, []);
 
   useEffect(() => {
@@ -739,12 +753,28 @@ export function ExternalChangesDrawer({
           accountId: item.accountId,
           driveFileId: item.driveFileId,
           targetVirtualPath: item.virtualPath,
+          name: item.name,
+          sizeBytes: item.sizeBytes,
+          mimeType: item.mimeType,
+          hash: item.hash ?? undefined,
         },
       });
 
       if (res.ok) {
-        await scanAccount(selectedAccount);
-        await onResolved();
+        const nextReport: DiscrepancyReport | null = report
+          ? {
+              ...report,
+              unindexed: report.unindexed.filter((i) => i.driveFileId !== item.driveFileId),
+              modified: report.modified.filter((i) => i.driveFileId !== item.driveFileId),
+              overCeiling: report.overCeiling.filter((i) => i.driveFileId !== item.driveFileId),
+            }
+          : null;
+        setReport(nextReport);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(nextReport),
+          refreshFiles: true,
+        });
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Failed to accept file');
@@ -761,13 +791,40 @@ export function ExternalChangesDrawer({
     setActiveActionId(action);
     setStatusNotice(null);
     try {
-      const endpoint = client.api.sync.resolve[action];
-      const res = await endpoint.$post({ json: { accountId: selectedAccount } });
+      const res =
+        action === 'accept-all'
+          ? await client.api.sync.resolve['accept-all'].$post({
+              json: {
+                accountId: selectedAccount,
+                items: acceptableItems.map((i) => ({
+                  driveFileId: i.driveFileId,
+                  virtualPath: i.virtualPath,
+                  sizeBytes: i.sizeBytes,
+                  mimeType: i.mimeType,
+                  hash: i.hash ?? undefined,
+                })),
+              },
+            })
+          : await client.api.sync.resolve['eject-all'].$post({
+              json: { accountId: selectedAccount },
+            });
 
       if (res.ok) {
         const data = await res.json();
-        await scanAccount(selectedAccount);
-        await onResolved();
+        const nextReport: DiscrepancyReport | null = report
+          ? {
+              ...report,
+              unindexed: [],
+              modified: [],
+            }
+          : null;
+        setReport(nextReport);
+        setConfirmingEject(false);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(nextReport),
+          refreshFiles: action === 'accept-all',
+        });
         if ('failedCount' in data && data.failedCount > 0) {
           setStatusNotice(`${data.failedCount.toLocaleString()} files could not be ejected. Check the server log.`);
         }
@@ -794,8 +851,20 @@ export function ExternalChangesDrawer({
       });
 
       if (res.ok) {
-        await scanAccount(selectedAccount);
-        await onResolved();
+        const nextReport: DiscrepancyReport | null = report
+          ? {
+              ...report,
+              overCeiling: report.overCeiling.filter((i) => i.driveFileId !== item.driveFileId),
+              unindexed: report.unindexed.filter((i) => i.driveFileId !== item.driveFileId),
+              modified: report.modified.filter((i) => i.driveFileId !== item.driveFileId),
+            }
+          : null;
+        setReport(nextReport);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(nextReport),
+          refreshFiles: false,
+        });
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Failed to eject file');
@@ -819,8 +888,18 @@ export function ExternalChangesDrawer({
       });
 
       if (res.ok) {
-        await scanAccount(selectedAccount);
-        await onResolved();
+        const nextReport: DiscrepancyReport | null = report
+          ? {
+              ...report,
+              missingRemote: report.missingRemote.filter((i) => i.driveFileId !== item.driveFileId),
+            }
+          : null;
+        setReport(nextReport);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(nextReport),
+          refreshFiles: true,
+        });
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Failed to remove missing file');
@@ -844,8 +923,12 @@ export function ExternalChangesDrawer({
         const data = await res.json();
         const count = ('results' in data && Array.isArray(data.results)) ? data.results.length : 0;
         setStatusNotice(`Rebalance complete. ${count} files migrated.`);
-        await scanAccount(selectedAccount);
-        await onResolved();
+        const scannedReport = await scanAccount(selectedAccount, true);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(scannedReport),
+          refreshFiles: true,
+        });
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Auto-rebalance failed');
@@ -874,8 +957,18 @@ export function ExternalChangesDrawer({
       });
 
       if (res.ok) {
-        await scanAccount(selectedAccount);
-        await onResolved();
+        const nextReport: DiscrepancyReport | null = report
+          ? {
+              ...report,
+              conflicts: report.conflicts.filter((c) => c.driveFileId !== item.driveFileId),
+            }
+          : null;
+        setReport(nextReport);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(nextReport),
+          refreshFiles: resolution !== 'eject' && resolution !== 'deduplicate',
+        });
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Failed to resolve conflict');
@@ -891,27 +984,38 @@ export function ExternalChangesDrawer({
     items: PathConflictItem[],
     resolution: 'keep_both' | 'deduplicate'
   ) => {
-    if (items.length === 0) return;
+    if (items.length === 0 || !selectedAccount) return;
     setActiveActionId('batch-conflict');
     setStatusNotice(null);
     try {
-      for (const item of items) {
-        const res = await client.api.sync.resolve.conflict.$post({
-          json: {
-            accountId: item.accountId,
-            driveFileId: item.driveFileId,
-            resolution,
-            targetVirtualPath: item.virtualPath,
-          },
+      const res = await client.api.sync.resolve['conflicts-batch'].$post({
+        json: {
+          accountId: selectedAccount,
+          items: items.map((i) => ({
+            driveFileId: i.driveFileId,
+            targetVirtualPath: i.virtualPath,
+          })),
+          resolution,
+        },
+      });
+      if (res.ok) {
+        const resolvedIds = new Set(items.map((i) => i.driveFileId));
+        const nextReport: DiscrepancyReport | null = report
+          ? {
+              ...report,
+              conflicts: report.conflicts.filter((c) => !resolvedIds.has(c.driveFileId)),
+            }
+          : null;
+        setReport(nextReport);
+        await onResolved({
+          accountId: selectedAccount,
+          remainingCount: countDiscrepancies(nextReport),
+          refreshFiles: resolution === 'keep_both',
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          setStatusNotice(('error' in err ? err.error : null) || `Failed to resolve ${item.name}`);
-          break;
-        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setStatusNotice(('error' in err ? err.error : null) || 'Failed to resolve conflicts');
       }
-      await scanAccount(selectedAccount);
-      await onResolved();
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));
     } finally {
@@ -945,12 +1049,7 @@ export function ExternalChangesDrawer({
       : null,
   ].filter(Boolean);
 
-  const totalDiscrepancies =
-    (report?.conflicts?.length ?? 0) +
-    (report?.overCeiling.length ?? 0) +
-    (report?.unindexed.length ?? 0) +
-    (report?.modified.length ?? 0) +
-    (report?.missingRemote.length ?? 0);
+  const totalDiscrepancies = countDiscrepancies(report);
 
   return (
     <>
@@ -1010,6 +1109,14 @@ export function ExternalChangesDrawer({
               <IconChevronDown size={11} strokeWidth={2.5} />
             </div>
           </div>
+          <button
+            type="button"
+            {...stylex.props(styles.btnSecondary)}
+            onClick={() => void scanAccount(selectedAccount, true)}
+            disabled={isScanning || isLocked || !selectedAccount}
+          >
+            {isScanning ? 'Scanning...' : 'Rescan'}
+          </button>
         </div>
 
         <div {...stylex.props(styles.contentScroll)}>

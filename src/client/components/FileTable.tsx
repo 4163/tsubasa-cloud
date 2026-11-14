@@ -790,6 +790,8 @@ export async function extractDataTransferEntries(
   return { files: resultFiles, emptyFolders: resultEmptyFolders };
 }
 
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 function sortFolders(
   foldersList: ClientFolder[],
   column: SortColumn,
@@ -797,7 +799,7 @@ function sortFolders(
 ): ClientFolder[] {
   return [...foldersList].sort((a, b) => {
     if (column === 'name') {
-      const cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      const cmp = nameCollator.compare(a.name, b.name);
       return direction === 'asc' ? cmp : -cmp;
     }
     if (column === 'date') {
@@ -805,9 +807,9 @@ function sortFolders(
       const timeB = new Date(b.updatedAt).getTime() || 0;
       const diff = timeA - timeB;
       if (diff !== 0) return direction === 'asc' ? diff : -diff;
-      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      return nameCollator.compare(a.name, b.name);
     }
-    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    return nameCollator.compare(a.name, b.name);
   });
 }
 
@@ -819,18 +821,18 @@ function sortFiles(
 ): ClientFileRecord[] {
   return [...filesList].sort((a, b) => {
     if (column === 'name') {
-      const cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      const cmp = nameCollator.compare(a.name, b.name);
       return direction === 'asc' ? cmp : -cmp;
     }
     if (column === 'account') {
-      const cmp = a.accountId.localeCompare(b.accountId, undefined, { numeric: true, sensitivity: 'base' });
+      const cmp = nameCollator.compare(a.accountId, b.accountId);
       if (cmp !== 0) return direction === 'asc' ? cmp : -cmp;
-      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      return nameCollator.compare(a.name, b.name);
     }
     if (column === 'size') {
       const diff = a.sizeBytes - b.sizeBytes;
       if (diff !== 0) return direction === 'asc' ? diff : -diff;
-      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      return nameCollator.compare(a.name, b.name);
     }
     if (column === 'date') {
       const dateA = isTrash ? (a.trashedAt || a.updatedAt) : a.updatedAt;
@@ -839,7 +841,7 @@ function sortFiles(
       const timeB = new Date(dateB).getTime() || 0;
       const diff = timeA - timeB;
       if (diff !== 0) return direction === 'asc' ? diff : -diff;
-      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      return nameCollator.compare(a.name, b.name);
     }
     return 0;
   });
@@ -1134,61 +1136,69 @@ export function FileTable({
     lastClickRef.current = null;
   }, [cleanPath]);
 
-  // Build items array
-  const items: TableItem[] = [];
-
   // Filter or search
   const isSearching = searchQuery.trim().length > 0;
   const searchLower = searchQuery.toLowerCase();
 
-  if (isTrashView) {
-    const list = isSearching
-      ? files.filter(
-          (f) =>
-            f.name.toLowerCase().includes(searchLower) ||
-            (f.virtualPath && f.virtualPath.toLowerCase().includes(searchLower))
-        )
-      : files;
+  // Build items array
+  const items = useMemo<TableItem[]>(() => {
+    const result: TableItem[] = [];
 
-    const sortedList = sortFiles(list, currentSortColumn, currentSortDirection, true);
-    sortedList.forEach((f) => items.push({ kind: 'trash', data: f }));
-  } else if (isSearching) {
-    const matchedFolders = folders.filter(
-      (f) => f.name.toLowerCase().includes(searchLower) || f.virtualPath.toLowerCase().includes(searchLower)
-    );
-    const sortedFoldersList = sortFolders(matchedFolders, currentSortColumn, currentSortDirection);
-    sortedFoldersList.forEach((f) => items.push({ kind: 'folder', data: f }));
+    if (isTrashView) {
+      const list = isSearching
+        ? files.filter(
+            (f) =>
+              f.name.toLowerCase().includes(searchLower) ||
+              (f.virtualPath && f.virtualPath.toLowerCase().includes(searchLower))
+          )
+        : files;
 
-    const matchedFiles = files.filter(
-      (f) =>
-        !f.isTrashed &&
-        (f.name.toLowerCase().includes(searchLower) || f.virtualPath.toLowerCase().includes(searchLower))
-    );
-    const sortedFilesList = sortFiles(matchedFiles, currentSortColumn, currentSortDirection, false);
-    sortedFilesList.forEach((f) => items.push({ kind: 'file', data: f }));
-  } else {
-    // Add ".." if not root
-    if (cleanPath !== '/') {
-      items.push({ kind: 'parent', path: getParentDir(cleanPath) });
+      const sortedList = sortFiles(list, currentSortColumn, currentSortDirection, true);
+      sortedList.forEach((f) => result.push({ kind: 'trash', data: f }));
+    } else if (isSearching) {
+      const matchedFolders = folders.filter(
+        (f) => f.name.toLowerCase().includes(searchLower) || f.virtualPath.toLowerCase().includes(searchLower)
+      );
+      const sortedFoldersList = sortFolders(matchedFolders, currentSortColumn, currentSortDirection);
+      sortedFoldersList.forEach((f) => result.push({ kind: 'folder', data: f }));
+
+      const matchedFiles = files.filter(
+        (f) =>
+          !f.isTrashed &&
+          (f.name.toLowerCase().includes(searchLower) || f.virtualPath.toLowerCase().includes(searchLower))
+      );
+      const sortedFilesList = sortFiles(matchedFiles, currentSortColumn, currentSortDirection, false);
+      sortedFilesList.forEach((f) => result.push({ kind: 'file', data: f }));
+    } else {
+      // Add ".." if not root
+      if (cleanPath !== '/') {
+        result.push({ kind: 'parent', path: getParentDir(cleanPath) });
+      }
+
+      // Folders in current dir
+      const dirFolders = folders.filter((f) => getParentDir(f.virtualPath) === cleanPath);
+      const sortedFoldersList = sortFolders(dirFolders, currentSortColumn, currentSortDirection);
+      sortedFoldersList.forEach((f) => result.push({ kind: 'folder', data: f }));
+
+      // Files in current dir
+      const dirFiles = files.filter((f) => !f.isTrashed && getParentDir(f.virtualPath) === cleanPath);
+      const sortedFilesList = sortFiles(dirFiles, currentSortColumn, currentSortDirection, false);
+      sortedFilesList.forEach((f) => result.push({ kind: 'file', data: f }));
     }
 
-    // Folders in current dir
-    const dirFolders = folders.filter((f) => getParentDir(f.virtualPath) === cleanPath);
-    const sortedFoldersList = sortFolders(dirFolders, currentSortColumn, currentSortDirection);
-    sortedFoldersList.forEach((f) => items.push({ kind: 'folder', data: f }));
-
-    // Files in current dir
-    const dirFiles = files.filter((f) => !f.isTrashed && getParentDir(f.virtualPath) === cleanPath);
-    const sortedFilesList = sortFiles(dirFiles, currentSortColumn, currentSortDirection, false);
-    sortedFilesList.forEach((f) => items.push({ kind: 'file', data: f }));
-  }
+    return result;
+  }, [isTrashView, isSearching, searchLower, cleanPath, files, folders, currentSortColumn, currentSortDirection]);
 
   // Selectable items in current view
-  const selectableItems = items.filter(
-    (item): item is { kind: 'folder'; data: ClientFolder } | { kind: 'file'; data: ClientFileRecord } | { kind: 'trash'; data: ClientFileRecord } =>
-      item.kind !== 'parent'
+  const selectableItems = useMemo(
+    () =>
+      items.filter(
+        (item): item is { kind: 'folder'; data: ClientFolder } | { kind: 'file'; data: ClientFileRecord } | { kind: 'trash'; data: ClientFileRecord } =>
+          item.kind !== 'parent'
+      ),
+    [items]
   );
-  const selectableIds = selectableItems.map((item) => item.data.id);
+  const selectableIds = useMemo(() => selectableItems.map((item) => item.data.id), [selectableItems]);
   const selectedInViewCount = selectableIds.filter((id) => selectedIds.has(id)).length;
   const isAllSelected = selectableIds.length > 0 && selectedInViewCount === selectableIds.length;
   const isIndeterminate = selectedInViewCount > 0 && !isAllSelected;

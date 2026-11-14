@@ -533,6 +533,7 @@ export function App() {
           try {
             const res = await client.api.sync['external-changes'][':accountId'].$get({
               param: { accountId: acc.accountId },
+              query: force ? { refresh: '1' } : {},
             });
             if (activePoolIdRef.current !== poolId || discrepancyRequestSeqRef.current !== reqSeq) {
               return;
@@ -567,35 +568,31 @@ export function App() {
       const effectivePoolId = targetPoolId ?? activePoolIdRef.current;
       const reqSeq = ++clusterRequestSeqRef.current;
       try {
-        const poolsRes = await client.api.pools.$get();
+        const [poolsRes, storageRes, poolRes] = await Promise.all([
+          client.api.pools.$get(),
+          client.api.storage.overview.$get({ query: { poolId: String(effectivePoolId) } }),
+          client.api.accounts.pool.$get({ query: { poolId: String(effectivePoolId) } }),
+        ]);
         if (clusterRequestSeqRef.current !== reqSeq) return undefined;
-        if (poolsRes.ok) {
-          const poolsData = await poolsRes.json();
-          if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+
+        const [poolsData, storageData, poolData] = await Promise.all([
+          poolsRes.ok ? poolsRes.json() : Promise.resolve(null),
+          storageRes.ok ? storageRes.json() : Promise.resolve(null),
+          poolRes.ok ? poolRes.json() : Promise.resolve(null),
+        ]);
+        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+
+        if (poolsData) {
           setPools(poolsData.pools);
           if (poolsData.pools.length > 0 && !poolsData.pools.some((p) => p.id === effectivePoolId)) {
             const fallbackPool = poolsData.pools.find((p) => !p.isSharePool) ?? poolsData.pools[0];
             setActivePoolId(fallbackPool.id);
           }
         }
-
-        const storageRes = await client.api.storage.overview.$get({
-          query: { poolId: String(effectivePoolId) },
-        });
-        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
-        if (storageRes.ok) {
-          const storageData = await storageRes.json();
-          if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+        if (storageData) {
           setStorage(storageData);
         }
-
-        const poolRes = await client.api.accounts.pool.$get({
-          query: { poolId: String(effectivePoolId) },
-        });
-        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
-        if (poolRes.ok) {
-          const poolData = await poolRes.json();
-          if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+        if (poolData) {
           setDiscovered(poolData.accounts);
           return poolData.accounts as DiscoveredAccount[];
         }
@@ -687,11 +684,23 @@ export function App() {
     loadFiles(currentPathRef.current);
   }, [loadClusterData, loadFiles]);
 
+  const discoveredRef = useRef(discovered);
+  discoveredRef.current = discovered;
+
+  const authAccountsKey = useMemo(() => {
+    if (isSharePoolActive) return '';
+    return discovered
+      .filter((a) => (a.poolId ?? activePoolId) === activePoolId && a.authorized)
+      .map((a) => a.accountId)
+      .sort()
+      .join(',');
+  }, [discovered, activePoolId, isSharePoolActive]);
+
   useEffect(() => {
-    if (!isSharePoolActive && discovered.length > 0) {
-      void checkAccountDiscrepancies(discovered, false, activePoolId);
+    if (!isSharePoolActive && authAccountsKey) {
+      void checkAccountDiscrepancies(discoveredRef.current, false, activePoolId);
     }
-  }, [discovered, isSharePoolActive, activePoolId, checkAccountDiscrepancies]);
+  }, [activePoolId, isSharePoolActive, authAccountsKey, checkAccountDiscrepancies]);
 
   const clearWorkspaceState = useCallback(() => {
     clusterRequestSeqRef.current++;
@@ -830,13 +839,18 @@ export function App() {
     };
   }, [presentAuthorizedAccount]);
 
+  const lastFocusRefreshRef = useRef<number>(0);
   useEffect(() => {
     function handleFocus() {
+      if (isSyncing || pendingOpsCount > 0) return;
+      const now = Date.now();
+      if (now - lastFocusRefreshRef.current < 10_000) return;
+      lastFocusRefreshRef.current = now;
       loadClusterData();
     }
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, [loadClusterData]);
+  }, [loadClusterData, isSyncing, pendingOpsCount]);
 
   useEffect(() => {
     if (currentNav === 'trash') {
@@ -1151,88 +1165,120 @@ export function App() {
     window.open(`/api/files/${encodeURIComponent(file.id)}/download`, '_blank');
   }
 
-  async function handleTrash(file: ClientFileRecord) {
+  async function trashFileRequest(file: ClientFileRecord): Promise<boolean> {
     try {
       const res = await client.api.files[':id'].trash.$post({ param: { id: file.id } });
-      if (res.ok) {
-        showToast(`Moved "${file.name}" to trash.`);
-        await loadFiles(currentPath);
-        await loadTrashFiles();
-        await loadClusterData();
-      }
+      return res.ok;
     } catch (err) {
       setErrorNotice(`Trash error: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }
 
-  async function handleRestoreFile(file: ClientFileRecord) {
+  async function restoreFileRequest(file: ClientFileRecord): Promise<boolean> {
     try {
       const res = await client.api.files[':id'].restore.$post({
         param: { id: file.id },
       });
-      if (res.ok) {
-        showToast(`Restored "${file.name}".`);
-        await loadTrashFiles();
-        await loadFiles(currentPath);
-        await loadClusterData();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Restore failed');
-      }
+      if (res.ok) return true;
+      const err = await res.json().catch(() => ({}));
+      setErrorNotice(('error' in err ? err.error : null) || 'Restore failed');
+      return false;
     } catch (err) {
       setErrorNotice(`Restore error: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }
 
-  async function handlePermanentDelete(file: ClientFileRecord) {
+  async function permanentDeleteFileRequest(file: ClientFileRecord): Promise<boolean> {
     try {
       const res = await client.api.files[':id'].permanent.$delete({
         param: { id: file.id },
       });
-      if (res.ok) {
-        showToast(`Permanently deleted "${file.name}".`);
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(file.id);
-          return next;
-        });
-        await loadTrashFiles();
-        await loadClusterData();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Delete failed');
-      }
+      if (res.ok) return true;
+      const err = await res.json().catch(() => ({}));
+      setErrorNotice(('error' in err ? err.error : null) || 'Delete failed');
+      return false;
     } catch (err) {
       setErrorNotice(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }
 
-  async function handleDeleteFolder(folder: ClientFolder) {
+  async function deleteFolderRequest(folder: ClientFolder): Promise<{ ok: boolean; navigateParent?: string }> {
     try {
       const res = await client.api.folders.$delete({
         query: { virtualPath: folder.virtualPath, poolId: String(activePoolId) },
       });
       if (res.ok) {
-        showToast(`Deleted folder "${folder.name}".`);
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(folder.id);
-          return next;
-        });
+        let navigateParent: string | undefined;
         if (currentPath === folder.virtualPath || currentPath.startsWith(folder.virtualPath + '/')) {
           const parts = folder.virtualPath.split('/').filter(Boolean);
-          const parent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
-          handleNavigate(parent);
-          await loadFiles(parent);
-        } else {
-          await loadFiles(currentPath);
+          navigateParent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
         }
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Failed to delete folder');
+        return { ok: true, navigateParent };
       }
+      const err = await res.json().catch(() => ({}));
+      setErrorNotice(('error' in err ? err.error : null) || 'Failed to delete folder');
+      return { ok: false };
     } catch (err) {
       setErrorNotice(err instanceof Error ? err.message : String(err));
+      return { ok: false };
+    }
+  }
+
+  async function handleTrash(file: ClientFileRecord) {
+    if (await trashFileRequest(file)) {
+      showToast(`Moved "${file.name}" to trash.`);
+      await Promise.all([
+        loadFiles(currentPath),
+        currentNav === 'trash' ? loadTrashFiles() : Promise.resolve(),
+        loadClusterData(),
+      ]);
+    }
+  }
+
+  async function handleRestoreFile(file: ClientFileRecord) {
+    if (await restoreFileRequest(file)) {
+      showToast(`Restored "${file.name}".`);
+      await Promise.all([
+        currentNav === 'trash' ? loadTrashFiles() : Promise.resolve(),
+        loadFiles(currentPath),
+        loadClusterData(),
+      ]);
+    }
+  }
+
+  async function handlePermanentDelete(file: ClientFileRecord) {
+    if (await permanentDeleteFileRequest(file)) {
+      showToast(`Permanently deleted "${file.name}".`);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(file.id);
+        return next;
+      });
+      await Promise.all([
+        currentNav === 'trash' ? loadTrashFiles() : Promise.resolve(),
+        loadClusterData(),
+      ]);
+    }
+  }
+
+  async function handleDeleteFolder(folder: ClientFolder) {
+    const result = await deleteFolderRequest(folder);
+    if (result.ok) {
+      showToast(`Deleted folder "${folder.name}".`);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(folder.id);
+        return next;
+      });
+      if (result.navigateParent !== undefined) {
+        handleNavigate(result.navigateParent);
+        await loadFiles(result.navigateParent);
+      } else {
+        await loadFiles(currentPath);
+      }
     }
   }
 
@@ -1246,16 +1292,42 @@ export function App() {
 
     await runPendingOp(async () => {
       if (currentNav === 'trash') {
+        let deletedCount = 0;
         for (const f of selectedFiles) {
-          await handlePermanentDelete(f);
+          if (await permanentDeleteFileRequest(f)) {
+            deletedCount++;
+          }
         }
+        if (deletedCount > 0) {
+          showToast(`Permanently deleted ${deletedCount} ${deletedCount === 1 ? 'file' : 'files'}.`);
+        }
+        await Promise.all([loadTrashFiles(), loadClusterData()]);
       } else {
+        let deletedFolders = 0;
+        let trashedFilesCount = 0;
+        let nextPath = currentPath;
         for (const folder of selectedFolders) {
-          await handleDeleteFolder(folder);
+          const result = await deleteFolderRequest(folder);
+          if (result.ok) {
+            deletedFolders++;
+            if (result.navigateParent !== undefined) {
+              nextPath = result.navigateParent;
+            }
+          }
         }
         for (const file of selectedFiles) {
-          await handleTrash(file);
+          if (await trashFileRequest(file)) {
+            trashedFilesCount++;
+          }
         }
+        if (nextPath !== currentPath) {
+          handleNavigate(nextPath);
+        }
+        const totalDone = deletedFolders + trashedFilesCount;
+        if (totalDone > 0) {
+          showToast(`Deleted ${totalDone} ${totalDone === 1 ? 'item' : 'items'}.`);
+        }
+        await Promise.all([loadFiles(nextPath), loadClusterData()]);
       }
     });
   }
@@ -1541,13 +1613,19 @@ export function App() {
     const toRestore = trashedFiles.filter((f) => actionableIds.includes(f.id));
     if (toRestore.length === 0) return;
     await runPendingOp(async () => {
+      let restoredCount = 0;
       for (const file of toRestore) {
-        await handleRestoreFile(file);
+        if (await restoreFileRequest(file)) {
+          restoredCount++;
+        }
       }
       setSelectedIds(new Set());
-      showToast(`Restored ${toRestore.length} ${toRestore.length === 1 ? 'file' : 'files'}.`);
+      if (restoredCount > 0) {
+        showToast(`Restored ${restoredCount} ${restoredCount === 1 ? 'file' : 'files'}.`);
+      }
+      await Promise.all([loadTrashFiles(), loadFiles(currentPath), loadClusterData()]);
     });
-  }, [selectedIds, currentNav, trashedFiles, handleRestoreFile, showToast, runPendingOp]);
+  }, [selectedIds, currentNav, trashedFiles, showToast, runPendingOp, loadTrashFiles, loadFiles, currentPath, loadClusterData]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -1781,8 +1859,7 @@ export function App() {
       });
       if (res.ok) {
         showToast(`Transferred "${file?.name || fileId}" to ${targetName}.`);
-        await loadFiles(currentPath);
-        await loadClusterData();
+        await Promise.all([loadFiles(currentPath), loadClusterData()]);
       } else {
         const err = await res.json().catch(() => ({}));
         setErrorNotice(('error' in err ? err.error : null) || 'Failed to transfer file');
@@ -1882,8 +1959,7 @@ export function App() {
         setDriveActionModal((prev) => ({ ...prev, isOpen: false, isLoading: false }));
         const filesMoved = ('filesMoved' in data ? (data.filesMoved as number) : 0) ?? 0;
         showToast(`Drive removed. Evacuated ${filesMoved} ${filesMoved === 1 ? 'file' : 'files'}.`);
-        await loadClusterData();
-        await loadFiles(currentPath);
+        await Promise.all([loadClusterData(), loadFiles(currentPath)]);
       } else {
         setDriveActionModal((prev) => ({
           ...prev,
@@ -2448,8 +2524,7 @@ export function App() {
         accounts={accountItems}
         poolId={activePoolId}
         onUploadComplete={async () => {
-          await loadClusterData();
-          await loadFiles(currentPath);
+          await Promise.all([loadClusterData(), loadFiles(currentPath)]);
           showToast('Upload finished. Cluster updated.');
         }}
         onClearFiles={() => {
@@ -2467,12 +2542,17 @@ export function App() {
           }}
           accounts={externalChangesAccounts}
           initialAccountId={externalChangesAccountId}
-          onResolved={async () => {
-            const freshAccounts = await loadClusterData();
-            await loadFiles(currentPath);
-            if (freshAccounts) {
-              await checkAccountDiscrepancies(freshAccounts, true);
+          onResolved={async (summary) => {
+            if (summary) {
+              setPendingDiscrepancies((prev) => ({
+                ...prev,
+                [summary.accountId]: summary.remainingCount > 0,
+              }));
             }
+            await Promise.all([
+              loadClusterData(),
+              summary?.refreshFiles !== false ? loadFiles(currentPath) : Promise.resolve(),
+            ]);
             showToast('Discrepancies updated.');
           }}
         />
