@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconTrash, IconClose, IconAlertTriangle } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 
 interface ConfirmPurgeModalProps {
   isOpen: boolean;
@@ -17,7 +18,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(11, 20, 18, 0.6)',
+    backgroundColor: colors.modalBackdrop,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -79,6 +80,12 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':disabled': {
+      opacity: 0.35,
+      color: colors.secondaryText,
+      backgroundColor: 'transparent',
+      cursor: 'not-allowed',
     },
   },
   body: {
@@ -156,6 +163,13 @@ const styles = stylex.create({
       color: colors.primaryText,
       borderColor: colors.primaryText,
     },
+    ':disabled': {
+      opacity: 0.5,
+      backgroundColor: 'transparent',
+      color: colors.secondaryText,
+      borderColor: colors.border,
+      cursor: 'not-allowed',
+    },
   },
   purgeBtn: {
     height: '32px',
@@ -195,6 +209,8 @@ export function ConfirmPurgeModal({
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
   const isSharePool = mode === 'share_pool';
 
+  useDialogLock(isOpen, isSubmitting, onClose);
+
   useEffect(() => {
     if (isOpen) {
       setIsSubmitting(false);
@@ -217,33 +233,32 @@ export function ConfirmPurgeModal({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
-    }
-  };
-
   return (
-    <div {...stylex.props(styles.backdrop)} onClick={onClose} onKeyDown={handleKeyDown}>
+    <div
+      {...stylex.props(styles.backdrop)}
+      onClick={() => {
+        if (!isSubmitting) onClose();
+      }}
+    >
       <div
         {...stylex.props(styles.modal)}
         role="dialog"
         aria-modal="true"
-        aria-label={isSharePool ? 'Confirm clear Share Pool' : 'Confirm permanent purge'}
+        aria-label={isSharePool ? 'Confirm clear share pool' : 'Confirm permanent purge'}
         onClick={(e) => e.stopPropagation()}
       >
         <div {...stylex.props(styles.header)}>
           <div {...stylex.props(styles.titleGroup)}>
             <IconTrash size={16} />
             <h3 {...stylex.props(styles.title)}>
-              {isSharePool ? 'Clear Share Pool?' : 'Permanently purge trash'}
+              {isSharePool ? 'Clear share pool?' : 'Permanently purge trash'}
             </h3>
           </div>
           <button
             type="button"
             {...stylex.props(styles.closeBtn)}
             onClick={onClose}
+            disabled={isSubmitting}
             aria-label="Close dialog"
           >
             <IconClose size={14} />
@@ -254,7 +269,7 @@ export function ConfirmPurgeModal({
           <div {...stylex.props(styles.pathHint)}>
             {isSharePool ? (
               <>
-                Target: Share Pool (_Tsubasa~ Pool share) · {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                Target: share pool (_Tsubasa~ Pool share) · {itemCount} {itemCount === 1 ? 'item' : 'items'}
                 {totalBytes > 0 ? ` (${formatBytes(totalBytes)})` : ''}
               </>
             ) : (
@@ -272,7 +287,7 @@ export function ConfirmPurgeModal({
             </div>
             <p {...stylex.props(styles.warningDesc)}>
               {isSharePool
-                ? 'All copied files and folders in _Tsubasa~ Pool share will be permanently deleted across Share Pool drives. Original files in your storage pools remain untouched.'
+                ? 'All copied files and folders in _Tsubasa~ Pool share will be permanently deleted across share pool drives. Original files in your storage pools remain untouched.'
                 : `Permanently purge all ${itemCount} ${itemCount === 1 ? 'file' : 'files'}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.`}
             </p>
           </div>
@@ -296,7 +311,7 @@ export function ConfirmPurgeModal({
           >
             <IconTrash size={14} />
             {isSharePool
-              ? (isSubmitting ? 'Clearing...' : 'Clear Share Pool')
+              ? (isSubmitting ? 'Clearing...' : 'Clear share pool')
               : (isSubmitting ? 'Purging...' : 'Confirm purge')}
           </button>
         </div>

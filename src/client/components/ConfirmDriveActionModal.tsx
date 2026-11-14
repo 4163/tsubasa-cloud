@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconAlertTriangle, IconTrash } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 import type { AccountItem } from './Sidebar.js';
 
 interface ConfirmDriveActionModalProps {
@@ -21,7 +22,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(11, 20, 18, 0.65)',
+    backgroundColor: colors.modalBackdrop,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -83,6 +84,12 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':disabled': {
+      opacity: 0.35,
+      color: colors.secondaryText,
+      backgroundColor: 'transparent',
+      cursor: 'not-allowed',
     },
   },
   body: {
@@ -197,6 +204,8 @@ const styles = stylex.create({
     },
     ':disabled': {
       opacity: 0.5,
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
       cursor: 'not-allowed',
     },
   },
@@ -256,17 +265,7 @@ export function ConfirmDriveActionModal({
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isOpen || isLoading) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isLoading, onClose]);
+  useDialogLock(isOpen && Boolean(account), isLoading, onClose);
 
   if (!isOpen || !account) return null;
 

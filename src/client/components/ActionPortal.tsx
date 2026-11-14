@@ -255,7 +255,6 @@ const styles = stylex.create({
   },
   selectionBadgeBtnSize: {
     color: colors.accentGoldText,
-    opacity: 0.8,
     fontVariantNumeric: 'tabular-nums',
     fontSize: typography.fontSizeMeta,
   },
@@ -282,9 +281,11 @@ const styles = stylex.create({
       backgroundColor: colors.accentGold,
       opacity: 0.9,
     },
-    ':focus': {
-      outline: 'none',
-      boxShadow: `0 0 0 2px ${colors.brandAccent}`,
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '2px',
     },
     ':active': {
       transform: 'scale(0.98)',
@@ -858,7 +859,7 @@ export function ActionPortal({
                 onCopyActiveShareLinks
               )}
 
-            {isSharePoolActive && selectedCount === 0 && (sharePoolItemCount ?? 0) > 0 && onClearSharePool && (
+            {isSharePoolActive && (sharePoolItemCount ?? 0) > 0 && onClearSharePool && (
               <button
                 type="button"
                 {...stylex.props(styles.emptyTrashBtn)}
@@ -866,7 +867,7 @@ export function ActionPortal({
                 title="Permanently delete all copied files and folders in Share Pool"
               >
                 <IconTrash size={14} />
-                Clear Share Pool
+                Clear share pool
               </button>
             )}
           </>

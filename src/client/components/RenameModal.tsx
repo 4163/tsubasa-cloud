@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconEdit, IconClose } from './Icons.js';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 
 export interface RenameTarget {
   kind: 'file' | 'folder' | 'pool';
@@ -20,7 +21,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(11, 20, 18, 0.6)',
+    backgroundColor: colors.modalBackdrop,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -83,6 +84,12 @@ const styles = stylex.create({
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
     },
+    ':disabled': {
+      opacity: 0.35,
+      color: colors.secondaryText,
+      backgroundColor: 'transparent',
+      cursor: 'not-allowed',
+    },
   },
   body: {
     padding: spacing.space5,
@@ -118,10 +125,17 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':focus': {
       borderColor: colors.accentGold,
-      boxShadow: `0 0 0 1px ${colors.accentGold}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
     '::placeholder': {
       color: colors.dimText,
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
     },
   },
   errorMessage: {
@@ -164,6 +178,13 @@ const styles = stylex.create({
       color: colors.primaryText,
       borderColor: colors.primaryText,
     },
+    ':disabled': {
+      opacity: 0.5,
+      backgroundColor: 'transparent',
+      color: colors.secondaryText,
+      borderColor: colors.border,
+      cursor: 'not-allowed',
+    },
   },
   saveBtn: {
     height: '32px',
@@ -201,6 +222,8 @@ export function RenameModal({
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useDialogLock(isOpen && Boolean(item), isSubmitting, onClose);
 
   useEffect(() => {
     if (isOpen && item) {
@@ -251,18 +274,20 @@ export function RenameModal({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       handleSubmit();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
     }
   };
 
   return (
-    <div {...stylex.props(styles.backdrop)} onClick={onClose}>
+    <div
+      {...stylex.props(styles.backdrop)}
+      onClick={() => {
+        if (!isSubmitting) onClose();
+      }}
+    >
       <div
         {...stylex.props(styles.modal)}
         role="dialog"
@@ -274,12 +299,14 @@ export function RenameModal({
           <div {...stylex.props(styles.titleGroup)}>
             <IconEdit size={16} />
             <h2 {...stylex.props(styles.title)}>
-              Rename {item.kind === 'pool' ? 'Pool' : item.kind === 'folder' ? 'Folder' : 'File'}
+              Rename {item.kind}
             </h2>
           </div>
           <button
+            type="button"
             {...stylex.props(styles.closeBtn)}
             onClick={onClose}
+            disabled={isSubmitting}
             aria-label="Close"
           >
             <IconClose size={16} />
@@ -299,7 +326,7 @@ export function RenameModal({
                   setName(e.target.value);
                   if (error) setError(null);
                 }}
-                onKeyDown={handleKeyDown}
+                onKeyDown={handleInputKeyDown}
                 {...stylex.props(styles.input)}
                 disabled={isSubmitting}
               />

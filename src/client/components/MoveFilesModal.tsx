@@ -4,6 +4,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconFolder, IconChevronDown } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 import type { AccountItem } from './Sidebar.js';
 
 export interface MoveFileItem {
@@ -58,7 +59,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(11, 20, 18, 0.65)',
+    backgroundColor: colors.modalBackdrop,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -120,6 +121,12 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':disabled': {
+      opacity: 0.35,
+      color: colors.secondaryText,
+      backgroundColor: 'transparent',
+      cursor: 'not-allowed',
     },
   },
   body: {
@@ -262,7 +269,9 @@ const styles = stylex.create({
     },
     ':focus': {
       borderColor: colors.accentGold,
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '-1px',
     },
     ':disabled': {
@@ -319,6 +328,13 @@ const styles = stylex.create({
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
       borderColor: colors.primaryText,
+    },
+    ':disabled': {
+      opacity: 0.5,
+      backgroundColor: colors.surface,
+      color: colors.secondaryText,
+      borderColor: colors.border,
+      cursor: 'not-allowed',
     },
   },
   confirmBtn: {
@@ -391,6 +407,8 @@ export function MoveFilesModal({
     overscan: 5,
   });
 
+  useDialogLock(isOpen, isLoading, onClose);
+
   useEffect(() => {
     if (isOpen) {
       setTargetAccountId(firstEligibleId);
@@ -425,18 +443,12 @@ export function MoveFilesModal({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
-    }
-  };
-
   return (
     <div
       {...stylex.props(styles.backdrop)}
-      onClick={!isLoading ? onClose : undefined}
-      onKeyDown={handleKeyDown}
+      onClick={() => {
+        if (!isLoading) onClose();
+      }}
     >
       <div
         {...stylex.props(styles.modal)}

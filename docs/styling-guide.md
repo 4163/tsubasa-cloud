@@ -212,7 +212,7 @@ Buttons use Dropbox-style pill geometry with high contrast.
 ### Storage quota gauges and account cluster
 - **Pooled cluster meter:** Measures active Tsubasa files against total available pool headroom. External Google Drive items (Gmail, Photos) are isolated and do not count toward Tsubasa pool utilization.
 - **Account cards:** Stacked list displaying account identity, remaining write headroom, overall Google Drive usage, and 24-hour upload ledger tally.
-- **Email privacy masking:** Account emails use character-preserving 1:1 dot redactions (`arg•••••••••••ra@gmail.com`) rendered in monospace to guarantee zero layout shift on hover while retaining native text selection.
+- **Email privacy masking:** Account emails use character-preserving 1:1 dot redactions (`arg•••••••••••ra@gmail.com`) rendered in monospace to guarantee zero layout shift on hover while retaining native text selection. Redaction applies strictly to primary workspace surfaces (sidebar and file table); modals and drawers display full unredacted email addresses.
 - **Buffer breach banner:** High-priority crimson alert (`#82071e` / `#ff9492`) triggered if an account enters over-ceiling mode (>14.25 GB).
 
 ---

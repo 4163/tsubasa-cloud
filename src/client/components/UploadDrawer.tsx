@@ -4,6 +4,7 @@ import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconUpload, IconFile, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 import type { AccountItem } from './Sidebar.js';
 
 export interface StagedItem {
@@ -38,7 +39,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    backgroundColor: colors.modalBackdrop,
     zIndex: 90,
     transition: motion.transitionFast,
   },
@@ -98,10 +99,27 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    ':disabled': {
+      opacity: 0.35,
+      cursor: 'not-allowed',
+      backgroundColor: 'transparent',
+      color: colors.secondaryText,
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   summaryBar: {
@@ -137,23 +155,20 @@ const styles = stylex.create({
     fontWeight: '500',
     flexShrink: 0,
   },
-  destinationPill: {
+  destinationPath: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space1,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
     fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeBadge,
+    fontSize: typography.fontSizeMeta,
     color: colors.primaryText,
     maxWidth: '220px',
+    minWidth: 0,
+  },
+  destinationIcon: {
+    flexShrink: 0,
+  },
+  destinationPathText: {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -216,30 +231,54 @@ const styles = stylex.create({
   fileList: {
     flex: 1,
     overflowY: 'auto',
-    padding: spacing.space4,
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.space3,
+    gap: 0,
   },
   fileCard: {
-    padding: spacing.space3,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
+    position: 'relative',
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
+    borderRadius: radius.none,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
     transition: motion.transitionFast,
     ':hover': {
-      borderColor: colors.border,
       backgroundColor: colors.rowHover,
+    },
+    '@media (max-width: 768px)': {
+      borderLeftWidth: '3px',
+      borderLeftStyle: 'solid',
+      borderLeftColor: 'transparent',
     },
   },
   fileCardRejected: {
-    borderColor: colors.danger,
-    backgroundColor: colors.dangerSurface,
+    '::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: spacing.space2,
+      width: '3px',
+      backgroundColor: colors.danger,
+      pointerEvents: 'none',
+      display: {
+        default: 'block',
+        '@media (max-width: 768px)': 'none',
+      },
+    },
+    '@media (max-width: 768px)': {
+      borderLeftColor: colors.danger,
+    },
   },
   fileCardHeader: {
     display: 'flex',
@@ -280,10 +319,7 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.space2,
-    paddingTop: '6px',
-    borderTopWidth: '1px',
-    borderTopStyle: 'solid',
-    borderTopColor: colors.borderSubtle,
+    paddingTop: spacing.space1,
   },
   driveSelectorGroup: {
     display: 'flex',
@@ -339,8 +375,11 @@ const styles = stylex.create({
       backgroundColor: colors.surface,
     },
     ':focus': {
-      borderColor: colors.brandAccent,
-      boxShadow: `0 0 0 1px ${colors.brandAccent}`,
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
     ':disabled': {
       opacity: 0.6,
@@ -436,6 +475,9 @@ const styles = stylex.create({
       opacity: 0.5,
       cursor: 'not-allowed',
     },
+    '@media (pointer: coarse)': {
+      minHeight: '56px',
+    },
   },
   primaryBtn: {
     height: '36px',
@@ -459,6 +501,40 @@ const styles = stylex.create({
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '56px',
+    },
+  },
+  planErrorBanner: {
+    position: 'relative',
+    marginTop: spacing.space3,
+    marginBottom: spacing.space2,
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
+    borderRadius: radius.none,
+    borderWidth: '0px',
+    backgroundColor: colors.dangerSurface,
+    '::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: spacing.space2,
+      width: '3px',
+      backgroundColor: colors.danger,
+      pointerEvents: 'none',
+      display: {
+        default: 'block',
+        '@media (max-width: 768px)': 'none',
+      },
+    },
+    '@media (max-width: 768px)': {
+      borderLeftWidth: '3px',
+      borderLeftStyle: 'solid',
+      borderLeftColor: colors.danger,
     },
   },
   planErrorNotice: {
@@ -746,11 +822,18 @@ export function UploadDrawer({
     return !chosen;
   });
 
+  useDialogLock(isOpen, isUploading, onClose);
+
   if (!isOpen) return null;
 
   return (
     <>
-      <div {...stylex.props(styles.backdrop)} onClick={!isUploading ? onClose : undefined} />
+      <div
+        {...stylex.props(styles.backdrop)}
+        onClick={() => {
+          if (!isUploading) onClose();
+        }}
+      />
       <div {...stylex.props(styles.drawer)} role="dialog" aria-modal="true" aria-label="Upload files">
         <div {...stylex.props(styles.drawerHeader)}>
           <div {...stylex.props(styles.titleGroup)}>
@@ -772,9 +855,11 @@ export function UploadDrawer({
           <div {...stylex.props(styles.summaryMainRow)}>
             <div {...stylex.props(styles.destinationGroup)}>
               <span {...stylex.props(styles.destinationLabel)}>Destination:</span>
-              <span {...stylex.props(styles.destinationPill)} title={currentPath}>
-                <IconFolder size={12} />
-                <span>{currentPath === '/' ? 'Root (/)' : currentPath}</span>
+              <span {...stylex.props(styles.destinationPath)} title={currentPath}>
+                <IconFolder size={12} {...stylex.props(styles.destinationIcon)} />
+                <span {...stylex.props(styles.destinationPathText)}>
+                  {currentPath === '/' ? 'Root (/)' : currentPath}
+                </span>
               </span>
             </div>
             <span {...stylex.props(styles.stagedStats)}>
@@ -820,7 +905,7 @@ export function UploadDrawer({
 
         <div {...stylex.props(styles.fileList)}>
           {planError && (
-            <div {...stylex.props(styles.fileCard, styles.fileCardRejected)}>
+            <div {...stylex.props(styles.planErrorBanner)}>
               <span {...stylex.props(styles.planErrorNotice)}>
                 Placement calculation notice: {planError}
               </span>
@@ -921,7 +1006,7 @@ export function UploadDrawer({
                                 labelSuffix = ' (No headroom)';
                               } else if (!hasTransferBudget) {
                                 labelSuffix = ' (24h limit reached)';
-                              } else if (acc.id === preview?.targetAccountId && !selectedAccounts[item.key]) {
+                              } else if (acc.id === preview?.targetAccountId) {
                                 labelSuffix = ' (Auto)';
                               }
 

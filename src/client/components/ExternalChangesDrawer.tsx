@@ -4,6 +4,7 @@ import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconAlertTriangle, IconFile, IconCheck, IconChevronDown } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 
 export interface ExternalDiscrepancyItem {
   driveFileId: string;
@@ -48,7 +49,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    backgroundColor: colors.modalBackdrop,
     zIndex: 90,
     transition: motion.transitionFast,
   },
@@ -108,10 +109,27 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    ':disabled': {
+      opacity: 0.35,
+      cursor: 'not-allowed',
+      backgroundColor: 'transparent',
+      color: colors.secondaryText,
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   accountSelectorBar: {
@@ -167,8 +185,15 @@ const styles = stylex.create({
       backgroundColor: colors.surface,
     },
     ':focus': {
-      borderColor: colors.brandAccent,
-      boxShadow: `0 0 0 1px ${colors.brandAccent}`,
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
     },
   },
   selectChevron: {
@@ -185,7 +210,10 @@ const styles = stylex.create({
   contentScroll: {
     flex: 1,
     overflowY: 'auto',
-    padding: spacing.space5,
+    paddingTop: spacing.space5,
+    paddingBottom: spacing.space5,
+    paddingLeft: 0,
+    paddingRight: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space4,
@@ -195,24 +223,57 @@ const styles = stylex.create({
     fontWeight: typography.fontWeightSection,
     color: colors.primaryText,
     margin: 0,
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space5,
     display: 'flex',
     alignItems: 'center',
     gap: spacing.space2,
   },
+  sectionDesc: {
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space5,
+  },
   card: {
-    padding: `${spacing.space3} ${spacing.space4}`,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceAlt,
+    position: 'relative',
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space6,
+    borderRadius: radius.none,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+    },
+    '@media (max-width: 768px)': {
+      paddingRight: spacing.space5,
+      borderLeftWidth: '3px',
+      borderLeftStyle: 'solid',
+      borderLeftColor: 'transparent',
+    },
   },
   cardOverCeiling: {
-    borderColor: colors.dangerBorder,
-    backgroundColor: colors.dangerSurface,
+    '::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: spacing.space2,
+      width: '3px',
+      backgroundColor: colors.danger,
+      pointerEvents: 'none',
+      display: {
+        default: 'block',
+        '@media (max-width: 768px)': 'none',
+      },
+    },
+    '@media (max-width: 768px)': {
+      borderLeftColor: colors.danger,
+    },
   },
   fileHeaderRow: {
     display: 'flex',
@@ -320,17 +381,42 @@ const styles = stylex.create({
     },
   },
   statusNoticeBanner: {
-    padding: `${spacing.space4} ${spacing.space5}`,
-    borderRadius: radius.compact,
+    position: 'relative',
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space6,
+    borderRadius: radius.none,
+    borderWidth: '0px',
     backgroundColor: colors.dangerSurface,
     color: colors.danger,
     fontSize: typography.fontSizeMeta,
+    '::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: spacing.space2,
+      width: '3px',
+      backgroundColor: colors.danger,
+      pointerEvents: 'none',
+      display: {
+        default: 'block',
+        '@media (max-width: 768px)': 'none',
+      },
+    },
+    '@media (max-width: 768px)': {
+      paddingRight: spacing.space5,
+      borderLeftWidth: '3px',
+      borderLeftStyle: 'solid',
+      borderLeftColor: colors.danger,
+    },
   },
   cardList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.space4,
-    marginTop: spacing.space4,
+    gap: 0,
+    marginTop: spacing.space3,
   },
   fileTitleCol: {
     display: 'flex',
@@ -362,15 +448,37 @@ const styles = stylex.create({
     color: colors.primaryText,
   },
   rebalanceBanner: {
-    padding: `${spacing.space3} ${spacing.space4}`,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceAlt,
+    position: 'relative',
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space6,
+    borderRadius: radius.none,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
+    '::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: spacing.space2,
+      width: '3px',
+      backgroundColor: colors.warning,
+      pointerEvents: 'none',
+      display: {
+        default: 'block',
+        '@media (max-width: 768px)': 'none',
+      },
+    },
+    '@media (max-width: 768px)': {
+      paddingRight: spacing.space5,
+      borderLeftWidth: '3px',
+      borderLeftStyle: 'solid',
+      borderLeftColor: colors.warning,
+    },
   },
   emptyNotice: {
     textAlign: 'center',
@@ -570,6 +678,10 @@ export function ExternalChangesDrawer({
     }
   };
 
+  const isLocked = activeActionId !== null;
+
+  useDialogLock(isOpen, isLocked, onClose);
+
   if (!isOpen) return null;
 
   const totalDiscrepancies =
@@ -580,14 +692,25 @@ export function ExternalChangesDrawer({
 
   return (
     <>
-      <div {...stylex.props(styles.backdrop)} onClick={onClose} />
+      <div
+        {...stylex.props(styles.backdrop)}
+        onClick={() => {
+          if (!isLocked) onClose();
+        }}
+      />
       <div {...stylex.props(styles.drawer)} role="dialog" aria-modal="true" aria-label="External modifications">
         <div {...stylex.props(styles.drawerHeader)}>
           <div {...stylex.props(styles.titleGroup)}>
             <IconAlertTriangle size={18} />
             <h2 {...stylex.props(styles.title)}>External changes</h2>
           </div>
-          <button type="button" {...stylex.props(styles.closeBtn)} onClick={onClose} aria-label="Close drawer">
+          <button
+            type="button"
+            {...stylex.props(styles.closeBtn)}
+            onClick={onClose}
+            disabled={isLocked}
+            aria-label="Close drawer"
+          >
             <IconClose size={16} />
           </button>
         </div>
@@ -603,7 +726,7 @@ export function ExternalChangesDrawer({
               {...stylex.props(styles.select)}
               value={selectedAccount}
               onChange={(e) => setSelectedAccount(e.target.value)}
-              disabled={accounts.length === 0 || isScanning}
+              disabled={accounts.length === 0 || isScanning || isLocked}
             >
               {accounts.length === 0 ? (
                 <option value="" disabled>
@@ -641,7 +764,7 @@ export function ExternalChangesDrawer({
                 <IconAlertTriangle size={16} color={colors.danger} />
                 Over-ceiling files (&gt; 14.25 GB)
               </h3>
-              <p {...stylex.props(styles.cardDesc)}>
+              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
                 Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
               </p>
               <div {...stylex.props(styles.cardList)}>
@@ -670,7 +793,7 @@ export function ExternalChangesDrawer({
                         type="button"
                         {...stylex.props(styles.btnPrimary)}
                         onClick={() => handleAccept(item)}
-                        disabled={activeActionId === item.driveFileId}
+                        disabled={isLocked}
                       >
                         Accept into Tsubasa (Over-ceiling mode)
                       </button>
@@ -678,7 +801,7 @@ export function ExternalChangesDrawer({
                         type="button"
                         {...stylex.props(styles.btnDanger)}
                         onClick={() => handleMoveToRoot(item)}
-                        disabled={activeActionId === item.driveFileId}
+                        disabled={isLocked}
                       >
                         Move to root (Eject)
                       </button>
@@ -721,7 +844,7 @@ export function ExternalChangesDrawer({
                         type="button"
                         {...stylex.props(styles.btnPrimary)}
                         onClick={() => handleAccept(item)}
-                        disabled={activeActionId === item.driveFileId}
+                        disabled={isLocked}
                       >
                         Accept into Tsubasa
                       </button>
@@ -729,7 +852,7 @@ export function ExternalChangesDrawer({
                         type="button"
                         {...stylex.props(styles.btnSecondary)}
                         onClick={() => handleMoveToRoot(item)}
-                        disabled={activeActionId === item.driveFileId}
+                        disabled={isLocked}
                       >
                         Eject to Drive root
                       </button>
@@ -770,7 +893,7 @@ export function ExternalChangesDrawer({
                         type="button"
                         {...stylex.props(styles.btnPrimary)}
                         onClick={() => handleAccept(item)}
-                        disabled={activeActionId === item.driveFileId}
+                        disabled={isLocked}
                       >
                         Accept update
                       </button>
@@ -788,7 +911,7 @@ export function ExternalChangesDrawer({
                 <IconAlertTriangle size={16} color={colors.warning} />
                 Missing or externally moved files
               </h3>
-              <p {...stylex.props(styles.cardDesc)}>
+              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
                 These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
               </p>
               <div {...stylex.props(styles.cardList)}>
@@ -808,7 +931,7 @@ export function ExternalChangesDrawer({
                         type="button"
                         {...stylex.props(styles.btnDanger)}
                         onClick={() => handleRemoveMissing(item)}
-                        disabled={activeActionId === item.driveFileId}
+                        disabled={isLocked}
                       >
                         Remove from Tsubasa
                       </button>
@@ -833,7 +956,7 @@ export function ExternalChangesDrawer({
                   type="button"
                   {...stylex.props(styles.btnSecondary)}
                   onClick={handleAutoRebalance}
-                  disabled={activeActionId === 'rebalance'}
+                  disabled={isLocked}
                 >
                   {activeActionId === 'rebalance' ? 'Rebalancing...' : 'Auto-rebalance'}
                 </button>

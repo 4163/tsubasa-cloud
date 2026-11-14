@@ -16,11 +16,10 @@ import {
 } from './Icons.js';
 import {
   formatBytes,
-  maskEmail,
   copyTextToClipboard,
   COPY_FEEDBACK_DURATION_MS,
 } from '../utils/format.js';
-import { RedactedEmail } from './RedactedEmail.js';
+import { useDialogLock, useMediaQuery } from '../utils/useBeforeUnload.js';
 
 export type ShareTargetItem = {
   kind: 'file' | 'folder';
@@ -145,6 +144,12 @@ const styles = stylex.create({
       outlineColor: colors.focusRing,
       outlineOffset: '1px',
     },
+    ':disabled': {
+      opacity: 0.35,
+      cursor: 'not-allowed',
+      backgroundColor: 'transparent',
+      color: colors.secondaryText,
+    },
   },
   body: {
     padding: spacing.space5,
@@ -162,17 +167,15 @@ const styles = stylex.create({
     flex: 1,
     minHeight: 0,
   },
-  summaryCard: {
-    padding: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+  summaryRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.space3,
+    paddingBottom: spacing.space3,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
   },
   summaryMain: {
     display: 'flex',
@@ -181,15 +184,8 @@ const styles = stylex.create({
     minWidth: 0,
     flex: 1,
   },
-  summaryIconWrap: {
-    width: '32px',
-    height: '32px',
-    borderRadius: radius.compact,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    display: 'flex',
+  summaryIcon: {
+    display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
@@ -220,30 +216,18 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
   },
-  summarySizePill: {
+  summarySize: {
     fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
     fontWeight: typography.fontWeightTitle,
     fontVariantNumeric: 'tabular-nums',
     color: colors.primaryText,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
     flexShrink: 0,
   },
   loadingStrip: {
-    padding: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    backgroundColor: 'transparent',
     fontSize: typography.fontSizeBody,
     color: colors.secondaryText,
     fontFamily: typography.fontFamilyBody,
@@ -320,12 +304,7 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space1,
-    padding: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+    backgroundColor: 'transparent',
   },
   meterTextRow: {
     display: 'flex',
@@ -396,12 +375,9 @@ const styles = stylex.create({
   driveListContainer: {
     maxHeight: layout.shareDriveListMaxHeight,
     overflowY: 'auto',
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.compact,
-    padding: spacing.space1,
+    backgroundColor: 'transparent',
+    borderRadius: radius.none,
+    padding: spacing.space0,
     position: 'relative',
     boxSizing: 'border-box',
   },
@@ -417,15 +393,15 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: spacing.space3,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.compact,
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.none,
     boxSizing: 'border-box',
     cursor: 'pointer',
     backgroundColor: 'transparent',
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: 'transparent',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     textAlign: 'left',
     outline: 'none',
     transition: motion.transitionFast,
@@ -444,10 +420,12 @@ const styles = stylex.create({
   },
   driveRowSelected: {
     backgroundColor: colors.selectionBg,
-    borderColor: colors.selectionBorder,
     ':hover': {
       backgroundColor: colors.selectionBg,
     },
+  },
+  rowLast: {
+    borderBottomWidth: '0px',
   },
   driveRowDisabled: {
     opacity: 0.55,
@@ -499,22 +477,6 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  poolBadge: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
-    color: colors.secondaryText,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.compact,
-    paddingTop: '1px',
-    paddingBottom: '1px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    flexShrink: 0,
-  },
   driveSubLine: {
     display: 'flex',
     alignItems: 'center',
@@ -528,6 +490,29 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+  },
+  driveMetaSep: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    color: colors.secondaryText,
+    flexShrink: 0,
+  },
+  drivePoolMeta: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    color: colors.secondaryText,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    maxWidth: '140px',
+  },
+  driveNeutralStatus: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightBadge,
+    color: colors.secondaryText,
+    flexShrink: 0,
   },
   driveStatusBadge: {
     fontFamily: typography.fontFamilyBody,
@@ -554,27 +539,31 @@ const styles = stylex.create({
     flexShrink: 0,
   },
   emptyDriveNotice: {
-    padding: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    borderTopWidth: '1px',
+    borderTopStyle: 'solid',
+    borderTopColor: colors.borderSubtle,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
+    backgroundColor: 'transparent',
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
+    lineHeight: '1.4',
   },
-  linkCard: {
-    padding: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+  linkRow: {
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    backgroundColor: 'transparent',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
   },
-  linkCardTop: {
+  linkRowTop: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -604,21 +593,12 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  coveragePill: {
+  coverageText: {
     fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: typography.fontWeightTitle,
     fontVariantNumeric: 'tabular-nums',
-    color: colors.primaryText,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
+    color: colors.secondaryText,
     flexShrink: 0,
   },
   urlRow: {
@@ -690,13 +670,13 @@ const styles = stylex.create({
     maxHeight: layout.shareResultListMaxHeight,
     overflowY: 'auto',
     position: 'relative',
+    paddingRight: spacing.space2,
   },
   virtualRowItem: {
     position: 'absolute',
     top: 0,
     left: 0,
     width: '100%',
-    paddingBottom: spacing.space2,
     boxSizing: 'border-box',
   },
   footer: {
@@ -803,20 +783,11 @@ export function ShareModal({
   const [error, setError] = useState<string | null>(null);
   const [executeResult, setExecuteResult] = useState<ExecuteResponse | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [isCoarsePointer, setIsCoarsePointer] = useState(false);
+  const isCoarsePointer = useMediaQuery('(pointer: coarse)');
 
   const driveListRef = useRef<HTMLDivElement | null>(null);
   const linksListRef = useRef<HTMLDivElement | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const mql = window.matchMedia('(pointer: coarse)');
-    setIsCoarsePointer(mql.matches);
-    const onChange = (e: MediaQueryListEvent) => setIsCoarsePointer(e.matches);
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -999,7 +970,7 @@ export function ShareModal({
   );
 
   const handleAutoSelect = useCallback(() => {
-    if (eligibleEmptyAccounts.length === 0) return;
+    if (isSubmitting || eligibleEmptyAccounts.length === 0) return;
     setError(null);
     const sorted = [...eligibleEmptyAccounts].sort((a, b) => {
       if (b.headroomBytes !== a.headroomBytes) {
@@ -1018,7 +989,7 @@ export function ShareModal({
       }
     }
     setSelectedAccountIds(picked);
-  }, [eligibleEmptyAccounts, neededBytes]);
+  }, [isSubmitting, eligibleEmptyAccounts, neededBytes]);
 
   const handleCopyText = async (key: string, text: string) => {
     const ok = await copyTextToClipboard(text);
@@ -1035,12 +1006,7 @@ export function ShareModal({
     onClose();
   }, [isSubmitting, onClose]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      handleDismiss();
-    }
-  };
+  useDialogLock(isOpen && items.length > 0, isSubmitting, onClose);
 
   if (!isOpen || items.length === 0) return null;
 
@@ -1106,7 +1072,6 @@ export function ShareModal({
     <div
       {...stylex.props(styles.backdrop)}
       onClick={handleDismiss}
-      onKeyDown={handleKeyDown}
     >
       <div
         {...stylex.props(styles.modal)}
@@ -1188,6 +1153,7 @@ export function ShareModal({
                           link.accountId
                         );
                         const isCopied = copiedKey === link.accountId;
+                        const isLast = virtualRow.index === executeResult.links.length - 1;
                         return (
                           <div
                             key={link.accountId}
@@ -1196,16 +1162,13 @@ export function ShareModal({
                             {...stylex.props(styles.virtualRowItem)}
                             style={{ transform: `translateY(${virtualRow.start}px)` }}
                           >
-                            <div {...stylex.props(styles.linkCard)}>
-                              <div {...stylex.props(styles.linkCardTop)}>
+                            <div {...stylex.props(styles.linkRow, isLast && styles.rowLast)}>
+                              <div {...stylex.props(styles.linkRowTop)}>
                                 <div {...stylex.props(styles.linkAccountCol)}>
                                   <span {...stylex.props(styles.linkAccountName)}>{displayName}</span>
-                                  <RedactedEmail
-                                    email={link.accountEmail}
-                                    style={styles.linkAccountEmail}
-                                  />
+                                  <span {...stylex.props(styles.linkAccountEmail)}>{link.accountEmail}</span>
                                 </div>
-                                <span {...stylex.props(styles.coveragePill)}>
+                                <span {...stylex.props(styles.coverageText)}>
                                   {link.filesCount} {link.filesCount === 1 ? 'file' : 'files'} ·{' '}
                                   {formatBytes(link.bytesAllocated)}
                                 </span>
@@ -1217,7 +1180,7 @@ export function ShareModal({
                                     type="text"
                                     readOnly
                                     value={link.webViewLink}
-                                    aria-label={`Share link for ${maskEmail(link.accountEmail)}`}
+                                    aria-label={`Share link for ${link.accountEmail}`}
                                     onClick={(e) => e.currentTarget.select()}
                                     {...stylex.props(styles.urlInput)}
                                   />
@@ -1254,17 +1217,17 @@ export function ShareModal({
         ) : (
           <form onSubmit={handleSubmit} {...stylex.props(styles.form)}>
             <div {...stylex.props(styles.body)}>
-              {/* Target item summary card */}
-              <div {...stylex.props(styles.summaryCard)}>
+              {/* Target item summary row */}
+              <div {...stylex.props(styles.summaryRow)}>
                 <div {...stylex.props(styles.summaryMain)}>
-                  <div
+                  <span
                     {...stylex.props(
-                      styles.summaryIconWrap,
+                      styles.summaryIcon,
                       summaryHasFolder && styles.summaryIconFolder
                     )}
                   >
                     {summaryHasFolder ? <IconFolderFilled size={18} /> : <IconFile size={16} />}
-                  </div>
+                  </span>
                   <div {...stylex.props(styles.summaryTextCol)}>
                     <span {...stylex.props(styles.summaryTitle)} title={summaryTitle}>
                       {summaryTitle}
@@ -1276,7 +1239,7 @@ export function ShareModal({
                     </span>
                   </div>
                 </div>
-                <span {...stylex.props(styles.summarySizePill)}>
+                <span {...stylex.props(styles.summarySize)}>
                   {inspectData ? formatBytes(inspectData.totalBytes) : '—'}
                 </span>
               </div>
@@ -1394,7 +1357,8 @@ export function ShareModal({
                               {...stylex.props(
                                 styles.driveRow,
                                 isSelected && styles.driveRowSelected,
-                                (!selectable || isSubmitting) && styles.driveRowDisabled
+                                (!selectable || isSubmitting) && styles.driveRowDisabled,
+                                virtualRow.index === emptyAccounts.length - 1 && styles.rowLast
                               )}
                               style={{
                                 height: `${virtualRow.size}px`,
@@ -1414,18 +1378,21 @@ export function ShareModal({
                                   <span {...stylex.props(styles.driveName)}>
                                     {getAccountLabel(acc.displayName, acc.email, acc.id)}
                                   </span>
-                                  <span {...stylex.props(styles.poolBadge)}>
-                                    {acc.currentPoolName}
-                                  </span>
                                 </div>
                                 <div {...stylex.props(styles.driveSubLine)}>
-                                  <RedactedEmail email={acc.email} style={styles.driveEmail} />
+                                  <span {...stylex.props(styles.driveEmail)}>{acc.email}</span>
+                                  <span {...stylex.props(styles.driveMetaSep)} aria-hidden="true">
+                                    ·
+                                  </span>
+                                  <span {...stylex.props(styles.drivePoolMeta)}>
+                                    {acc.currentPoolName}
+                                  </span>
                                   {statusBadge && (
                                     <span
                                       {...stylex.props(
                                         statusBadge.tone === 'danger'
                                           ? styles.driveStatusBadge
-                                          : styles.poolBadge
+                                          : styles.driveNeutralStatus
                                       )}
                                     >
                                       {statusBadge.label}

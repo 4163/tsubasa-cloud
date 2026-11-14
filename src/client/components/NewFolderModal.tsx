@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconFolderPlus, IconClose } from './Icons';
+import { useDialogLock } from '../utils/useBeforeUnload.js';
 
 interface NewFolderModalProps {
   isOpen: boolean;
@@ -14,7 +15,7 @@ const styles = stylex.create({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(11, 20, 18, 0.6)',
+    backgroundColor: colors.modalBackdrop,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -77,6 +78,12 @@ const styles = stylex.create({
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
     },
+    ':disabled': {
+      opacity: 0.35,
+      color: colors.secondaryText,
+      backgroundColor: 'transparent',
+      cursor: 'not-allowed',
+    },
   },
   body: {
     padding: spacing.space5,
@@ -120,10 +127,17 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':focus': {
       borderColor: colors.accentGold,
-      boxShadow: `0 0 0 1px ${colors.accentGold}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
     '::placeholder': {
       color: colors.dimText,
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
     },
   },
   footer: {
@@ -160,6 +174,13 @@ const styles = stylex.create({
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
       borderColor: colors.primaryText,
+    },
+    ':disabled': {
+      opacity: 0.5,
+      backgroundColor: 'transparent',
+      color: colors.secondaryText,
+      borderColor: colors.border,
+      cursor: 'not-allowed',
     },
   },
   createBtn: {
@@ -198,6 +219,8 @@ export function NewFolderModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  useDialogLock(isOpen, isSubmitting, onClose);
+
   useEffect(() => {
     if (isOpen) {
       setFolderName('');
@@ -227,18 +250,20 @@ export function NewFolderModal({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       handleSubmit();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
     }
   };
 
   return (
-    <div {...stylex.props(styles.backdrop)} onClick={onClose}>
+    <div
+      {...stylex.props(styles.backdrop)}
+      onClick={() => {
+        if (!isSubmitting) onClose();
+      }}
+    >
       <div
         {...stylex.props(styles.modal)}
         role="dialog"
@@ -255,6 +280,7 @@ export function NewFolderModal({
             type="button"
             {...stylex.props(styles.closeBtn)}
             onClick={onClose}
+            disabled={isSubmitting}
             aria-label="Close dialog"
           >
             <IconClose size={14} />
@@ -278,10 +304,11 @@ export function NewFolderModal({
                 placeholder="New folder"
                 value={folderName}
                 onChange={(e) => setFolderName(e.target.value)}
-                onKeyDown={handleKeyDown}
+                onKeyDown={handleInputKeyDown}
                 {...stylex.props(styles.input)}
                 maxLength={255}
                 autoComplete="off"
+                disabled={isSubmitting}
               />
             </div>
           </div>
