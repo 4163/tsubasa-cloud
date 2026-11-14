@@ -28,8 +28,8 @@ export const colors = stylex.defineVars({
   // Brand & interactive states
   primary: '#111d18',
   primaryHover: '#233830',
-  brandAccent: '#1f7a6c',
-  brandAccentHover: '#175f54',
+  brandAccent: '#135349',
+  brandAccentHover: '#0f443c',
   brandAccentText: '#ffffff',
   brandAccentSurface: '#e1efe9',
   accentGold: '#deb76c',
@@ -74,9 +74,9 @@ export const darkColors = stylex.createTheme(colors, {
 
   primaryText: '#e5f2eb',
   headingText: '#e5f2eb',
-  secondaryText: '#9bb8ab',
-  mutedText: '#9bb8ab',
-  dimText: '#9db8ac',
+  secondaryText: '#a6c2b5',
+  mutedText: '#a6c2b5',
+  dimText: '#a6c2b5',
   disabledText: '#4c6359',
 
   primary: '#e5f2eb',
@@ -84,7 +84,7 @@ export const darkColors = stylex.createTheme(colors, {
   brandAccent: '#35c4a8',
   brandAccentHover: '#55dcc0',
   brandAccentText: '#111d18',
-  brandAccentSurface: '#12332c',
+  brandAccentSurface: '#0d2721',
   accentGold: '#d4a13c',
   accentGoldText: '#111d18',
   selectionBg: '#1b3b32',

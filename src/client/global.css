@@ -79,15 +79,35 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: var(--border, #8ea194);
+  background-color: #8ea194;
   background-clip: padding-box;
   border-right: 2px solid transparent;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: var(--secondary-text, #2d453b);
+  background-color: #2d453b;
   background-clip: padding-box;
+}
+
+:root[data-theme='dark'] ::-webkit-scrollbar-thumb,
+[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background-color: #2d453b;
+}
+
+:root[data-theme='dark'] ::-webkit-scrollbar-thumb:hover,
+[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background-color: #a6c2b5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) ::-webkit-scrollbar-thumb {
+    background-color: #2d453b;
+  }
+
+  :root:not([data-theme='light']) ::-webkit-scrollbar-thumb:hover {
+    background-color: #a6c2b5;
+  }
 }
 
 /* Suppress animations and transitions during window resize */
