@@ -1,11 +1,12 @@
 import path from 'node:path';
-import { db } from '../db/index.js';
+import { db, sqlite } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
-import { eq, inArray, sql } from 'drizzle-orm';
-import { getDriveClient } from './client.js';
+import { eq, inArray } from 'drizzle-orm';
+import { getDriveClient, runBoundedConcurrency, withDriveRetry } from './client.js';
 import { copyDriveFileCrossAccount, deleteDriveFileIgnoreNotFound } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
 import { authPool } from './auth.js';
+import { invalidateDiscrepancyCache } from './detector.js';
 import {
   calculateHeadroom,
   getAccountTransferStats,
@@ -56,6 +57,29 @@ export async function rebalanceFile(
     throw new Error(`Failed to rebalance file ${fileId}`);
   }
   return result;
+}
+
+function prepareRebalanceCommitStmts() {
+  return {
+    updateFile: sqlite.prepare<[string, string, string]>(
+      'UPDATE files SET account_id = ?, drive_file_id = ?, updated_at = unixepoch() WHERE id = ?'
+    ),
+    decrementSourceQuota: sqlite.prepare<[number, string]>(
+      'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
+    ),
+    incrementTargetQuota: sqlite.prepare<[number, string]>(
+      'UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?'
+    ),
+  };
+}
+
+let _rebalanceCommitStmts: ReturnType<typeof prepareRebalanceCommitStmts> | null = null;
+
+function getRebalanceCommitStmts() {
+  if (!_rebalanceCommitStmts) {
+    _rebalanceCommitStmts = prepareRebalanceCommitStmts();
+  }
+  return _rebalanceCommitStmts;
 }
 
 export async function rebalanceFilesBatch(
@@ -136,15 +160,16 @@ export async function rebalanceFilesBatch(
   }
 
   const driveTarget = getDriveClient(targetAccountId);
+  const targetRootFolderId = targetAccount.rootFolderId;
   const results: RebalanceOperationResult[] = [];
   let totalBytesMoved = 0;
 
   try {
-    for (const file of batchFiles) {
+    await runBoundedConcurrency(batchFiles, 5, async (file) => {
       const parentDir = path.posix.dirname(file.virtualPath);
       const targetFolderId = await ensureRemoteFolderHierarchy(
         driveTarget,
-        targetAccount.rootFolderId,
+        targetRootFolderId,
         parentDir
       );
 
@@ -166,28 +191,30 @@ export async function rebalanceFilesBatch(
 
       if (file.isTrashed) {
         try {
-          await driveTarget.files.update({
-            fileId: newDriveFileId,
-            requestBody: { trashed: true },
-            supportsAllDrives: false,
-          });
+          await withDriveRetry(() =>
+            driveTarget.files.update({
+              fileId: newDriveFileId,
+              requestBody: { trashed: true },
+              supportsAllDrives: false,
+            })
+          );
         } catch (err) {
           console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
         }
       }
 
-      await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId);
-
-      await db
-        .update(files)
-        .set({
-          accountId: targetAccountId,
-          driveFileId: newDriveFileId,
-          updatedAt: new Date(),
-        })
-        .where(eq(files.id, file.id));
+      const stmts = getRebalanceCommitStmts();
+      sqlite.transaction(() => {
+        stmts.updateFile.run(targetAccountId, newDriveFileId, file.id);
+        stmts.decrementSourceQuota.run(file.sizeBytes, sourceAccountId);
+        stmts.incrementTargetQuota.run(file.sizeBytes, targetAccountId);
+      }).immediate();
 
       await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
+
+      await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId).catch((err) =>
+        console.warn(`Failed to delete source Drive file ${file.driveFileId} after rebalance:`, err)
+      );
 
       totalBytesMoved += file.sizeBytes;
       results.push({
@@ -198,24 +225,11 @@ export async function rebalanceFilesBatch(
         newDriveFileId,
         bytesMoved: file.sizeBytes,
       });
-    }
+    });
   } finally {
-    if (totalBytesMoved > 0) {
-      await db
-        .update(accounts)
-        .set({
-          quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${totalBytesMoved})`,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, sourceAccountId));
-
-      await db
-        .update(accounts)
-        .set({
-          quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${totalBytesMoved}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, targetAccountId));
+    if (results.length > 0) {
+      invalidateDiscrepancyCache(sourceAccountId);
+      invalidateDiscrepancyCache(targetAccountId);
     }
   }
 
@@ -289,7 +303,7 @@ export async function executeAutoRebalance(
   }));
 
   let remainingExcess = plan.excessBytes;
-  const results: RebalanceOperationResult[] = [];
+  const groupedByTarget = new Map<string, string[]>();
 
   for (const candidateFile of plan.candidateFiles) {
     if (remainingExcess <= 0) break;
@@ -310,16 +324,25 @@ export async function executeAutoRebalance(
     eligibleTargets.sort((a, b) => b.headroomBytes - a.headroomBytes);
     const chosenTarget = eligibleTargets[0];
 
-    try {
-      const res = await rebalanceFile(candidateFile.id, chosenTarget.id);
-      results.push(res);
-      remainingExcess -= candidateFile.sizeBytes;
+    const existing = groupedByTarget.get(chosenTarget.id);
+    if (existing) {
+      existing.push(candidateFile.id);
+    } else {
+      groupedByTarget.set(chosenTarget.id, [candidateFile.id]);
+    }
 
-      // Update simulated headroom and daily transfer budget for subsequent files
-      chosenTarget.headroomBytes -= candidateFile.sizeBytes;
-      chosenTarget.remainingDailyBytes -= candidateFile.sizeBytes;
+    remainingExcess -= candidateFile.sizeBytes;
+    chosenTarget.headroomBytes -= candidateFile.sizeBytes;
+    chosenTarget.remainingDailyBytes -= candidateFile.sizeBytes;
+  }
+
+  const results: RebalanceOperationResult[] = [];
+  for (const [targetAccountId, fileIds] of groupedByTarget) {
+    try {
+      const batchResult = await rebalanceFilesBatch(fileIds, targetAccountId);
+      results.push(...batchResult.results);
     } catch (err) {
-      console.error(`Auto-rebalance failed for file ${candidateFile.id} onto target ${chosenTarget.id}:`, err);
+      console.error(`Auto-rebalance failed for target ${targetAccountId}:`, err);
     }
   }
 
@@ -500,14 +523,24 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     plan.push({ file, targetAccountId: chosenTarget.account.id });
   }
 
-  // Pre-flight passed: execute all transfers
+  // Pre-flight passed: execute all transfers grouped by target account
+  const groupedByTarget = new Map<string, string[]>();
+  for (const step of plan) {
+    const existing = groupedByTarget.get(step.targetAccountId);
+    if (existing) {
+      existing.push(step.file.id);
+    } else {
+      groupedByTarget.set(step.targetAccountId, [step.file.id]);
+    }
+  }
+
   const transfers: RebalanceOperationResult[] = [];
   let bytesMoved = 0;
 
-  for (const step of plan) {
-    const res = await rebalanceFile(step.file.id, step.targetAccountId);
-    transfers.push(res);
-    bytesMoved += step.file.sizeBytes;
+  for (const [targetAccountId, fileIds] of groupedByTarget) {
+    const batchResult = await rebalanceFilesBatch(fileIds, targetAccountId);
+    transfers.push(...batchResult.results);
+    bytesMoved += batchResult.totalBytesMoved;
   }
 
   return {

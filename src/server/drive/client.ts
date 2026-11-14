@@ -1,9 +1,140 @@
 import { google, type drive_v3 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import { authPool } from './auth.js';
+import { getCachedVirtualPathByDriveId, setCachedRemoteFolder } from './mirror.js';
 import { db, sqlite } from '../db/index.js';
 import { accounts } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
+
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+const driveClientCache = new WeakMap<OAuth2Client, drive_v3.Drive>();
+
+function getDriveErrorStatus(err: any): number | null {
+  const candidates = [err?.status, err?.response?.status, err?.code];
+  for (const val of candidates) {
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      return val;
+    }
+  }
+  return null;
+}
+
+function isRateLimit403(err: any): boolean {
+  const lists = [err?.errors, err?.response?.data?.error?.errors];
+  for (const list of lists) {
+    if (Array.isArray(list)) {
+      for (const item of list) {
+        if (item?.reason === 'rateLimitExceeded' || item?.reason === 'userRateLimitExceeded') {
+          return true;
+        }
+      }
+    }
+  }
+  const msg = String(err?.message || '');
+  return msg.includes('rateLimitExceeded') || msg.includes('userRateLimitExceeded');
+}
+
+function isRetryableDriveError(err: any): boolean {
+  const status = getDriveErrorStatus(err);
+  if (status === 429 || (status !== null && status >= 500 && status <= 599)) {
+    return true;
+  }
+  if (status === 403 && isRateLimit403(err)) {
+    return true;
+  }
+  const code = err?.code ?? err?.cause?.code;
+  return typeof code === 'string' && TRANSIENT_NETWORK_CODES.has(code);
+}
+
+function parseRetryAfterMs(err: any): number | null {
+  const headers = err?.response?.headers;
+  if (!headers) {
+    return null;
+  }
+
+  let raw: unknown;
+  if (typeof headers.get === 'function') {
+    raw = headers.get('retry-after');
+  } else {
+    raw = headers['retry-after'] ?? headers['Retry-After'];
+  }
+
+  if (typeof raw !== 'string' && typeof raw !== 'number') {
+    return null;
+  }
+
+  const value = String(raw).trim();
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+
+  const targetMs = Date.parse(value);
+  if (Number.isFinite(targetMs)) {
+    return Math.max(0, targetMs - Date.now());
+  }
+
+  return null;
+}
+
+export async function withDriveRetry<T>(
+  fn: () => Promise<T>,
+  options?: { maxRetries?: number; baseDelayMs?: number }
+): Promise<T> {
+  const maxRetries = options?.maxRetries ?? 5;
+  const baseDelayMs = options?.baseDelayMs ?? 500;
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= maxRetries || !isRetryableDriveError(err)) {
+        throw err;
+      }
+
+      const retryAfterMs = parseRetryAfterMs(err);
+      const delayMs =
+        retryAfterMs !== null
+          ? retryAfterMs
+          : Math.round(baseDelayMs * Math.pow(2, attempt) * (0.75 + Math.random() * 0.5));
+
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+export async function runBoundedConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  let nextIndex = 0;
+
+  const runners = Array.from({ length: limit }, async () => {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      await worker(items[idx]);
+    }
+  });
+
+  await Promise.all(runners);
+}
 
 export class AccountPoolLockedError extends Error {
   constructor(message = 'Account already has files linked to its current pool and cannot be switched') {
@@ -39,7 +170,7 @@ export async function refreshAccountLiveQuota(accountId: string): Promise<number
   }
 
   const drive = getDriveClient(accountId);
-  const aboutRes = await drive.about.get({ fields: 'storageQuota' });
+  const aboutRes = await withDriveRetry(() => drive.about.get({ fields: 'storageQuota' }));
   const storage = aboutRes.data.storageQuota;
 
   const liveUsage = Number(storage?.usage ?? NaN);
@@ -83,15 +214,19 @@ export async function refreshAccountLiveQuota(accountId: string): Promise<number
 }
 
 export function getDriveClient(clientOrId: string | OAuth2Client): drive_v3.Drive {
-  if (typeof clientOrId === 'string') {
-    const authClient = authPool.getClient(clientOrId);
-    if (!authClient) {
-      throw new Error(`Account ${clientOrId} not found in auth pool`);
-    }
-    return google.drive({ version: 'v3', auth: authClient });
+  const authClient =
+    typeof clientOrId === 'string' ? authPool.getClient(clientOrId) : clientOrId;
+
+  if (!authClient) {
+    throw new Error(`Account ${String(clientOrId)} not found in auth pool`);
   }
 
-  return google.drive({ version: 'v3', auth: clientOrId });
+  let cached = driveClientCache.get(authClient);
+  if (!cached) {
+    cached = google.drive({ version: 'v3', auth: authClient });
+    driveClientCache.set(authClient, cached);
+  }
+  return cached;
 }
 
 export const POOL_FOLDER_PREFIX = '_Tsubasa~ Pool ';
@@ -183,13 +318,15 @@ async function checkRemoteRootFolderEmpty(
   drive: drive_v3.Drive,
   rootFolderId: string | null
 ): Promise<{ empty: true } | { empty: false; reason: 'managed' | 'folder_files' }> {
-  const managedCheck = await drive.files.list({
-    q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder' and trashed = false",
-    pageSize: 1,
-    fields: 'files(id, name)',
-    spaces: 'drive',
-    supportsAllDrives: false,
-  });
+  const managedCheck = await withDriveRetry(() =>
+    drive.files.list({
+      q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder' and trashed = false",
+      pageSize: 1,
+      fields: 'files(id, name)',
+      spaces: 'drive',
+      supportsAllDrives: false,
+    })
+  );
 
   if ((managedCheck.data.files || []).length > 0) {
     return { empty: false, reason: 'managed' };
@@ -201,13 +338,15 @@ async function checkRemoteRootFolderEmpty(
     for (let i = 0; i < folderIdArray.length; i += 20) {
       const chunk = folderIdArray.slice(i, i + 20);
       const parentQuery = chunk.map((fid) => `'${fid}' in parents`).join(' or ');
-      const checkRes = await drive.files.list({
-        q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
-        pageSize: 1,
-        fields: 'files(id, name)',
-        spaces: 'drive',
-        supportsAllDrives: false,
-      });
+      const checkRes = await withDriveRetry(() =>
+        drive.files.list({
+          q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+          pageSize: 1,
+          fields: 'files(id, name)',
+          spaces: 'drive',
+          supportsAllDrives: false,
+        })
+      );
 
       if ((checkRes.data.files || []).length > 0) {
         return { empty: false, reason: 'folder_files' };
@@ -223,35 +362,41 @@ async function retargetRemoteRootFolder(
   rootFolderId: string,
   targetPoolId: number
 ): Promise<void> {
-  const childFoldersRes = await drive.files.list({
-    q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder'`,
-    fields: 'files(id, name)',
-    pageSize: 100,
-    spaces: 'drive',
-    supportsAllDrives: false,
-  });
+  const childFoldersRes = await withDriveRetry(() =>
+    drive.files.list({
+      q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder'`,
+      fields: 'files(id, name)',
+      pageSize: 100,
+      spaces: 'drive',
+      supportsAllDrives: false,
+    })
+  );
 
   for (const folder of childFoldersRes.data.files || []) {
     if (folder.id) {
       try {
-        await drive.files.delete({ fileId: folder.id, supportsAllDrives: false });
+        await withDriveRetry(() =>
+          drive.files.delete({ fileId: folder.id!, supportsAllDrives: false })
+        );
       } catch (delErr) {
         console.warn(`Failed to clean empty subfolder ${folder.id} during pool switch:`, delErr);
       }
     }
   }
 
-  await drive.files.update({
-    fileId: rootFolderId,
-    requestBody: {
-      name: resolvePoolDriveFolderName(targetPoolId),
-      appProperties: {
-        tsubasa_root: 'true',
-        tsubasa_pool_id: String(targetPoolId),
+  await withDriveRetry(() =>
+    drive.files.update({
+      fileId: rootFolderId,
+      requestBody: {
+        name: resolvePoolDriveFolderName(targetPoolId),
+        appProperties: {
+          tsubasa_root: 'true',
+          tsubasa_pool_id: String(targetPoolId),
+        },
       },
-    },
-    supportsAllDrives: false,
-  });
+      supportsAllDrives: false,
+    })
+  );
 }
 
 export async function ensureRootFolder(
@@ -260,13 +405,15 @@ export async function ensureRootFolder(
   preferTargetWhenEmpty = false
 ): Promise<{ rootFolderId: string; poolId: number }> {
   const query = `mimeType = 'application/vnd.google-apps.folder' and name contains '_Tsubasa~ Pool ' and 'root' in parents and trashed = false`;
-  const searchRes = await drive.files.list({
-    q: query,
-    spaces: 'drive',
-    fields: 'files(id, name, appProperties)',
-    pageSize: 20,
-    supportsAllDrives: false,
-  });
+  const searchRes = await withDriveRetry(() =>
+    drive.files.list({
+      q: query,
+      spaces: 'drive',
+      fields: 'files(id, name, appProperties)',
+      pageSize: 20,
+      supportsAllDrives: false,
+    })
+  );
 
   const matchingFolders: Array<{
     id: string;
@@ -329,19 +476,21 @@ export async function ensureRootFolder(
     ? ensureSharePoolExistsInDb()
     : (ensurePoolExistsInDb(preferredPoolId), preferredPoolId);
   const folderName = resolvePoolDriveFolderName(resolvedPoolId);
-  const createRes = await drive.files.create({
-    requestBody: {
-      name: folderName,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: ['root'],
-      appProperties: {
-        tsubasa_root: 'true',
-        tsubasa_pool_id: String(resolvedPoolId),
+  const createRes = await withDriveRetry(() =>
+    drive.files.create({
+      requestBody: {
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: ['root'],
+        appProperties: {
+          tsubasa_root: 'true',
+          tsubasa_pool_id: String(resolvedPoolId),
+        },
       },
-    },
-    fields: 'id, name',
-    supportsAllDrives: false,
-  });
+      fields: 'id, name',
+      supportsAllDrives: false,
+    })
+  );
 
   if (!createRes.data.id) {
     throw new Error(`Failed to create ${folderName} root folder in Google Drive`);
@@ -356,9 +505,11 @@ export async function hydrateAccount(
 ): Promise<AccountHydrationResult> {
   const drive = getDriveClient(accountId);
 
-  const aboutRes = await drive.about.get({
-    fields: 'user,storageQuota',
-  });
+  const aboutRes = await withDriveRetry(() =>
+    drive.about.get({
+      fields: 'user,storageQuota',
+    })
+  );
 
   const user = aboutRes.data.user;
   const storage = aboutRes.data.storageQuota;
@@ -472,76 +623,69 @@ export async function resolveRemoteFolderTree(
   const folderIds = new Set<string>([rootFolderId]);
   const folders: RemoteFolderItem[] = [];
 
-  let pageToken: string | undefined = undefined;
-  const rawFolders: Array<{ id: string; name: string; parents: string[]; appProperties?: Record<string, string> }> = [];
+  let frontier: string[] = [rootFolderId];
 
-  do {
-    const res: any = await drive.files.list({
-      q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-      fields: 'nextPageToken, files(id, name, parents, appProperties)',
-      pageSize: 1000,
-      pageToken,
-      spaces: 'drive',
-      supportsAllDrives: false,
+  while (frontier.length > 0) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < frontier.length; i += 20) {
+      chunks.push(frontier.slice(i, i + 20));
+    }
+
+    const nextFrontier: string[] = [];
+
+    await runBoundedConcurrency(chunks, 5, async (chunk) => {
+      const parentQuery = chunk.map((id) => `'${id}' in parents`).join(' or ');
+      const query = `(${parentQuery}) and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+      let pageToken: string | undefined = undefined;
+
+      do {
+        const res: any = await withDriveRetry(() =>
+          drive.files.list({
+            q: query,
+            fields: 'nextPageToken, files(id, name, parents, appProperties)',
+            pageSize: 1000,
+            pageToken,
+            spaces: 'drive',
+            supportsAllDrives: false,
+          })
+        );
+
+        for (const child of res.data.files || []) {
+          if (!child.id || !child.name || folderIds.has(child.id)) {
+            continue;
+          }
+
+          const parentId = (child.parents || []).find((pid: string) => folderPathById.has(pid));
+          if (!parentId) {
+            continue;
+          }
+
+          folderIds.add(child.id);
+          const parentVirtualPath = folderPathById.get(parentId)!;
+          const computedPath =
+            parentVirtualPath === '/'
+              ? `/${child.name}`
+              : `${parentVirtualPath}/${child.name}`;
+          const virtualPath = child.appProperties?.tsubasa_folder_path || computedPath;
+
+          folderPathById.set(child.id, virtualPath);
+          folderIdByPath.set(virtualPath, child.id);
+          setCachedRemoteFolder(rootFolderId, virtualPath, child.id);
+
+          folders.push({
+            id: child.id,
+            virtualPath,
+            name: child.name,
+            parentId: parentVirtualPath === '/' ? null : parentVirtualPath,
+          });
+          nextFrontier.push(child.id);
+        }
+
+        pageToken = res.data.nextPageToken || undefined;
+      } while (pageToken);
     });
 
-    for (const folder of res.data.files || []) {
-      if (folder.id && folder.name) {
-        rawFolders.push({
-          id: folder.id,
-          name: folder.name,
-          parents: folder.parents || [],
-          appProperties: folder.appProperties || {},
-        });
-      }
-    }
-    pageToken = res.data.nextPageToken || undefined;
-  } while (pageToken);
-
-  const childrenByParent = new Map<string, Array<{ id: string; name: string; appProperties?: Record<string, string> }>>();
-  for (const item of rawFolders) {
-    for (const p of item.parents) {
-      if (!childrenByParent.has(p)) {
-        childrenByParent.set(p, []);
-      }
-      childrenByParent.get(p)!.push(item);
-    }
-  }
-
-  const queue: Array<{ id: string; parentVirtualPath: string }> = [
-    { id: rootFolderId, parentVirtualPath: '/' },
-  ];
-
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const children = childrenByParent.get(current.id) || [];
-
-    for (const child of children) {
-      if (folderIds.has(child.id)) {
-        continue;
-      }
-      folderIds.add(child.id);
-
-      const computedPath =
-        current.parentVirtualPath === '/'
-          ? `/${child.name}`
-          : `${current.parentVirtualPath}/${child.name}`;
-
-      const virtualPath = child.appProperties?.tsubasa_folder_path || computedPath;
-
-      folderPathById.set(child.id, virtualPath);
-      folderIdByPath.set(virtualPath, child.id);
-
-      const parentVirtual = current.parentVirtualPath === '/' ? null : current.parentVirtualPath;
-      folders.push({
-        id: child.id,
-        virtualPath,
-        name: child.name,
-        parentId: parentVirtual,
-      });
-
-      queue.push({ id: child.id, parentVirtualPath: virtualPath });
-    }
+    frontier = nextFrontier;
   }
 
   return {
@@ -550,6 +694,79 @@ export async function resolveRemoteFolderTree(
     folderIdByPath,
     folders,
   };
+}
+
+export async function resolveRemoteParentPath(
+  drive: drive_v3.Drive,
+  rootFolderId: string,
+  parentFolderId: string,
+  cache: Map<string, string | null>,
+  options?: { onResolvedFolder?: (virtualPath: string) => void; visiting?: Set<string> }
+): Promise<{ isInsidePool: boolean; path: string }> {
+  if (parentFolderId === rootFolderId) {
+    return { isInsidePool: true, path: '/' };
+  }
+
+  if (cache.has(parentFolderId)) {
+    const cached = cache.get(parentFolderId);
+    return cached ? { isInsidePool: true, path: cached } : { isInsidePool: false, path: '/' };
+  }
+
+  const cachedByDriveId = getCachedVirtualPathByDriveId(rootFolderId, parentFolderId);
+  if (cachedByDriveId) {
+    cache.set(parentFolderId, cachedByDriveId);
+    return { isInsidePool: true, path: cachedByDriveId };
+  }
+
+  const visiting = options?.visiting ?? new Set<string>();
+  if (visiting.has(parentFolderId)) {
+    return { isInsidePool: false, path: '/' };
+  }
+
+  visiting.add(parentFolderId);
+  try {
+    const res = await withDriveRetry(() =>
+      drive.files.get({
+        fileId: parentFolderId,
+        fields: 'id, name, parents, appProperties, trashed',
+        supportsAllDrives: false,
+      })
+    );
+
+    const folder = res.data;
+    if (!folder.id || !folder.name || folder.trashed || !folder.parents?.length) {
+      cache.set(parentFolderId, null);
+      return { isInsidePool: false, path: '/' };
+    }
+
+    const parentResult = await resolveRemoteParentPath(
+      drive,
+      rootFolderId,
+      folder.parents[0],
+      cache,
+      { onResolvedFolder: options?.onResolvedFolder, visiting }
+    );
+
+    if (!parentResult.isInsidePool) {
+      cache.set(parentFolderId, null);
+      return { isInsidePool: false, path: '/' };
+    }
+
+    const fallbackPath =
+      parentResult.path === '/' ? `/${folder.name}` : `${parentResult.path}/${folder.name}`;
+    const computedPath = folder.appProperties?.tsubasa_folder_path || fallbackPath;
+
+    setCachedRemoteFolder(rootFolderId, computedPath, parentFolderId);
+    cache.set(parentFolderId, computedPath);
+    options?.onResolvedFolder?.(computedPath);
+
+    return { isInsidePool: true, path: computedPath };
+  } catch {
+    cache.set(parentFolderId, null);
+    return { isInsidePool: false, path: '/' };
+  } finally {
+    visiting.delete(parentFolderId);
+  }
 }
 
 /**
@@ -592,11 +809,13 @@ async function inspectRemoteRootFolder(
     return { exists: false, name: null };
   }
   try {
-    const res = await drive.files.get({
-      fileId: folderId,
-      fields: 'id, name, trashed',
-      supportsAllDrives: false,
-    });
+    const res = await withDriveRetry(() =>
+      drive.files.get({
+        fileId: folderId,
+        fields: 'id, name, trashed',
+        supportsAllDrives: false,
+      })
+    );
     if (!res.data.id || res.data.trashed) {
       return { exists: false, name: null };
     }

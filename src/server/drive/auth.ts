@@ -69,6 +69,10 @@ class AuthPool {
   private preferredPools = new Map<string, number>();
   private fileCache = new Map<string, { signature: string; accountId: string }>();
   private oauthDir: string;
+  private hasScanned = false;
+  private watcher: fs.FSWatcher | null = null;
+  private watchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private tokenWriteQueues = new Map<string, Promise<void>>();
 
   constructor(oauthDir = path.resolve(process.cwd(), '.oauths')) {
     this.oauthDir = oauthDir;
@@ -89,7 +93,126 @@ class AuthPool {
     return 'none';
   }
 
+  private refreshFileCacheSignature(sourceFile: string, accountId: string): void {
+    const fileName = path.basename(sourceFile);
+    const ext = path.extname(fileName).toLowerCase();
+    const baseName = path.basename(fileName, ext);
+    try {
+      const stat = fs.statSync(sourceFile);
+      if (stat.isFile()) {
+        const signature = `${stat.mtimeMs}:${stat.size}:${this.getTokenFileSignature(baseName)}`;
+        this.fileCache.set(fileName, { signature, accountId });
+      }
+    } catch {}
+  }
+
+  private async refreshFileCacheSignatureAsync(sourceFile: string, accountId: string): Promise<void> {
+    const fileName = path.basename(sourceFile);
+    const ext = path.extname(fileName).toLowerCase();
+    const baseName = path.basename(fileName, ext);
+    try {
+      const stat = await fs.promises.stat(sourceFile);
+      if (!stat.isFile()) return;
+      let tokenSig = 'none';
+      const tokenPath = path.join(this.oauthDir, `${baseName}.tokens.json`);
+      try {
+        const tokenStat = await fs.promises.stat(tokenPath);
+        if (tokenStat.isFile()) {
+          tokenSig = `${tokenStat.mtimeMs}:${tokenStat.size}`;
+        }
+      } catch {}
+      this.fileCache.set(fileName, {
+        signature: `${stat.mtimeMs}:${stat.size}:${tokenSig}`,
+        accountId,
+      });
+    } catch {}
+  }
+
+  private persistTokensAsync(
+    accountId: string,
+    merged: Credentials,
+    recordRef?: AccountAuthRecord
+  ): Promise<void> {
+    const prev = this.tokenWriteQueues.get(accountId) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(async () => {
+        const record = recordRef ?? this.pool.get(accountId);
+        const currentAccountId = record?.config.accountId ?? accountId;
+        if (!this.pool.has(currentAccountId)) {
+          return;
+        }
+
+        const tokenFilePath = path.join(this.oauthDir, `${currentAccountId}.tokens.json`);
+        const tmpPath = `${tokenFilePath}.${process.pid}.${Date.now()}.tmp`;
+
+        await fs.promises.mkdir(this.oauthDir, { recursive: true });
+        await fs.promises.writeFile(tmpPath, JSON.stringify(merged, null, 2), 'utf8');
+        await fs.promises.rename(tmpPath, tokenFilePath);
+
+        if (record?.config.sourceFile) {
+          await this.refreshFileCacheSignatureAsync(record.config.sourceFile, currentAccountId);
+        }
+      })
+      .finally(() => {
+        if (this.tokenWriteQueues.get(accountId) === next) {
+          this.tokenWriteQueues.delete(accountId);
+        }
+      });
+
+    this.tokenWriteQueues.set(accountId, next);
+    return next;
+  }
+
+  public ensureScanned(): Map<string, AccountAuthRecord> {
+    if (!this.hasScanned) {
+      return this.scan();
+    }
+    return this.pool;
+  }
+
+  public startWatching(): void {
+    if (this.watcher) {
+      return;
+    }
+
+    try {
+      if (!fs.existsSync(this.oauthDir)) {
+        fs.mkdirSync(this.oauthDir, { recursive: true });
+      }
+      this.watcher = fs.watch(this.oauthDir, (_eventType, filename) => {
+        if (filename && filename.endsWith('.tmp')) {
+          return;
+        }
+        if (this.watchDebounceTimer) {
+          clearTimeout(this.watchDebounceTimer);
+        }
+        this.watchDebounceTimer = setTimeout(() => {
+          this.watchDebounceTimer = null;
+          this.scan();
+        }, 150);
+        this.watchDebounceTimer.unref?.();
+      });
+      this.watcher.unref?.();
+      this.watcher.on('error', () => {
+        this.stopWatching();
+      });
+    } catch {}
+  }
+
+  public stopWatching(): void {
+    if (this.watchDebounceTimer) {
+      clearTimeout(this.watchDebounceTimer);
+      this.watchDebounceTimer = null;
+    }
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+  }
+
   public scan(): Map<string, AccountAuthRecord> {
+    this.hasScanned = true;
     if (!fs.existsSync(this.oauthDir)) {
       this.fileCache.clear();
       this.pool.clear();
@@ -101,7 +224,7 @@ class AuthPool {
     const seenAccountIds = new Set<string>();
 
     for (const file of files) {
-      if (file.startsWith('.') || file.endsWith('.tokens.json')) {
+      if (file.startsWith('.') || file.endsWith('.tokens.json') || file.endsWith('.tmp')) {
         continue;
       }
 
@@ -318,8 +441,9 @@ class AuthPool {
       record.authorized = true;
 
       const currentAccountId = record.config.accountId;
-      const tokenFilePath = path.join(this.oauthDir, `${currentAccountId}.tokens.json`);
-      fs.writeFileSync(tokenFilePath, JSON.stringify(merged, null, 2), 'utf8');
+      void this.persistTokensAsync(currentAccountId, merged, record).catch((err) => {
+        console.warn(`Failed to persist refreshed tokens for ${currentAccountId}:`, err);
+      });
     });
 
     this.pool.set(cred.accountId, record);
@@ -346,7 +470,7 @@ class AuthPool {
   }
 
   public renameAccount(oldAccountId: string, newAccountId: string): string {
-    if (!oldAccountId || !newAccountId || oldAccountId.toLowerCase() === newAccountId.toLowerCase()) {
+    if (!oldAccountId || !newAccountId || oldAccountId === newAccountId) {
       return oldAccountId;
     }
 
@@ -361,7 +485,14 @@ class AuthPool {
       this.preferredPools.delete(oldAccountId);
     }
 
+    const pendingWrite = this.tokenWriteQueues.get(oldAccountId);
+    if (pendingWrite) {
+      this.tokenWriteQueues.set(newAccountId, pendingWrite);
+      this.tokenWriteQueues.delete(oldAccountId);
+    }
+
     const oldSourceFile = record.config.sourceFile;
+    const oldFileName = path.basename(oldSourceFile);
     const ext = path.extname(oldSourceFile).toLowerCase() || '.json';
     const newSourceFile = path.join(this.oauthDir, `${newAccountId}${ext}`);
 
@@ -384,6 +515,10 @@ class AuthPool {
     record.config.accountId = newAccountId;
     this.pool.delete(oldAccountId);
     this.pool.set(newAccountId, record);
+    if (path.basename(record.config.sourceFile) !== oldFileName) {
+      this.fileCache.delete(oldFileName);
+    }
+    this.refreshFileCacheSignature(record.config.sourceFile, newAccountId);
 
     try {
       renameAccountInDb(oldAccountId, newAccountId);
@@ -486,8 +621,7 @@ class AuthPool {
       targetAccountId = this.renameAccount(accountId, email.toLowerCase());
     }
 
-    const tokenFilePath = path.join(this.oauthDir, `${targetAccountId}.tokens.json`);
-    fs.writeFileSync(tokenFilePath, JSON.stringify(merged, null, 2), 'utf8');
+    await this.persistTokensAsync(targetAccountId, merged, record);
 
     return { tokens: merged, accountId: targetAccountId };
   }

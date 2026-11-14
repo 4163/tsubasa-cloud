@@ -122,6 +122,7 @@ export async function hydratePool1Startup(
   concurrency = STARTUP_HYDRATION_CONCURRENCY
 ): Promise<void> {
   authPool.scan();
+  authPool.startWatching();
   const allRecords = authPool.getAll();
   console.log(`Discovered ${allRecords.length} account credential files in .oauths/`);
   const records = allRecords.filter((r) => r.authorized);
@@ -161,7 +162,7 @@ export async function syncAllAccounts(poolId = 1): Promise<{
     return { hydrated: [], synced: [], errors: [] };
   }
 
-  authPool.scan();
+  authPool.ensureScanned();
   const records = authPool.getAll().filter((r) => r.authorized);
   const hydrated: string[] = [];
   const synced: string[] = [];

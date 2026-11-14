@@ -137,7 +137,7 @@ function parseStringArray(raw: unknown): string[] | null {
 }
 
 async function getAccountsList(poolId?: number) {
-  authPool.scan();
+  authPool.ensureScanned();
   const records = authPool.getAll();
   const dbAccounts = await db.select().from(accounts);
   const dbMap = new Map(dbAccounts.map((a) => [a.id, a]));

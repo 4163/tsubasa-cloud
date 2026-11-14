@@ -3,7 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { db, sqlite } from '../db/index.js';
 import { accounts, files, type Account, type FileRecord } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { getDriveClient, resolveRemoteFolderTree, refreshAccountLiveQuota, resolvePoolDriveFolderName } from './client.js';
+import {
+  getDriveClient,
+  resolveRemoteFolderTree,
+  resolveRemoteParentPath,
+  refreshAccountLiveQuota,
+  resolvePoolDriveFolderName,
+  withDriveRetry,
+  runBoundedConcurrency,
+} from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 import {
@@ -124,6 +132,71 @@ const SCAN_CHUNK_CONCURRENCY = 5;
 
 const discrepancyCache = new Map<string, { report: DiscrepancyReport; expiresAt: number }>();
 const inFlightScans = new Map<string, Promise<DiscrepancyReport>>();
+const scanGenerationByAccount = new Map<string, number>();
+const driveFileParentsCache = new Map<string, string[]>();
+
+function bumpScanGeneration(accountId?: string): void {
+  if (accountId) {
+    scanGenerationByAccount.set(accountId, (scanGenerationByAccount.get(accountId) ?? 0) + 1);
+    return;
+  }
+  const allAccountIds = new Set([
+    ...scanGenerationByAccount.keys(),
+    ...discrepancyCache.keys(),
+    ...inFlightScans.keys(),
+  ]);
+  for (const id of allAccountIds) {
+    scanGenerationByAccount.set(id, (scanGenerationByAccount.get(id) ?? 0) + 1);
+  }
+}
+
+export function invalidateDiscrepancyCache(accountId?: string): void {
+  if (accountId) {
+    discrepancyCache.delete(accountId);
+  } else {
+    discrepancyCache.clear();
+  }
+  bumpScanGeneration(accountId);
+}
+
+let _upsertPendingDriveSyncStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getUpsertPendingDriveSyncStmt() {
+  if (!_upsertPendingDriveSyncStmt) {
+    _upsertPendingDriveSyncStmt = sqlite.prepare(`
+      INSERT INTO pending_drive_sync (account_id, drive_file_id, virtual_path, file_id, attempts, last_error, next_retry_at)
+      VALUES (?, ?, ?, ?, 0, NULL, 0)
+      ON CONFLICT(account_id, drive_file_id) DO UPDATE SET
+        virtual_path = excluded.virtual_path,
+        file_id = excluded.file_id,
+        attempts = 0,
+        last_error = NULL,
+        next_retry_at = 0
+    `);
+  }
+  return _upsertPendingDriveSyncStmt as any;
+}
+
+let _deletePendingDriveSyncStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getDeletePendingDriveSyncStmt() {
+  if (!_deletePendingDriveSyncStmt) {
+    _deletePendingDriveSyncStmt = sqlite.prepare(
+      'DELETE FROM pending_drive_sync WHERE account_id = ? AND drive_file_id = ?'
+    );
+  }
+  return _deletePendingDriveSyncStmt as any;
+}
+
+let _markPendingDriveSyncFailedStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getMarkPendingDriveSyncFailedStmt() {
+  if (!_markPendingDriveSyncFailedStmt) {
+    _markPendingDriveSyncFailedStmt = sqlite.prepare(`
+      UPDATE pending_drive_sync
+      SET attempts = attempts + 1, last_error = ?, next_retry_at = ?
+      WHERE account_id = ? AND drive_file_id = ?
+    `);
+  }
+  return _markPendingDriveSyncFailedStmt as any;
+}
 
 function getCachedDiscrepancyReport(accountId: string): DiscrepancyReport | null {
   const entry = discrepancyCache.get(accountId);
@@ -178,7 +251,11 @@ export async function scanAccountDiscrepancies(
     if (pending) {
       return pending;
     }
+  } else {
+    bumpScanGeneration(accountId);
   }
+
+  const startGen = scanGenerationByAccount.get(accountId) ?? 0;
 
   const scanPromise = (async (): Promise<DiscrepancyReport> => {
     const account = await db.query.accounts.findFirst({
@@ -202,13 +279,28 @@ export async function scanAccountDiscrepancies(
 
     const validFolderIds = folderTree.folderIds;
 
-    // Sync discovered remote folders into SQLite folders table in one transaction
+    // Sync only missing remote folders into SQLite folders table
     if (folderTree.folders.length > 0) {
-      sqlite.transaction(() => {
-        for (const folder of folderTree.folders) {
-          insertFolderRecord(folder.virtualPath, poolId);
-        }
-      })();
+      const existingFolderRows = sqlite
+        .prepare('SELECT virtual_path FROM folders WHERE pool_id = ?')
+        .all(poolId) as Array<{ virtual_path: string }>;
+      const existingFolderPaths = new Set(existingFolderRows.map((r) => r.virtual_path));
+      const missingFolders = folderTree.folders.filter((f) => !existingFolderPaths.has(f.virtualPath));
+      if (missingFolders.length > 0) {
+        sqlite.transaction(() => {
+          for (const folder of missingFolders) {
+            insertFolderRecord(folder.virtualPath, poolId);
+          }
+        })();
+      }
+    }
+
+    const pendingRows = sqlite
+      .prepare('SELECT drive_file_id FROM pending_drive_sync WHERE account_id = ?')
+      .all(accountId) as Array<{ drive_file_id: string }>;
+    const pendingDriveIdsForAccount = new Set<string>(pendingAppPropertyDriveIds);
+    for (const row of pendingRows) {
+      pendingDriveIdsForAccount.add(row.drive_file_id);
     }
 
     const accountMap = new Map<string, Account>(poolAccounts.map((a) => [a.id, a]));
@@ -250,18 +342,25 @@ export async function scanAccountDiscrepancies(
           let pageToken: string | undefined = undefined;
 
           do {
-            const listRes: any = await drive.files.list({
-              q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
-              fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, modifiedTime, parents, appProperties)',
-              pageSize: 1000,
-              pageToken,
-              spaces: 'drive',
-              supportsAllDrives: false,
-            });
+            const listRes: any = await withDriveRetry(() =>
+              drive.files.list({
+                q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+                fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, modifiedTime, parents, appProperties)',
+                pageSize: 1000,
+                pageToken,
+                spaces: 'drive',
+                supportsAllDrives: false,
+              })
+            );
 
             for (const remote of listRes.data.files || []) {
               if (!remote.id || !remote.name) continue;
+              if (foundRemoteIds.has(remote.id)) continue;
               foundRemoteIds.add(remote.id);
+
+              if (Array.isArray(remote.parents) && remote.parents.length > 0) {
+                driveFileParentsCache.set(`${accountId}:${remote.id}`, remote.parents);
+              }
 
               const sizeBytes = Number(remote.size || 0);
               const parentFolderPath =
@@ -337,7 +436,10 @@ export async function scanAccountDiscrepancies(
                   accountId,
                   discrepancyType: 'unindexed',
                 });
-              } else if (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) {
+              } else if (
+                (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) &&
+                !pendingDriveIdsForAccount.has(remote.id)
+              ) {
                 modified.push({
                   driveFileId: remote.id,
                   name: remote.name,
@@ -380,17 +482,17 @@ export async function scanAccountDiscrepancies(
       missingRemote,
     };
 
-    discrepancyCache.set(accountId, {
-      report,
-      expiresAt: Date.now() + DISCREPANCY_CACHE_TTL_MS,
-    });
+    if ((scanGenerationByAccount.get(accountId) ?? 0) === startGen) {
+      discrepancyCache.set(accountId, {
+        report,
+        expiresAt: Date.now() + DISCREPANCY_CACHE_TTL_MS,
+      });
+    }
 
     return report;
   })();
 
-  if (!forceRefresh) {
-    inFlightScans.set(accountId, scanPromise);
-  }
+  inFlightScans.set(accountId, scanPromise);
 
   try {
     return await scanPromise;
@@ -462,6 +564,8 @@ export async function acceptExternalFile(
         folderId,
         0
       );
+
+      getUpsertPendingDriveSyncStmt().run(accountId, driveFileId, virtualPath, committedFileId);
     })();
 
     pendingAppPropertyDriveIds.add(driveFileId);
@@ -469,6 +573,7 @@ export async function acceptExternalFile(
       { driveFileId, virtualPath, fileId: committedFileId },
     ]);
     removeDriveIdFromCachedReport(accountId, driveFileId);
+    bumpScanGeneration(accountId);
 
     const inserted = await db.query.files.findFirst({ where: eq(files.id, committedFileId) });
     if (!inserted) {
@@ -478,22 +583,31 @@ export async function acceptExternalFile(
   }
 
   const drive = getDriveClient(accountId);
-  const fileRes = await drive.files.get({
-    fileId: driveFileId,
-    fields: 'id, name, size, mimeType, md5Checksum, parents, appProperties',
-    supportsAllDrives: false,
-  });
+  const fileRes = await withDriveRetry(() =>
+    drive.files.get({
+      fileId: driveFileId,
+      fields: 'id, name, size, mimeType, md5Checksum, parents, appProperties',
+      supportsAllDrives: false,
+    })
+  );
 
   const remote = fileRes.data;
   if (!remote.id || !remote.name) {
     throw new Error(`File ${driveFileId} not found in Google Drive`);
   }
+  const remoteId = remote.id;
 
   let finalVirtualPath = targetVirtualPath || remote.appProperties?.tsubasa_virtual_path;
   if (!finalVirtualPath) {
-    if (account?.rootFolderId) {
-      const folderTree = await resolveRemoteFolderTree(drive, account.rootFolderId);
-      const parentFolderPath = remote.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+    if (account?.rootFolderId && remote.parents?.length) {
+      const parentCache = new Map<string, string | null>();
+      const parentResult = await resolveRemoteParentPath(
+        drive,
+        account.rootFolderId,
+        remote.parents[0],
+        parentCache
+      );
+      const parentFolderPath = parentResult.isInsidePool ? parentResult.path : '/';
       finalVirtualPath = parentFolderPath === '/' ? `/${remote.name}` : `${parentFolderPath}/${remote.name}`;
     } else {
       finalVirtualPath = `/${remote.name}`;
@@ -503,60 +617,64 @@ export async function acceptExternalFile(
   const sizeBytes = Number(remote.size || 0);
   const virtualPath = normalizeVirtualPath(finalVirtualPath);
   const fileName = path.posix.basename(virtualPath);
+  const mimeType = remote.mimeType || 'application/octet-stream';
+  const hash = remote.md5Checksum || null;
 
-  sqlite
-    .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-    .run(`${virtualPath}.trashed-${Date.now()}`, poolId, virtualPath);
+  let committedFileId = remoteId;
 
-  const candidateId = remote.appProperties?.tsubasa_virtual_id || remote.id;
-  const idCollision = sqlite
-    .prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1')
-    .get(candidateId) as { id: string; drive_file_id: string; account_id: string } | undefined;
-  const fileId =
-    idCollision && (idCollision.drive_file_id !== remote.id || idCollision.account_id !== accountId)
-      ? randomUUID()
-      : candidateId;
+  sqlite.transaction(() => {
+    const existingByDrive = sqlite
+      .prepare('SELECT id FROM files WHERE drive_file_id = ? AND account_id = ? LIMIT 1')
+      .get(remoteId, accountId) as { id: string } | undefined;
 
-  ensureLocalFolderHierarchy(virtualPath, poolId);
-  const parentDir = path.posix.dirname(virtualPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+    sqlite
+      .prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?')
+      .run(remoteId, accountId);
 
-  pendingAppPropertyDriveIds.add(remote.id);
-  void stampAcceptedAppProperties(accountId, [{ driveFileId: remote.id, virtualPath, fileId }]);
+    sqlite
+      .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
+      .run(`${virtualPath}.trashed-${Date.now()}`, poolId, virtualPath);
 
-  const inserted = await db
-    .insert(files)
-    .values({
-      id: fileId,
+    const candidateId = remote.appProperties?.tsubasa_virtual_id || existingByDrive?.id || remoteId;
+    const idCollision = sqlite
+      .prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1')
+      .get(candidateId) as { id: string; drive_file_id: string; account_id: string } | undefined;
+    committedFileId =
+      idCollision && (idCollision.drive_file_id !== remoteId || idCollision.account_id !== accountId)
+        ? randomUUID()
+        : candidateId;
+
+    ensureLocalFolderHierarchy(virtualPath, poolId);
+    const parentDir = path.posix.dirname(virtualPath);
+    const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+
+    upsertFileStmt.run(
+      committedFileId,
       poolId,
       virtualPath,
-      name: fileName,
+      fileName,
       sizeBytes,
-      mimeType: remote.mimeType || 'application/octet-stream',
-      hash: remote.md5Checksum || null,
+      mimeType,
+      hash,
       accountId,
-      driveFileId: remote.id,
+      remoteId,
       folderId,
-      isTrashed: false,
-    })
-    .onConflictDoUpdate({
-      target: [files.poolId, files.virtualPath],
-      set: {
-        name: fileName,
-        sizeBytes,
-        mimeType: remote.mimeType || 'application/octet-stream',
-        hash: remote.md5Checksum || null,
-        accountId,
-        driveFileId: remote.id,
-        folderId,
-        isTrashed: false,
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
+      0
+    );
 
+    getUpsertPendingDriveSyncStmt().run(accountId, remoteId, virtualPath, committedFileId);
+  })();
+
+  pendingAppPropertyDriveIds.add(remoteId);
+  void stampAcceptedAppProperties(accountId, [{ driveFileId: remoteId, virtualPath, fileId: committedFileId }]);
   removeDriveIdFromCachedReport(accountId, driveFileId);
-  return inserted[0];
+  bumpScanGeneration(accountId);
+
+  const inserted = await db.query.files.findFirst({ where: eq(files.id, committedFileId) });
+  if (!inserted) {
+    throw new Error(`Failed to load accepted file ${committedFileId}`);
+  }
+  return inserted;
 }
 
 interface AppPropertyStamp {
@@ -566,42 +684,46 @@ interface AppPropertyStamp {
 }
 
 const DRIVE_BATCH_CONCURRENCY = 10;
-
-async function runWithConcurrency<T>(items: T[], worker: (item: T) => Promise<void>): Promise<void> {
-  let nextIndex = 0;
-  const lanes = Array.from({ length: Math.min(DRIVE_BATCH_CONCURRENCY, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      await worker(items[nextIndex++]);
-    }
-  });
-  await Promise.all(lanes);
-}
+const PENDING_SYNC_RETRY_DELAY_MS = 60_000;
 
 async function stampAcceptedAppProperties(accountId: string, stamps: AppPropertyStamp[]): Promise<void> {
   try {
     const drive = getDriveClient(accountId);
-    await runWithConcurrency(stamps, async (stamp) => {
+    await runBoundedConcurrency(stamps, DRIVE_BATCH_CONCURRENCY, async (stamp) => {
       try {
-        await drive.files.update({
-          fileId: stamp.driveFileId,
-          requestBody: {
-            appProperties: {
-              tsubasa_managed: 'true',
-              tsubasa_virtual_path: stamp.virtualPath,
-              tsubasa_virtual_id: stamp.fileId,
+        await withDriveRetry(() =>
+          drive.files.update({
+            fileId: stamp.driveFileId,
+            requestBody: {
+              appProperties: {
+                tsubasa_managed: 'true',
+                tsubasa_virtual_path: stamp.virtualPath,
+                tsubasa_virtual_id: stamp.fileId,
+              },
             },
-          },
-          supportsAllDrives: false,
-        });
+            supportsAllDrives: false,
+          })
+        );
+        getDeletePendingDriveSyncStmt().run(accountId, stamp.driveFileId);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        getMarkPendingDriveSyncFailedStmt().run(
+          message,
+          Date.now() + PENDING_SYNC_RETRY_DELAY_MS,
+          accountId,
+          stamp.driveFileId
+        );
         console.warn(`Failed to stamp appProperties on ${stamp.driveFileId} (${accountId}):`, err);
       } finally {
         pendingAppPropertyDriveIds.delete(stamp.driveFileId);
       }
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const nextRetryAt = Date.now() + PENDING_SYNC_RETRY_DELAY_MS;
     console.warn(`Failed to initialize Drive client for appProperties stamp (${accountId}):`, err);
     for (const stamp of stamps) {
+      getMarkPendingDriveSyncFailedStmt().run(message, nextRetryAt, accountId, stamp.driveFileId);
       pendingAppPropertyDriveIds.delete(stamp.driveFileId);
     }
   }
@@ -618,7 +740,7 @@ export async function ejectAllExternalFiles(
   const items = [...report.unindexed, ...report.modified];
   let failedCount = 0;
 
-  await runWithConcurrency(items, async (item) => {
+  await runBoundedConcurrency(items, DRIVE_BATCH_CONCURRENCY, async (item) => {
     try {
       await ejectFileToDriveRoot(accountId, item.driveFileId);
     } catch (err) {
@@ -719,6 +841,7 @@ export async function acceptAllExternalFiles(
         0
       );
 
+      getUpsertPendingDriveSyncStmt().run(accountId, item.driveFileId, virtualPath, fileId);
       pendingAppPropertyDriveIds.add(item.driveFileId);
       stamps.push({ driveFileId: item.driveFileId, virtualPath, fileId });
     }
@@ -731,8 +854,10 @@ export async function acceptAllExternalFiles(
     cachedReport.unindexed = [];
     cachedReport.modified = [];
   }
+  bumpScanGeneration(accountId);
 
   void stampAcceptedAppProperties(accountId, stamps);
+  void refreshAccountLiveQuota(accountId).catch(() => {});
 
   return { acceptedCount: items.length };
 }
@@ -762,42 +887,53 @@ export async function resolvePathConflict(
 
   if (resolution === 'deduplicate') {
     const drive = getDriveClient(accountId);
-    await drive.files.update({
-      fileId: driveFileId,
-      requestBody: {
-        trashed: true,
-        appProperties: {
-          tsubasa_managed: null,
-          tsubasa_virtual_path: null,
-          tsubasa_virtual_id: null,
-        } as any,
-      },
-      supportsAllDrives: false,
-    });
+    await withDriveRetry(() =>
+      drive.files.update({
+        fileId: driveFileId,
+        requestBody: {
+          trashed: true,
+          appProperties: {
+            tsubasa_managed: null,
+            tsubasa_virtual_path: null,
+            tsubasa_virtual_id: null,
+          } as any,
+        },
+        supportsAllDrives: false,
+      })
+    );
     await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
     await refreshAccountLiveQuota(accountId).catch(() => {});
     removeDriveIdFromCachedReport(accountId, driveFileId);
+    bumpScanGeneration(accountId);
     return { resolution: 'deduplicate', accountId, driveFileId };
   }
 
   const drive = getDriveClient(accountId);
-  const fileRes = await drive.files.get({
-    fileId: driveFileId,
-    fields: 'id, name, size, mimeType, md5Checksum, sha256Checksum, parents, appProperties',
-    supportsAllDrives: false,
-  });
+  const fileRes = await withDriveRetry(() =>
+    drive.files.get({
+      fileId: driveFileId,
+      fields: 'id, name, size, mimeType, md5Checksum, sha256Checksum, parents, appProperties',
+      supportsAllDrives: false,
+    })
+  );
 
   const remote = fileRes.data;
   if (!remote.id || !remote.name) {
     throw new Error(`File ${driveFileId} not found in Google Drive`);
   }
+  const remoteId = remote.id;
 
   let rawPath = targetVirtualPath || remote.appProperties?.tsubasa_virtual_path;
   if (!rawPath) {
-    if (account.rootFolderId) {
-      const folderTree = await resolveRemoteFolderTree(drive, account.rootFolderId);
-      const parentFolderPath =
-        remote.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+    if (account.rootFolderId && remote.parents?.length) {
+      const parentCache = new Map<string, string | null>();
+      const parentResult = await resolveRemoteParentPath(
+        drive,
+        account.rootFolderId,
+        remote.parents[0],
+        parentCache
+      );
+      const parentFolderPath = parentResult.isInsidePool ? parentResult.path : '/';
       rawPath = parentFolderPath === '/' ? `/${remote.name}` : `${parentFolderPath}/${remote.name}`;
     } else {
       rawPath = `/${remote.name}`;
@@ -807,6 +943,7 @@ export async function resolvePathConflict(
   const baseVirtualPath = normalizeVirtualPath(rawPath);
   const sizeBytes = Number(remote.size || 0);
   const checksum = remote.appProperties?.tsubasa_checksum || remote.md5Checksum || remote.sha256Checksum || null;
+  const mimeType = remote.mimeType || 'application/octet-stream';
 
   const resolveNonCollidingFileId = (): string => {
     const candidateId = remote.appProperties?.tsubasa_virtual_id;
@@ -814,7 +951,7 @@ export async function resolvePathConflict(
     const idCollision = sqlite
       .prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1')
       .get(candidateId) as { id: string; drive_file_id: string; account_id: string } | undefined;
-    if (!idCollision || (idCollision.drive_file_id === remote.id && idCollision.account_id === accountId)) {
+    if (!idCollision || (idCollision.drive_file_id === remoteId && idCollision.account_id === accountId)) {
       return candidateId;
     }
     return randomUUID();
@@ -825,56 +962,58 @@ export async function resolvePathConflict(
     const baseName = path.posix.basename(baseVirtualPath);
     const newVirtualPath = await getAvailableCopyPath(parentDir, baseName, 'file', poolId);
     const newFileName = path.posix.basename(newVirtualPath);
-
-    await db.delete(files).where(and(eq(files.driveFileId, remote.id), eq(files.accountId, accountId)));
     const fileId = resolveNonCollidingFileId();
 
-    await drive.files.update({
-      fileId: remote.id,
-      requestBody: {
-        name: newFileName,
-        appProperties: {
-          tsubasa_managed: 'true',
-          tsubasa_virtual_path: newVirtualPath,
-          tsubasa_virtual_id: fileId,
-          tsubasa_checksum: checksum || '',
+    await withDriveRetry(() =>
+      drive.files.update({
+        fileId: remoteId,
+        requestBody: {
+          name: newFileName,
+          appProperties: {
+            tsubasa_managed: 'true',
+            tsubasa_virtual_path: newVirtualPath,
+            tsubasa_virtual_id: fileId,
+            tsubasa_checksum: checksum || '',
+          },
         },
-      },
-      supportsAllDrives: false,
-    });
+        supportsAllDrives: false,
+      })
+    );
 
-    ensureLocalFolderHierarchy(newVirtualPath, poolId);
     const newParentDir = path.posix.dirname(newVirtualPath);
     const folderId = newParentDir === '/' || newParentDir === '.' ? null : formatFolderId(poolId, newParentDir);
 
-    sqlite
-      .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-      .run(`${newVirtualPath}.trashed-${Date.now()}`, poolId, newVirtualPath);
+    sqlite.transaction(() => {
+      sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?').run(remoteId, accountId);
+      ensureLocalFolderHierarchy(newVirtualPath, poolId);
+      sqlite
+        .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
+        .run(`${newVirtualPath}.trashed-${Date.now()}`, poolId, newVirtualPath);
 
-    const inserted = await db
-      .insert(files)
-      .values({
-        id: fileId,
+      upsertFileStmt.run(
+        fileId,
         poolId,
-        virtualPath: newVirtualPath,
-        name: newFileName,
+        newVirtualPath,
+        newFileName,
         sizeBytes,
-        mimeType: remote.mimeType || 'application/octet-stream',
-        hash: checksum,
+        mimeType,
+        checksum,
         accountId,
-        driveFileId: remote.id,
+        remoteId,
         folderId,
-        isTrashed: false,
-      })
-      .returning();
+        0
+      );
+    })();
 
     removeDriveIdFromCachedReport(accountId, driveFileId);
+    bumpScanGeneration(accountId);
+    const inserted = await db.query.files.findFirst({ where: eq(files.id, fileId) });
     return {
       resolution: 'keep_both',
       accountId,
       driveFileId,
       virtualPath: newVirtualPath,
-      file: inserted[0],
+      file: inserted,
     };
   }
 
@@ -883,21 +1022,23 @@ export async function resolvePathConflict(
     where: and(eq(files.poolId, poolId), eq(files.virtualPath, baseVirtualPath), eq(files.isTrashed, false)),
   });
 
-  if (existingActive && existingActive.driveFileId !== remote.id) {
+  if (existingActive && existingActive.driveFileId !== remoteId) {
     try {
       const prevDrive = getDriveClient(existingActive.accountId);
-      await prevDrive.files.update({
-        fileId: existingActive.driveFileId,
-        requestBody: {
-          trashed: true,
-          appProperties: {
-            tsubasa_managed: null,
-            tsubasa_virtual_path: null,
-            tsubasa_virtual_id: null,
-          } as any,
-        },
-        supportsAllDrives: false,
-      });
+      await withDriveRetry(() =>
+        prevDrive.files.update({
+          fileId: existingActive.driveFileId,
+          requestBody: {
+            trashed: true,
+            appProperties: {
+              tsubasa_managed: null,
+              tsubasa_virtual_path: null,
+              tsubasa_virtual_id: null,
+            } as any,
+          },
+          supportsAllDrives: false,
+        })
+      );
       await refreshAccountLiveQuota(existingActive.accountId).catch(() => {});
     } catch (err) {
       console.warn(
@@ -905,74 +1046,82 @@ export async function resolvePathConflict(
         err
       );
     }
-    await db.delete(files).where(eq(files.id, existingActive.id));
   }
 
-  await db.delete(files).where(and(eq(files.driveFileId, remote.id), eq(files.accountId, accountId)));
   const fileId = resolveNonCollidingFileId();
-
-  sqlite
-    .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-    .run(`${baseVirtualPath}.trashed-${Date.now()}`, poolId, baseVirtualPath);
-
   const fileName = path.posix.basename(baseVirtualPath);
-  ensureLocalFolderHierarchy(baseVirtualPath, poolId);
   const parentDir = path.posix.dirname(baseVirtualPath);
   const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
-  await drive.files.update({
-    fileId: remote.id,
-    requestBody: {
-      name: fileName,
-      appProperties: {
-        tsubasa_managed: 'true',
-        tsubasa_virtual_path: baseVirtualPath,
-        tsubasa_virtual_id: fileId,
-        tsubasa_checksum: checksum || '',
-      },
-    },
-    supportsAllDrives: false,
-  });
-
-  const inserted = await db
-    .insert(files)
-    .values({
-      id: fileId,
-      poolId,
-      virtualPath: baseVirtualPath,
-      name: fileName,
-      sizeBytes,
-      mimeType: remote.mimeType || 'application/octet-stream',
-      hash: checksum,
-      accountId,
-      driveFileId: remote.id,
-      folderId,
-      isTrashed: false,
-    })
-    .onConflictDoUpdate({
-      target: [files.poolId, files.virtualPath],
-      set: {
+  await withDriveRetry(() =>
+    drive.files.update({
+      fileId: remoteId,
+      requestBody: {
         name: fileName,
-        sizeBytes,
-        mimeType: remote.mimeType || 'application/octet-stream',
-        hash: checksum,
-        accountId,
-        driveFileId: remote.id,
-        folderId,
-        isTrashed: false,
-        updatedAt: new Date(),
+        appProperties: {
+          tsubasa_managed: 'true',
+          tsubasa_virtual_path: baseVirtualPath,
+          tsubasa_virtual_id: fileId,
+          tsubasa_checksum: checksum || '',
+        },
       },
+      supportsAllDrives: false,
     })
-    .returning();
+  );
+
+  sqlite.transaction(() => {
+    if (existingActive && existingActive.driveFileId !== remoteId) {
+      sqlite.prepare('DELETE FROM files WHERE id = ?').run(existingActive.id);
+    }
+    sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?').run(remoteId, accountId);
+    sqlite
+      .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
+      .run(`${baseVirtualPath}.trashed-${Date.now()}`, poolId, baseVirtualPath);
+    ensureLocalFolderHierarchy(baseVirtualPath, poolId);
+
+    upsertFileStmt.run(
+      fileId,
+      poolId,
+      baseVirtualPath,
+      fileName,
+      sizeBytes,
+      mimeType,
+      checksum,
+      accountId,
+      remoteId,
+      folderId,
+      0
+    );
+  })();
 
   removeDriveIdFromCachedReport(accountId, driveFileId);
+  bumpScanGeneration(accountId);
+  const inserted = await db.query.files.findFirst({ where: eq(files.id, fileId) });
   return {
     resolution: 'replace_existing',
     accountId,
     driveFileId,
     virtualPath: baseVirtualPath,
-    file: inserted[0],
+    file: inserted,
   };
+}
+
+function reserveAvailableCopyPath(targetDir: string, baseName: string, occupiedPaths: Set<string>): string {
+  const ext = path.extname(baseName);
+  const stem = path.basename(baseName, ext);
+
+  let candidateName = baseName;
+  let candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
+  let counter = 1;
+
+  while (occupiedPaths.has(candidatePath)) {
+    candidateName = counter === 1 ? `${stem} (copy)${ext}` : `${stem} (copy ${counter})${ext}`;
+    candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
+    counter++;
+  }
+
+  occupiedPaths.add(candidatePath);
+  return candidatePath;
 }
 
 export async function resolvePathConflictsBatch(
@@ -993,6 +1142,13 @@ export async function resolvePathConflictsBatch(
     return { resolvedCount: 0, failedCount: 0, results: [] };
   }
 
+  const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+  if (!account) {
+    throw new Error(`Account ${accountId} not registered`);
+  }
+  const poolId = account.poolId ?? 1;
+  const drive = getDriveClient(accountId);
+
   const results: Array<{
     driveFileId: string;
     success: boolean;
@@ -1001,53 +1157,265 @@ export async function resolvePathConflictsBatch(
   }> = new Array(items.length);
 
   if (resolution === 'keep_both') {
+    const activeRows = sqlite
+      .prepare('SELECT virtual_path FROM files WHERE pool_id = ? AND is_trashed = 0')
+      .all(poolId) as Array<{ virtual_path: string }>;
+    const occupiedPaths = new Set(activeRows.map((r) => r.virtual_path));
+
+    interface ResolvedKeepBothMeta {
+      index: number;
+      driveFileId: string;
+      baseVirtualPath: string;
+      sizeBytes: number;
+      mimeType: string;
+      checksum: string | null;
+      candidateId?: string;
+    }
+
+    const resolvedMetas: ResolvedKeepBothMeta[] = [];
+    const needDriveFetch: Array<{ index: number; driveFileId: string; targetVirtualPath?: string }> = [];
+
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
+      const cached = findCachedDiscrepancyItem(accountId, item.driveFileId);
+      const rawPath = item.targetVirtualPath || cached?.virtualPath;
+      if (cached && rawPath) {
+        resolvedMetas.push({
+          index: i,
+          driveFileId: item.driveFileId,
+          baseVirtualPath: normalizeVirtualPath(rawPath),
+          sizeBytes: cached.sizeBytes,
+          mimeType: cached.mimeType,
+          checksum: cached.hash,
+        });
+      } else {
+        needDriveFetch.push({ index: i, driveFileId: item.driveFileId, targetVirtualPath: item.targetVirtualPath });
+      }
+    }
+
+    if (needDriveFetch.length > 0) {
+      const parentCache = new Map<string, string | null>();
+      await runBoundedConcurrency(needDriveFetch, DRIVE_BATCH_CONCURRENCY, async (entry) => {
+        try {
+          const fileRes = await withDriveRetry(() =>
+            drive.files.get({
+              fileId: entry.driveFileId,
+              fields: 'id, name, size, mimeType, md5Checksum, sha256Checksum, parents, appProperties',
+              supportsAllDrives: false,
+            })
+          );
+          const remote = fileRes.data;
+          if (!remote.id || !remote.name) {
+            throw new Error(`File ${entry.driveFileId} not found in Google Drive`);
+          }
+
+          let rawPath = entry.targetVirtualPath || remote.appProperties?.tsubasa_virtual_path;
+          if (!rawPath) {
+            if (account.rootFolderId && remote.parents?.length) {
+              const parentResult = await resolveRemoteParentPath(
+                drive,
+                account.rootFolderId,
+                remote.parents[0],
+                parentCache
+              );
+              const parentFolderPath = parentResult.isInsidePool ? parentResult.path : '/';
+              rawPath = parentFolderPath === '/' ? `/${remote.name}` : `${parentFolderPath}/${remote.name}`;
+            } else {
+              rawPath = `/${remote.name}`;
+            }
+          }
+
+          resolvedMetas.push({
+            index: entry.index,
+            driveFileId: remote.id,
+            baseVirtualPath: normalizeVirtualPath(rawPath),
+            sizeBytes: Number(remote.size || 0),
+            mimeType: remote.mimeType || 'application/octet-stream',
+            checksum: remote.appProperties?.tsubasa_checksum || remote.md5Checksum || remote.sha256Checksum || null,
+            candidateId: remote.appProperties?.tsubasa_virtual_id || undefined,
+          });
+        } catch (err) {
+          results[entry.index] = {
+            driveFileId: entry.driveFileId,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      });
+    }
+
+    interface PreparedKeepBothItem {
+      index: number;
+      driveFileId: string;
+      fileId: string;
+      newVirtualPath: string;
+      newFileName: string;
+      sizeBytes: number;
+      mimeType: string;
+      checksum: string | null;
+    }
+
+    const selectIdCollisionStmt = sqlite.prepare(
+      'SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1'
+    );
+    const reservedFileIds = new Set<string>();
+    const preparedItems: PreparedKeepBothItem[] = [];
+
+    for (const meta of resolvedMetas) {
+      const parentDir = path.posix.dirname(meta.baseVirtualPath);
+      const baseName = path.posix.basename(meta.baseVirtualPath);
+      const newVirtualPath = reserveAvailableCopyPath(parentDir, baseName, occupiedPaths);
+      const newFileName = path.posix.basename(newVirtualPath);
+
+      let fileId = meta.candidateId || randomUUID();
+      if (meta.candidateId) {
+        const collision = selectIdCollisionStmt.get(meta.candidateId) as
+          | { id: string; drive_file_id: string; account_id: string }
+          | undefined;
+        if (
+          reservedFileIds.has(meta.candidateId) ||
+          (collision && (collision.drive_file_id !== meta.driveFileId || collision.account_id !== accountId))
+        ) {
+          fileId = randomUUID();
+        }
+      }
+      reservedFileIds.add(fileId);
+
+      preparedItems.push({
+        index: meta.index,
+        driveFileId: meta.driveFileId,
+        fileId,
+        newVirtualPath,
+        newFileName,
+        sizeBytes: meta.sizeBytes,
+        mimeType: meta.mimeType,
+        checksum: meta.checksum,
+      });
+    }
+
+    const succeededItems: PreparedKeepBothItem[] = [];
+    await runBoundedConcurrency(preparedItems, DRIVE_BATCH_CONCURRENCY, async (item) => {
       try {
-        const res = await resolvePathConflict(accountId, item.driveFileId, 'keep_both', item.targetVirtualPath);
-        results[i] = {
+        await withDriveRetry(() =>
+          drive.files.update({
+            fileId: item.driveFileId,
+            requestBody: {
+              name: item.newFileName,
+              appProperties: {
+                tsubasa_managed: 'true',
+                tsubasa_virtual_path: item.newVirtualPath,
+                tsubasa_virtual_id: item.fileId,
+                tsubasa_checksum: item.checksum || '',
+              },
+            },
+            supportsAllDrives: false,
+          })
+        );
+        succeededItems.push(item);
+        results[item.index] = {
           driveFileId: item.driveFileId,
           success: true,
-          virtualPath: res.virtualPath,
+          virtualPath: item.newVirtualPath,
         };
       } catch (err) {
-        results[i] = {
+        results[item.index] = {
           driveFileId: item.driveFileId,
           success: false,
           error: err instanceof Error ? err.message : String(err),
         };
       }
+    });
+
+    if (succeededItems.length > 0) {
+      const deleteByDriveIdStmt = sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?');
+      const moveAsideTrashedStmt = sqlite.prepare(
+        'UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1'
+      );
+      const ensuredFolders = new Set<string>();
+      const trashSuffix = `.trashed-${Date.now()}`;
+
+      sqlite.transaction(() => {
+        for (const item of succeededItems) {
+          deleteByDriveIdStmt.run(item.driveFileId, accountId);
+
+          const folderPaths = extractFolderPaths(item.newVirtualPath);
+          for (let i = folderPaths.length - 1; i >= 0; i--) {
+            if (ensuredFolders.has(folderPaths[i])) continue;
+            insertFolderRecord(folderPaths[i], poolId);
+            ensuredFolders.add(folderPaths[i]);
+          }
+
+          moveAsideTrashedStmt.run(`${item.newVirtualPath}${trashSuffix}`, poolId, item.newVirtualPath);
+
+          const parentDir = path.posix.dirname(item.newVirtualPath);
+          const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+
+          upsertFileStmt.run(
+            item.fileId,
+            poolId,
+            item.newVirtualPath,
+            item.newFileName,
+            item.sizeBytes,
+            item.mimeType,
+            item.checksum,
+            accountId,
+            item.driveFileId,
+            folderId,
+            0
+          );
+        }
+      })();
+
+      for (const item of succeededItems) {
+        removeDriveIdFromCachedReport(accountId, item.driveFileId);
+      }
+      bumpScanGeneration(accountId);
     }
   } else {
-    let nextIndex = 0;
-    const workerCount = Math.min(DRIVE_BATCH_CONCURRENCY, items.length);
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        while (nextIndex < items.length) {
-          const i = nextIndex++;
-          const item = items[i];
-          try {
-            const res = await resolvePathConflict(
-              accountId,
-              item.driveFileId,
-              'deduplicate',
-              item.targetVirtualPath
-            );
-            results[i] = {
-              driveFileId: item.driveFileId,
-              success: true,
-              virtualPath: res.virtualPath,
-            };
-          } catch (err) {
-            results[i] = {
-              driveFileId: item.driveFileId,
-              success: false,
-              error: err instanceof Error ? err.message : String(err),
-            };
-          }
+    const indexedItems = items.map((item, index) => ({ index, driveFileId: item.driveFileId }));
+    const succeededDriveIds: string[] = [];
+
+    await runBoundedConcurrency(indexedItems, DRIVE_BATCH_CONCURRENCY, async ({ index, driveFileId }) => {
+      try {
+        await withDriveRetry(() =>
+          drive.files.update({
+            fileId: driveFileId,
+            requestBody: {
+              trashed: true,
+              appProperties: {
+                tsubasa_managed: null,
+                tsubasa_virtual_path: null,
+                tsubasa_virtual_id: null,
+              } as any,
+            },
+            supportsAllDrives: false,
+          })
+        );
+        succeededDriveIds.push(driveFileId);
+        results[index] = { driveFileId, success: true };
+      } catch (err) {
+        results[index] = {
+          driveFileId,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    });
+
+    if (succeededDriveIds.length > 0) {
+      const deleteByDriveIdStmt = sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?');
+      sqlite.transaction(() => {
+        for (const driveFileId of succeededDriveIds) {
+          deleteByDriveIdStmt.run(driveFileId, accountId);
         }
-      })
-    );
+      })();
+
+      for (const driveFileId of succeededDriveIds) {
+        removeDriveIdFromCachedReport(accountId, driveFileId);
+      }
+      bumpScanGeneration(accountId);
+      await refreshAccountLiveQuota(accountId).catch(() => {});
+    }
   }
 
   let resolvedCount = 0;
@@ -1070,41 +1438,53 @@ export async function ejectFileToDriveRoot(accountId: string, driveFileId: strin
   }
 
   const drive = getDriveClient(accountId);
+  const cacheKey = `${accountId}:${driveFileId}`;
+  let cachedParents = driveFileParentsCache.get(cacheKey);
+  driveFileParentsCache.delete(cacheKey);
 
-  const fileRes = await drive.files.get({
-    fileId: driveFileId,
-    fields: 'parents',
-    supportsAllDrives: false,
-  });
+  if (!cachedParents) {
+    const fileRes = await withDriveRetry(() =>
+      drive.files.get({
+        fileId: driveFileId,
+        fields: 'parents',
+        supportsAllDrives: false,
+      })
+    );
+    cachedParents = fileRes.data.parents || [];
+  }
 
-  const parentsToRemove = (fileRes.data.parents || []).join(',');
+  const parentsToRemove = cachedParents.join(',');
 
-  await drive.files.update({
-    fileId: driveFileId,
-    addParents: 'root',
-    removeParents: parentsToRemove || account.rootFolderId,
-    requestBody: {
-      appProperties: {
-        tsubasa_managed: null,
-        tsubasa_virtual_path: null,
-        tsubasa_virtual_id: null,
-      } as any,
-    },
-    supportsAllDrives: false,
-  });
+  await withDriveRetry(() =>
+    drive.files.update({
+      fileId: driveFileId,
+      addParents: 'root',
+      removeParents: parentsToRemove || account.rootFolderId!,
+      requestBody: {
+        appProperties: {
+          tsubasa_managed: null,
+          tsubasa_virtual_path: null,
+          tsubasa_virtual_id: null,
+        } as any,
+      },
+      supportsAllDrives: false,
+    })
+  );
 
   await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
   removeDriveIdFromCachedReport(accountId, driveFileId);
+  bumpScanGeneration(accountId);
 }
 
 export async function removeMissingFile(accountId: string, driveFileId: string): Promise<void> {
   await db.delete(files).where(and(eq(files.driveFileId, driveFileId), eq(files.accountId, accountId)));
   removeDriveIdFromCachedReport(accountId, driveFileId);
+  bumpScanGeneration(accountId);
 
   try {
     const drive = getDriveClient(accountId);
-    void drive.files
-      .update({
+    void withDriveRetry(() =>
+      drive.files.update({
         fileId: driveFileId,
         requestBody: {
           appProperties: {
@@ -1115,9 +1495,9 @@ export async function removeMissingFile(accountId: string, driveFileId: string):
         },
         supportsAllDrives: false,
       })
-      .catch(() => {
-        // Non-fatal if the file was deleted from Drive entirely
-      });
+    ).catch(() => {
+      // Non-fatal if the file was deleted from Drive entirely
+    });
   } catch {
     // Non-fatal if the account is unavailable
   }
