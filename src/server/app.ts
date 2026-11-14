@@ -20,6 +20,8 @@ import {
   emptyTrash,
   scanAccountDiscrepancies,
   acceptExternalFile,
+  acceptAllExternalFiles,
+  ejectAllExternalFiles,
   ejectFileToDriveRoot,
   removeMissingFile,
   resolvePathConflict,
@@ -1038,6 +1040,56 @@ const routes = app
       try {
         const record = await acceptExternalFile(accountId, driveFileId, targetVirtualPath);
         return c.json(record);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/resolve/accept-all',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.accountId !== 'string') {
+        return c.json({ error: 'accountId required' }, 400);
+      }
+      return { accountId: body.accountId };
+    }),
+    async (c) => {
+      const { accountId } = c.req.valid('json');
+      if (isAccountInSharePool(accountId)) {
+        return c.json(
+          sharePoolReadOnlyError('External change resolution is disabled for Share Pool accounts'),
+          403
+        );
+      }
+      try {
+        const result = await acceptAllExternalFiles(accountId);
+        return c.json(result);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/resolve/eject-all',
+    validator('json', (value, c) => {
+      const body = value as Record<string, unknown>;
+      if (typeof body?.accountId !== 'string') {
+        return c.json({ error: 'accountId required' }, 400);
+      }
+      return { accountId: body.accountId };
+    }),
+    async (c) => {
+      const { accountId } = c.req.valid('json');
+      if (isAccountInSharePool(accountId)) {
+        return c.json(
+          sharePoolReadOnlyError('External change resolution is disabled for Share Pool accounts'),
+          403
+        );
+      }
+      try {
+        const result = await ejectAllExternalFiles(accountId);
+        return c.json(result);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }

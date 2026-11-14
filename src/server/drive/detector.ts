@@ -3,10 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { db, sqlite } from '../db/index.js';
 import { accounts, files, type Account, type FileRecord } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { getDriveClient, resolveRemoteFolderTree, refreshAccountLiveQuota } from './client.js';
+import { getDriveClient, resolveRemoteFolderTree, refreshAccountLiveQuota, resolvePoolDriveFolderName } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
-import { ensureLocalFolderHierarchy, insertFolderRecord, formatFolderId } from './sync.js';
+import {
+  ensureLocalFolderHierarchy,
+  insertFolderRecord,
+  formatFolderId,
+  extractFolderPaths,
+  upsertFileStmt,
+  pendingAppPropertyDriveIds,
+} from './sync.js';
 import { getAvailableCopyPath } from './operations.js';
 
 export type ConflictResolutionAction = 'keep_both' | 'deduplicate' | 'replace_existing' | 'eject';
@@ -17,6 +24,7 @@ export interface ExternalFileDiscrepancy {
   virtualPath: string;
   sizeBytes: number;
   mimeType: string;
+  hash: string | null;
   accountId: string;
   discrepancyType: 'unindexed' | 'modified' | 'over_ceiling';
 }
@@ -55,6 +63,7 @@ export interface MissingFileDiscrepancy {
 
 export interface DiscrepancyReport {
   accountId: string;
+  poolFolderName: string;
   scannedFiles: number;
   conflicts: PathConflictDiscrepancy[];
   unindexed: ExternalFileDiscrepancy[];
@@ -172,6 +181,8 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
           remote.appProperties?.tsubasa_virtual_path || computedPath
         );
         const isOverCeiling = sizeBytes > MAX_SINGLE_FILE_BYTES;
+        const remoteHash =
+          remote.appProperties?.tsubasa_checksum || remote.md5Checksum || remote.sha256Checksum || null;
 
         if (isOverCeiling) {
           overCeiling.push({
@@ -180,6 +191,7 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
             virtualPath,
             sizeBytes,
             mimeType: remote.mimeType || 'application/octet-stream',
+            hash: remoteHash,
             accountId,
             discrepancyType: 'over_ceiling',
           });
@@ -189,8 +201,6 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
         const occupantAtPath = activeFileByPath.get(virtualPath);
         if (occupantAtPath && occupantAtPath.driveFileId !== remote.id) {
           const ownerAcc = accountMap.get(occupantAtPath.accountId);
-          const remoteHash =
-            remote.appProperties?.tsubasa_checksum || remote.md5Checksum || remote.sha256Checksum || null;
           const isExactDuplicate = isExactDuplicateMatch(
             sizeBytes,
             [remote.appProperties?.tsubasa_checksum, remote.md5Checksum, remote.sha256Checksum],
@@ -233,6 +243,7 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
             virtualPath,
             sizeBytes,
             mimeType: remote.mimeType || 'application/octet-stream',
+            hash: remoteHash,
             accountId,
             discrepancyType: 'unindexed',
           });
@@ -243,6 +254,7 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
             virtualPath,
             sizeBytes,
             mimeType: remote.mimeType || 'application/octet-stream',
+            hash: remoteHash,
             accountId,
             discrepancyType: 'modified',
           });
@@ -267,6 +279,7 @@ export async function scanAccountDiscrepancies(accountId: string): Promise<Discr
 
   return {
     accountId,
+    poolFolderName: resolvePoolDriveFolderName(poolId),
     scannedFiles: foundRemoteIds.size,
     conflicts,
     unindexed,
@@ -372,6 +385,148 @@ export async function acceptExternalFile(
     .returning();
 
   return inserted[0];
+}
+
+interface AppPropertyStamp {
+  driveFileId: string;
+  virtualPath: string;
+  fileId: string;
+}
+
+const DRIVE_BATCH_CONCURRENCY = 10;
+
+async function runWithConcurrency<T>(items: T[], worker: (item: T) => Promise<void>): Promise<void> {
+  let nextIndex = 0;
+  const lanes = Array.from({ length: Math.min(DRIVE_BATCH_CONCURRENCY, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      await worker(items[nextIndex++]);
+    }
+  });
+  await Promise.all(lanes);
+}
+
+async function stampAcceptedAppProperties(accountId: string, stamps: AppPropertyStamp[]): Promise<void> {
+  const drive = getDriveClient(accountId);
+  await runWithConcurrency(stamps, async (stamp) => {
+    try {
+      await drive.files.update({
+        fileId: stamp.driveFileId,
+        requestBody: {
+          appProperties: {
+            tsubasa_managed: 'true',
+            tsubasa_virtual_path: stamp.virtualPath,
+            tsubasa_virtual_id: stamp.fileId,
+          },
+        },
+        supportsAllDrives: false,
+      });
+    } catch (err) {
+      console.warn(`Failed to stamp appProperties on ${stamp.driveFileId} (${accountId}):`, err);
+    } finally {
+      pendingAppPropertyDriveIds.delete(stamp.driveFileId);
+    }
+  });
+}
+
+/**
+ * Ejects every unindexed and modified file under the account's pool folder to the Drive root.
+ * Awaits the Drive moves so a follow-up scan no longer sees the files inside the pool folder.
+ */
+export async function ejectAllExternalFiles(
+  accountId: string
+): Promise<{ ejectedCount: number; failedCount: number }> {
+  const report = await scanAccountDiscrepancies(accountId);
+  const items = [...report.unindexed, ...report.modified];
+  let failedCount = 0;
+
+  await runWithConcurrency(items, async (item) => {
+    try {
+      await ejectFileToDriveRoot(accountId, item.driveFileId);
+    } catch (err) {
+      failedCount++;
+      console.warn(`Failed to eject ${item.driveFileId} (${accountId}):`, err);
+    }
+  });
+
+  return { ejectedCount: items.length - failedCount, failedCount };
+}
+
+/**
+ * Accepts every unindexed and modified file under the account's pool folder in one pass.
+ * SQLite is updated in a single transaction so the UI reflects the result immediately;
+ * Drive appProperties are stamped afterwards in the background.
+ */
+export async function acceptAllExternalFiles(accountId: string): Promise<{ acceptedCount: number }> {
+  const report = await scanAccountDiscrepancies(accountId);
+  const items = [...report.unindexed, ...report.modified];
+  if (items.length === 0) {
+    return { acceptedCount: 0 };
+  }
+
+  const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
+  const poolId = account?.poolId ?? 1;
+
+  const selectIdByDriveIdStmt = sqlite.prepare(
+    'SELECT id FROM files WHERE drive_file_id = ? AND account_id = ? LIMIT 1'
+  );
+  const deleteByDriveIdStmt = sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?');
+  const moveAsideTrashedStmt = sqlite.prepare(
+    'UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1'
+  );
+  const selectIdOwnerStmt = sqlite.prepare('SELECT drive_file_id, account_id FROM files WHERE id = ? LIMIT 1');
+
+  const stamps: AppPropertyStamp[] = [];
+  const ensuredFolders = new Set<string>();
+
+  const applyAccept = sqlite.transaction(() => {
+    const trashSuffix = `.trashed-${Date.now()}`;
+    for (const item of items) {
+      const virtualPath = item.virtualPath;
+
+      const folderPaths = extractFolderPaths(virtualPath);
+      for (let i = folderPaths.length - 1; i >= 0; i--) {
+        if (ensuredFolders.has(folderPaths[i])) continue;
+        insertFolderRecord(folderPaths[i], poolId);
+        ensuredFolders.add(folderPaths[i]);
+      }
+
+      const existing = selectIdByDriveIdStmt.get(item.driveFileId, accountId) as { id: string } | undefined;
+      deleteByDriveIdStmt.run(item.driveFileId, accountId);
+      moveAsideTrashedStmt.run(`${virtualPath}${trashSuffix}`, poolId, virtualPath);
+
+      let fileId = existing?.id ?? item.driveFileId;
+      const owner = selectIdOwnerStmt.get(fileId) as { drive_file_id: string; account_id: string } | undefined;
+      if (owner && (owner.drive_file_id !== item.driveFileId || owner.account_id !== accountId)) {
+        fileId = randomUUID();
+      }
+
+      const parentDir = path.posix.dirname(virtualPath);
+      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+
+      upsertFileStmt.run(
+        fileId,
+        poolId,
+        virtualPath,
+        path.posix.basename(virtualPath),
+        item.sizeBytes,
+        item.mimeType,
+        item.hash,
+        accountId,
+        item.driveFileId,
+        folderId,
+        0
+      );
+
+      pendingAppPropertyDriveIds.add(item.driveFileId);
+      stamps.push({ driveFileId: item.driveFileId, virtualPath, fileId });
+    }
+  });
+
+  applyAccept();
+
+  void stampAcceptedAppProperties(accountId, stamps);
+
+  return { acceptedCount: items.length };
 }
 
 export async function resolvePathConflict(

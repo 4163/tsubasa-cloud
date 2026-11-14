@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown } from './Icons.js';
+import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { useDialogLock } from '../utils/useBeforeUnload.js';
 
@@ -12,6 +12,7 @@ export interface ExternalDiscrepancyItem {
   virtualPath: string;
   sizeBytes: number;
   mimeType: string;
+  hash: string | null;
   accountId: string;
   discrepancyType: 'unindexed' | 'modified' | 'over_ceiling';
 }
@@ -43,6 +44,7 @@ export interface PathConflictItem {
 
 export interface DiscrepancyReport {
   accountId: string;
+  poolFolderName: string;
   scannedFiles: number;
   conflicts: PathConflictItem[];
   unindexed: ExternalDiscrepancyItem[];
@@ -329,6 +331,11 @@ const styles = stylex.create({
     paddingRight: spacing.space5,
     marginTop: spacing.space2,
   },
+  poolFolderIcon: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    color: colors.poolGold,
+  },
   conflictBadgeExact: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -438,6 +445,14 @@ const styles = stylex.create({
     color: colors.secondaryText,
     lineHeight: '1.4',
     margin: 0,
+  },
+  confirmPromptText: {
+    fontSize: typography.fontSizeMeta,
+    fontWeight: '500',
+    color: colors.primaryText,
+    lineHeight: '1.4',
+    margin: 0,
+    fontVariantNumeric: 'tabular-nums',
   },
   actionsRow: {
     display: 'flex',
@@ -649,6 +664,8 @@ export function ExternalChangesDrawer({
   const [isScanning, setIsScanning] = useState(false);
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
+  const [showIndividualFiles, setShowIndividualFiles] = useState(false);
+  const [confirmingEject, setConfirmingEject] = useState(false);
 
   const activeScanRef = useRef<string | null>(null);
 
@@ -673,6 +690,7 @@ export function ExternalChangesDrawer({
     setIsScanning(true);
     setReport(null);
     setStatusNotice(null);
+    setConfirmingEject(false);
 
     try {
       const res = await client.api.sync['external-changes'][':accountId'].$get({
@@ -704,6 +722,8 @@ export function ExternalChangesDrawer({
 
   useEffect(() => {
     if (isOpen && selectedAccount) {
+      setShowIndividualFiles(false);
+      setConfirmingEject(false);
       scanAccount(selectedAccount);
     }
     return () => {
@@ -728,6 +748,33 @@ export function ExternalChangesDrawer({
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Failed to accept file');
+      }
+    } catch (err) {
+      setStatusNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActiveActionId(null);
+    }
+  };
+
+  const handleBulkResolve = async (action: 'accept-all' | 'eject-all') => {
+    if (!selectedAccount) return;
+    setActiveActionId(action);
+    setStatusNotice(null);
+    try {
+      const endpoint = client.api.sync.resolve[action];
+      const res = await endpoint.$post({ json: { accountId: selectedAccount } });
+
+      if (res.ok) {
+        const data = await res.json();
+        await scanAccount(selectedAccount);
+        await onResolved();
+        if ('failedCount' in data && data.failedCount > 0) {
+          setStatusNotice(`${data.failedCount.toLocaleString()} files could not be ejected. Check the server log.`);
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        const fallback = action === 'accept-all' ? 'Failed to accept files' : 'Failed to eject files';
+        setStatusNotice(('error' in err ? err.error : null) || fallback);
       }
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));
@@ -879,6 +926,24 @@ export function ExternalChangesDrawer({
   if (!isOpen) return null;
 
   const exactDuplicates = (report?.conflicts ?? []).filter((c) => c.isExactDuplicate);
+
+  const acceptableItems = [...(report?.unindexed ?? []), ...(report?.modified ?? [])];
+  const showPoolSummary = acceptableItems.length > 1;
+  const showIndividualAcceptable = !showPoolSummary || showIndividualFiles;
+  let acceptableBytes = 0;
+  const acceptableFolders = new Set<string>();
+  for (const item of acceptableItems) {
+    acceptableBytes += item.sizeBytes;
+    const parentDir = item.virtualPath.slice(0, item.virtualPath.lastIndexOf('/'));
+    if (parentDir) acceptableFolders.add(parentDir);
+  }
+  const poolSummaryParts = [
+    report?.unindexed.length ? `${report.unindexed.length.toLocaleString()} new` : null,
+    report?.modified.length ? `${report.modified.length.toLocaleString()} updated` : null,
+    acceptableFolders.size > 0
+      ? `${acceptableFolders.size.toLocaleString()} ${acceptableFolders.size === 1 ? 'folder' : 'folders'}`
+      : null,
+  ].filter(Boolean);
 
   const totalDiscrepancies =
     (report?.conflicts?.length ?? 0) +
@@ -1172,8 +1237,92 @@ export function ExternalChangesDrawer({
             </div>
           )}
 
+          {/* Pool folder summary: accept every external change in one action */}
+          {report && showPoolSummary && (
+            <div>
+              <h3 {...stylex.props(styles.sectionTitle)}>Files added or changed in Google Drive</h3>
+              <div {...stylex.props(styles.cardList)}>
+                <div {...stylex.props(styles.card)}>
+                  <div {...stylex.props(styles.fileHeaderRow)}>
+                    <div {...stylex.props(styles.fileTitleGroup)}>
+                      <span {...stylex.props(styles.poolFolderIcon)}>
+                        <IconFolderFilled size={18} />
+                      </span>
+                      <div {...stylex.props(styles.fileTitleCol)}>
+                        <span {...stylex.props(styles.fileName)} title={report.poolFolderName}>
+                          {report.poolFolderName}
+                        </span>
+                        <span {...stylex.props(styles.fileVirtualPath)}>{poolSummaryParts.join(' · ')}</span>
+                      </div>
+                    </div>
+                    <span {...stylex.props(styles.fileMeta)}>{formatBytes(acceptableBytes)}</span>
+                  </div>
+
+                  {confirmingEject ? (
+                    <>
+                      <p {...stylex.props(styles.confirmPromptText)}>
+                        Move {acceptableItems.length.toLocaleString()} files ({formatBytes(acceptableBytes)}) out of{' '}
+                        {report.poolFolderName} to Drive root? Files stay in Google Drive.
+                      </p>
+                      <div {...stylex.props(styles.actionsRow)}>
+                        <button
+                          type="button"
+                          {...stylex.props(styles.btnDanger)}
+                          onClick={() => handleBulkResolve('eject-all')}
+                          disabled={isLocked}
+                        >
+                          {activeActionId === 'eject-all'
+                            ? 'Ejecting...'
+                            : `Eject ${acceptableItems.length.toLocaleString()} files`}
+                        </button>
+                        <button
+                          type="button"
+                          {...stylex.props(styles.btnSecondary)}
+                          onClick={() => setConfirmingEject(false)}
+                          disabled={isLocked}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div {...stylex.props(styles.actionsRow)}>
+                      <button
+                        type="button"
+                        {...stylex.props(styles.btnPrimary)}
+                        onClick={() => handleBulkResolve('accept-all')}
+                        disabled={isLocked}
+                      >
+                        {activeActionId === 'accept-all'
+                          ? 'Accepting...'
+                          : `Accept all ${acceptableItems.length.toLocaleString()} files`}
+                      </button>
+                      <button
+                        type="button"
+                        {...stylex.props(styles.btnSecondary)}
+                        onClick={() => setConfirmingEject(true)}
+                        disabled={isLocked}
+                      >
+                        Eject all to Drive root
+                      </button>
+                      <button
+                        type="button"
+                        {...stylex.props(styles.btnSecondary)}
+                        onClick={() => setShowIndividualFiles((prev) => !prev)}
+                        disabled={isLocked}
+                        aria-expanded={showIndividualFiles}
+                      >
+                        {showIndividualFiles ? 'Hide individual files' : 'Review individually'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Unindexed external additions */}
-          {report?.unindexed && report.unindexed.length > 0 && (
+          {showIndividualAcceptable && report?.unindexed && report.unindexed.length > 0 && (
             <div>
               <h3 {...stylex.props(styles.sectionTitle)}>
                 Unindexed files added in Google Drive
@@ -1224,7 +1373,7 @@ export function ExternalChangesDrawer({
           )}
 
           {/* Modified files */}
-          {report?.modified && report.modified.length > 0 && (
+          {showIndividualAcceptable && report?.modified && report.modified.length > 0 && (
             <div>
               <h3 {...stylex.props(styles.sectionTitle)}>Modified files</h3>
               <div {...stylex.props(styles.cardList)}>

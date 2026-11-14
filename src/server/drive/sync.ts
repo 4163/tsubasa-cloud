@@ -8,6 +8,10 @@ export function formatFolderId(poolId: number, virtualPath: string): string {
   return `${poolId}:${virtualPath}`;
 }
 
+// Drive file IDs accepted locally whose Tsubasa appProperties are still being stamped in the background.
+// Cold reconciliation lists only stamped files, so it must not prune these rows mid-flight.
+export const pendingAppPropertyDriveIds = new Set<string>();
+
 export interface ColdSyncReport {
   accountId: string;
   filesIndexed: number;
@@ -311,7 +315,7 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       indexedActiveBytes = 0;
 
       for (const lf of localAccountFiles) {
-        if (!discoveredDriveIds.has(lf.driveFileId)) {
+        if (!discoveredDriveIds.has(lf.driveFileId) && !pendingAppPropertyDriveIds.has(lf.driveFileId)) {
           deleteFileStmt.run(lf.driveFileId, accountId);
         }
       }
