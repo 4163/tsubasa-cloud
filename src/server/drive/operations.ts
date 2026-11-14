@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { db, sqlite } from '../db/index.js';
+import { db, sqlite, buildDirectoryPrefixBounds } from '../db/index.js';
 import { accounts, files, folders, type FileRecord, type Folder } from '../db/schema.js';
-import { eq, or, like, and, sql } from 'drizzle-orm';
+import { eq, or, and, gte, lt, sql } from 'drizzle-orm';
 import { getDriveClient, getAccountRootFolderId, resolveRemoteFolderTree } from './client.js';
 import { copyDriveFileCrossAccount } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath, clearRemoteFolderCache } from './mirror.js';
@@ -413,11 +413,12 @@ export async function moveItems(
         continue;
       }
 
+      const oldFolderBounds = buildDirectoryPrefixBounds(oldFolderPath);
       const allDescendantFiles = sqlite
         .prepare(
-          'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?)'
+          'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
         )
-        .all(poolId, `${oldFolderPath}/%`, formatFolderId(poolId, oldFolderPath)) as Array<{
+        .all(poolId, oldFolderBounds.lower, oldFolderBounds.upper, formatFolderId(poolId, oldFolderPath)) as Array<{
           id: string;
           virtual_path: string;
           name: string;
@@ -439,8 +440,8 @@ export async function moveItems(
 
         // 2. Move descendant folders
         const allDescendantFolders = sqlite
-          .prepare('SELECT id, virtual_path, name FROM folders WHERE pool_id = ? AND virtual_path LIKE ?')
-          .all(poolId, `${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string; name: string }>;
+          .prepare('SELECT id, virtual_path, name FROM folders WHERE pool_id = ? AND virtual_path >= ? AND virtual_path < ?')
+          .all(poolId, oldFolderBounds.lower, oldFolderBounds.upper) as Array<{ id: string; virtual_path: string; name: string }>;
 
         for (const sub of allDescendantFolders) {
           const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
@@ -711,10 +712,12 @@ export async function copyItems(
         const destVirtualPath = await getAvailableCopyPath(destFolder, folder.name, 'folder', poolId);
         ensureLocalFolderHierarchy(destVirtualPath, poolId);
 
+        const folderBounds = buildDirectoryPrefixBounds(folder.virtualPath);
         const subFiles = await db.query.files.findMany({
           where: and(
             eq(files.poolId, poolId),
-            like(files.virtualPath, `${folder.virtualPath}/%`),
+            gte(files.virtualPath, folderBounds.lower),
+            lt(files.virtualPath, folderBounds.upper),
             eq(files.isTrashed, false)
           ),
         });
@@ -863,12 +866,14 @@ export async function renameItem(
     });
 
     if (existing && existing.id !== folder.id) {
+      const newFolderBounds = buildDirectoryPrefixBounds(newFolderPath);
+      const targetFolderId = formatFolderId(poolId, newFolderPath);
       const hasFiles = sqlite
-        .prepare('SELECT 1 FROM files WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?) LIMIT 1')
-        .get(poolId, `${newFolderPath}/%`, formatFolderId(poolId, newFolderPath));
+        .prepare('SELECT 1 FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?) LIMIT 1')
+        .get(poolId, newFolderBounds.lower, newFolderBounds.upper, targetFolderId);
       const hasSubfolders = sqlite
-        .prepare('SELECT 1 FROM folders WHERE pool_id = ? AND virtual_path LIKE ? AND id != ? LIMIT 1')
-        .get(poolId, `${newFolderPath}/%`, formatFolderId(poolId, newFolderPath));
+        .prepare('SELECT 1 FROM folders WHERE pool_id = ? AND virtual_path >= ? AND virtual_path < ? AND id != ? LIMIT 1')
+        .get(poolId, newFolderBounds.lower, newFolderBounds.upper, targetFolderId);
 
       if (!hasFiles && !hasSubfolders) {
         sqlite.prepare('DELETE FROM folders WHERE id = ?').run(existing.id);
@@ -877,11 +882,12 @@ export async function renameItem(
       }
     }
 
+    const oldFolderBounds = buildDirectoryPrefixBounds(oldFolderPath);
     const allDescendantFiles = sqlite
       .prepare(
-        'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?)'
+        'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
       )
-      .all(poolId, `${oldFolderPath}/%`, formatFolderId(poolId, oldFolderPath)) as Array<{
+      .all(poolId, oldFolderBounds.lower, oldFolderBounds.upper, formatFolderId(poolId, oldFolderPath)) as Array<{
         id: string;
         virtual_path: string;
         name: string;
@@ -903,8 +909,8 @@ export async function renameItem(
 
       // 2. Rename descendant folders
       const allDescendantFolders = sqlite
-        .prepare('SELECT id, virtual_path FROM folders WHERE pool_id = ? AND virtual_path LIKE ?')
-        .all(poolId, `${oldFolderPath}/%`) as Array<{ id: string; virtual_path: string }>;
+        .prepare('SELECT id, virtual_path FROM folders WHERE pool_id = ? AND virtual_path >= ? AND virtual_path < ?')
+        .all(poolId, oldFolderBounds.lower, oldFolderBounds.upper) as Array<{ id: string; virtual_path: string }>;
 
       for (const sub of allDescendantFolders) {
         const subNewPath = newFolderPath + sub.virtual_path.slice(oldFolderPath.length);
@@ -1007,12 +1013,13 @@ export async function trashFolder(
 ): Promise<{ trashedFilesCount: number }> {
   const normPath = normalizeVirtualPath(virtualPath);
   const folderId = formatFolderId(poolId, normPath);
+  const { lower, upper } = buildDirectoryPrefixBounds(normPath);
 
   const descendantFiles = await db.query.files.findMany({
     where: and(
       eq(files.poolId, poolId),
       or(
-        like(files.virtualPath, `${normPath}/%`),
+        and(gte(files.virtualPath, lower), lt(files.virtualPath, upper)),
         eq(files.folderId, folderId)
       ),
       eq(files.isTrashed, false)
@@ -1022,13 +1029,13 @@ export async function trashFolder(
   sqlite.transaction(() => {
     sqlite
       .prepare(
-        'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE pool_id = ? AND (virtual_path LIKE ? OR folder_id = ?)'
+        'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
       )
-      .run(poolId, `${normPath}/%`, folderId);
+      .run(poolId, lower, upper, folderId);
 
     sqlite
-      .prepare('DELETE FROM folders WHERE pool_id = ? AND (virtual_path = ? OR virtual_path LIKE ?)')
-      .run(poolId, normPath, `${normPath}/%`);
+      .prepare('DELETE FROM folders WHERE pool_id = ? AND (virtual_path = ? OR (virtual_path >= ? AND virtual_path < ?))')
+      .run(poolId, normPath, lower, upper);
 
     sqlite
       .prepare("DELETE FROM share_links WHERE pool_id = ? AND ('/' || batch_folder_name) = ?")

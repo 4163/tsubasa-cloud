@@ -13,7 +13,8 @@ import {
   InsufficientStorageError,
   type AccountTransferStats,
 } from '../storage/index.js';
-import { findFolderAffinityAccounts } from '../storage/placement.js';
+import { getTransferStatsByAccountMap } from '../storage/quota.js';
+import { buildPoolFolderAffinityMap } from '../storage/placement.js';
 
 export class RebalanceValidationError extends Error {
   constructor(message: string) {
@@ -278,21 +279,14 @@ export async function executeAutoRebalance(
   );
 
   // Pre-fetch initial headroom and 24h transfer quotas for all target candidate accounts
-  const targetStates: Array<{
-    id: string;
-    headroomBytes: number;
-    remainingDailyBytes: number;
-  }> = [];
-
-  for (const cand of targetCandidates) {
-    const headroom = calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes);
-    const transferStats = await getAccountTransferStats(cand.id);
-    targetStates.push({
-      id: cand.id,
-      headroomBytes: headroom,
-      remainingDailyBytes: transferStats.remainingUploadBytes24h,
-    });
-  }
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    targetCandidates.map((cand) => cand.id)
+  );
+  const targetStates = targetCandidates.map((cand) => ({
+    id: cand.id,
+    headroomBytes: calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes),
+    remainingDailyBytes: transferStatsByAccount.get(cand.id)!.remainingUploadBytes24h,
+  }));
 
   let remainingExcess = plan.excessBytes;
   const results: RebalanceOperationResult[] = [];
@@ -404,17 +398,19 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     transferStats: AccountTransferStats;
   }
 
-  const targetStates: TargetState[] = [];
-  for (const cand of candidateAccounts) {
-    const headroom = calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes);
-    const transferStats = await getAccountTransferStats(cand.id, nowMs);
-    targetStates.push({
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    candidateAccounts.map((cand) => cand.id),
+    nowMs
+  );
+  const targetStates: TargetState[] = candidateAccounts.map((cand) => {
+    const transferStats = transferStatsByAccount.get(cand.id)!;
+    return {
       account: cand,
-      headroomBytes: headroom,
+      headroomBytes: calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes),
       remainingDailyBytes: transferStats.remainingUploadBytes24h,
       transferStats,
-    });
-  }
+    };
+  });
 
   const totalBytesToMove = accountFiles.reduce((sum, f) => sum + f.sizeBytes, 0);
   const totalAvailableHeadroom = targetStates.reduce((sum, t) => sum + t.headroomBytes, 0);
@@ -447,6 +443,7 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
 
   const plan: Array<{ file: FileRecord; targetAccountId: string }> = [];
   const sortedFiles = [...accountFiles].sort((a, b) => b.sizeBytes - a.sizeBytes);
+  const affinityMap = await buildPoolFolderAffinityMap(sourceAccount.poolId);
 
   for (const file of sortedFiles) {
     const normalizedPath = normalizeVirtualPath(file.virtualPath);
@@ -478,7 +475,7 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
       );
     }
 
-    const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath, sourceAccount.poolId);
+    const affinityAccountIds = affinityMap.getAffinityAccounts(normalizedPath);
     let chosenTarget = eligible.find((t) => affinityAccountIds.includes(t.account.id));
 
     if (!chosenTarget) {
@@ -492,6 +489,8 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
         }
       }
     }
+
+    affinityMap.recordAssignment(normalizedPath, chosenTarget.account.id);
 
     const curHeadroom = simulatedHeadrooms.get(chosenTarget.account.id) ?? 0;
     const curBudget = simulatedBudgets.get(chosenTarget.account.id) ?? 0;

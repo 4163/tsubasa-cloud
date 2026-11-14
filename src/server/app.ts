@@ -142,15 +142,18 @@ async function getAccountsList(poolId?: number) {
   const dbAccounts = await db.select().from(accounts);
   const dbMap = new Map(dbAccounts.map((a) => [a.id, a]));
 
-  const fileCounts = sqlite
-    .prepare('SELECT account_id, count(*) as c FROM files GROUP BY account_id')
-    .all() as Array<{ account_id: string; c: number }>;
-  const fileCountMap = new Map(fileCounts.map((r) => [r.account_id, r.c]));
+  const accountsWithFiles = new Set(
+    (
+      sqlite
+        .prepare('SELECT DISTINCT account_id FROM files')
+        .all() as Array<{ account_id: string }>
+    ).map((row) => row.account_id)
+  );
 
   const list = records.map((r) => {
     const dbAcc = dbMap.get(r.config.accountId);
     const accountPoolId = dbAcc?.poolId ?? authPool.getPreferredPool(r.config.accountId) ?? 1;
-    const canSwitchPool = (fileCountMap.get(r.config.accountId) ?? 0) === 0;
+    const canSwitchPool = !accountsWithFiles.has(r.config.accountId);
 
     return {
       accountId: r.config.accountId,

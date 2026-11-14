@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { db, sqlite } from '../db/index.js';
+import { db, sqlite, buildDirectoryPrefixBounds } from '../db/index.js';
 import { accounts, files, folders, shareLinks } from '../db/schema.js';
-import { eq, and, or, sql } from 'drizzle-orm';
+import { eq, and, or, gte, lt, sql } from 'drizzle-orm';
 import { authPool } from './auth.js';
 import {
   getDriveClient,
@@ -171,10 +171,6 @@ function findSharePoolRow(): SharePoolRow | null {
     .prepare('SELECT id, name, drive_folder_name as driveFolderName FROM pools WHERE is_share_pool = 1 LIMIT 1')
     .get() as SharePoolRow | undefined;
   return row ?? null;
-}
-
-function escapeLikePrefix(prefix: string): string {
-  return prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
 function computeLowestCommonParentDir(paths: string[]): string {
@@ -421,8 +417,7 @@ export async function resolveShareTargets(
       targetVirtualPath: targetFolderPath,
     });
 
-    const prefix = sourceFolderPath === '/' ? '/' : `${sourceFolderPath}/`;
-    const escapedPrefix = escapeLikePrefix(prefix);
+    const { lower, upper } = buildDirectoryPrefixBounds(sourceFolderPath);
 
     const matchingFolders = await db
       .select()
@@ -430,7 +425,10 @@ export async function resolveShareTargets(
       .where(
         and(
           eq(folders.poolId, sourcePoolId),
-          sql`(${folders.virtualPath} = ${sourceFolderPath} OR ${folders.virtualPath} LIKE ${escapedPrefix + '%'} ESCAPE '\\')`
+          or(
+            eq(folders.virtualPath, sourceFolderPath),
+            and(gte(folders.virtualPath, lower), lt(folders.virtualPath, upper))
+          )
         )
       );
 
@@ -457,7 +455,10 @@ export async function resolveShareTargets(
         and(
           eq(files.poolId, sourcePoolId),
           eq(files.isTrashed, false),
-          sql`(${files.virtualPath} = ${sourceFolderPath} OR ${files.virtualPath} LIKE ${escapedPrefix + '%'} ESCAPE '\\')`
+          or(
+            eq(files.virtualPath, sourceFolderPath),
+            and(gte(files.virtualPath, lower), lt(files.virtualPath, upper))
+          )
         )
       );
 
