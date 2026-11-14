@@ -942,38 +942,31 @@ export async function renameItem(
   }
 }
 
-export async function trashFolder(
-  virtualPath: string,
-  poolId = 1
-): Promise<{ trashedFilesCount: number }> {
-  const normPath = normalizeVirtualPath(virtualPath);
-  const folderId = formatFolderId(poolId, normPath);
-
-  const descendantFiles = await db.query.files.findMany({
-    where: and(
-      eq(files.poolId, poolId),
-      or(
-        like(files.virtualPath, `${normPath}/%`),
-        eq(files.folderId, folderId)
-      ),
-      eq(files.isTrashed, false)
-    ),
-  });
-
-  for (const f of descendantFiles) {
-    try {
-      const drive = getDriveClient(f.accountId);
-      await drive.files.update({
-        fileId: f.driveFileId,
-        requestBody: { trashed: true },
-        supportsAllDrives: false,
-      });
-    } catch (err) {
-      console.warn(`Drive trash file warning for ${f.id}:`, err);
+async function syncRemoteFolderTrash(
+  normPath: string,
+  descendantFiles: Array<{ id: string; accountId: string; driveFileId: string }>,
+  poolId: number
+): Promise<void> {
+  const CONCURRENCY = 10;
+  let fileIndex = 0;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, descendantFiles.length) }, async () => {
+    while (fileIndex < descendantFiles.length) {
+      const f = descendantFiles[fileIndex++];
+      if (!f || !f.driveFileId || !f.accountId) continue;
+      try {
+        const drive = getDriveClient(f.accountId);
+        await drive.files.update({
+          fileId: f.driveFileId,
+          requestBody: { trashed: true },
+          supportsAllDrives: false,
+        });
+      } catch (err) {
+        console.warn(`Drive trash file warning for ${f.id}:`, err);
+      }
     }
-  }
+  });
+  await Promise.all(workers);
 
-  // Also trash remote folders in Google Drive so detector or delta sync does not recreate them
   const allAccounts = await db.query.accounts.findMany({
     where: eq(accounts.poolId, poolId),
   });
@@ -1006,6 +999,25 @@ export async function trashFolder(
     })
   );
   clearRemoteFolderCache();
+}
+
+export async function trashFolder(
+  virtualPath: string,
+  poolId = 1
+): Promise<{ trashedFilesCount: number }> {
+  const normPath = normalizeVirtualPath(virtualPath);
+  const folderId = formatFolderId(poolId, normPath);
+
+  const descendantFiles = await db.query.files.findMany({
+    where: and(
+      eq(files.poolId, poolId),
+      or(
+        like(files.virtualPath, `${normPath}/%`),
+        eq(files.folderId, folderId)
+      ),
+      eq(files.isTrashed, false)
+    ),
+  });
 
   sqlite.transaction(() => {
     sqlite
@@ -1022,6 +1034,10 @@ export async function trashFolder(
       .prepare("DELETE FROM share_links WHERE pool_id = ? AND ('/' || batch_folder_name) = ?")
       .run(poolId, normPath);
   })();
+
+  void syncRemoteFolderTrash(normPath, descendantFiles, poolId).catch((err) => {
+    console.error('Background syncRemoteFolderTrash failed:', err);
+  });
 
   return { trashedFilesCount: descendantFiles.length };
 }

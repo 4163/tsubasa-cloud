@@ -16,6 +16,8 @@ export * from './detector.js';
 export * from './rebalance.js';
 export * from './operations.js';
 
+const SYNC_ACCOUNT_CONCURRENCY = 5;
+
 export async function syncAllAccounts(poolId = 1): Promise<{
   hydrated: string[];
   synced: string[];
@@ -26,50 +28,55 @@ export async function syncAllAccounts(poolId = 1): Promise<{
   }
 
   authPool.scan();
-  const records = authPool.getAll();
+  const records = authPool.getAll().filter((r) => r.authorized);
   const hydrated: string[] = [];
   const synced: string[] = [];
   const errors: Array<{ accountId: string; error: string }> = [];
 
-  for (const record of records) {
-    if (!record.authorized) {
-      continue;
-    }
+  let nextIndex = 0;
+  const workerCount = Math.min(SYNC_ACCOUNT_CONCURRENCY, records.length);
 
-    const accountId = record.config.accountId;
-    const existingAccount = await db.query.accounts.findFirst({
-      where: eq(accounts.id, accountId),
-    });
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < records.length) {
+        const record = records[nextIndex++];
+        const accountId = record.config.accountId;
 
-    if (existingAccount) {
-      if (isSharePoolId(existingAccount.poolId) || existingAccount.poolId !== poolId) {
-        continue;
+        const existingAccount = await db.query.accounts.findFirst({
+          where: eq(accounts.id, accountId),
+        });
+
+        if (existingAccount) {
+          if (isSharePoolId(existingAccount.poolId) || existingAccount.poolId !== poolId) {
+            continue;
+          }
+        } else {
+          const preferredPool = authPool.hasPreferredPool(accountId)
+            ? authPool.getPreferredPool(accountId)
+            : record.config.preferredPoolId;
+          if (preferredPool !== undefined && (isSharePoolId(preferredPool) || preferredPool !== poolId)) {
+            continue;
+          }
+        }
+
+        try {
+          const hydRes = await hydrateAccount(accountId, existingAccount ? undefined : poolId);
+          if (isSharePoolId(hydRes.poolId) || hydRes.poolId !== poolId) {
+            continue;
+          }
+
+          hydrated.push(hydRes.accountId);
+          await runIncrementalSync(hydRes.accountId);
+          synced.push(hydRes.accountId);
+        } catch (err) {
+          errors.push({
+            accountId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
-    } else {
-      const preferredPool = authPool.hasPreferredPool(accountId)
-        ? authPool.getPreferredPool(accountId)
-        : record.config.preferredPoolId;
-      if (preferredPool !== undefined && (isSharePoolId(preferredPool) || preferredPool !== poolId)) {
-        continue;
-      }
-    }
-
-    try {
-      const hydRes = await hydrateAccount(accountId, existingAccount ? undefined : poolId);
-      if (isSharePoolId(hydRes.poolId) || hydRes.poolId !== poolId) {
-        continue;
-      }
-
-      hydrated.push(hydRes.accountId);
-      await runIncrementalSync(hydRes.accountId);
-      synced.push(hydRes.accountId);
-    } catch (err) {
-      errors.push({
-        accountId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+    })
+  );
 
   return { hydrated, synced, errors };
 }

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { db } from '../db/index.js';
+import { db, sqlite } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import { authPool } from './auth.js';
@@ -379,17 +379,6 @@ export async function trashFile(fileId: string): Promise<FileRecord> {
     throw new Error(`File ${fileId} not found`);
   }
 
-  try {
-    const drive = getDriveClient(file.accountId);
-    await drive.files.update({
-      fileId: file.driveFileId,
-      requestBody: { trashed: true },
-      supportsAllDrives: false,
-    });
-  } catch (err) {
-    console.warn(`Drive trash file warning for ${file.id}:`, err);
-  }
-
   const updated = await db
     .update(files)
     .set({
@@ -399,6 +388,17 @@ export async function trashFile(fileId: string): Promise<FileRecord> {
     })
     .where(eq(files.id, fileId))
     .returning();
+
+  void (async () => {
+    const drive = getDriveClient(file.accountId);
+    await drive.files.update({
+      fileId: file.driveFileId,
+      requestBody: { trashed: true },
+      supportsAllDrives: false,
+    });
+  })().catch((err) => {
+    console.warn(`Background Drive trash file warning for ${file.id}:`, err);
+  });
 
   return updated[0];
 }
@@ -410,17 +410,6 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
 
   if (!file) {
     throw new Error(`File ${fileId} not found`);
-  }
-
-  try {
-    const drive = getDriveClient(file.accountId);
-    await drive.files.update({
-      fileId: file.driveFileId,
-      requestBody: { trashed: false },
-      supportsAllDrives: false,
-    });
-  } catch (err) {
-    console.warn(`Drive restore file warning for ${file.id}:`, err);
   }
 
   ensureLocalFolderHierarchy(file.virtualPath, file.poolId);
@@ -437,6 +426,17 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
     })
     .where(eq(files.id, fileId))
     .returning();
+
+  void (async () => {
+    const drive = getDriveClient(file.accountId);
+    await drive.files.update({
+      fileId: file.driveFileId,
+      requestBody: { trashed: false },
+      supportsAllDrives: false,
+    });
+  })().catch((err) => {
+    console.warn(`Background Drive restore file warning for ${file.id}:`, err);
+  });
 
   return updated[0];
 }
@@ -465,6 +465,8 @@ export async function purgeFile(fileId: string): Promise<FileRecord> {
   return file;
 }
 
+const EMPTY_TRASH_CONCURRENCY = 10;
+
 export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number; bytesReclaimed: number }> {
   const trashedFiles = await db.query.files.findMany({
     where:
@@ -473,30 +475,53 @@ export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number
         : eq(files.isTrashed, true),
   });
 
-  let filesPurged = 0;
-  let bytesReclaimed = 0;
-
-  for (const f of trashedFiles) {
-    try {
-      await deleteDriveFileIgnoreNotFound(f.accountId, f.driveFileId);
-
-      await db.delete(files).where(eq(files.id, f.id));
-
-      await db
-        .update(accounts)
-        .set({
-          quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${f.sizeBytes})`,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, f.accountId));
-
-      filesPurged++;
-      bytesReclaimed += f.sizeBytes;
-    } catch (err) {
-      console.error(`Failed to purge local file ${f.id}:`, err);
-    }
+  if (trashedFiles.length === 0) {
+    return { filesPurged: 0, bytesReclaimed: 0 };
   }
 
-  return { filesPurged, bytesReclaimed };
+  const deletedFiles: FileRecord[] = [];
+  let nextIndex = 0;
+  const workerCount = Math.min(EMPTY_TRASH_CONCURRENCY, trashedFiles.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < trashedFiles.length) {
+        const f = trashedFiles[nextIndex++];
+        try {
+          await deleteDriveFileIgnoreNotFound(f.accountId, f.driveFileId);
+          deletedFiles.push(f);
+        } catch (err) {
+          console.error(`Failed to purge remote file ${f.id}:`, err);
+        }
+      }
+    })
+  );
+
+  if (deletedFiles.length === 0) {
+    return { filesPurged: 0, bytesReclaimed: 0 };
+  }
+
+  const bytesByAccount = new Map<string, number>();
+  let bytesReclaimed = 0;
+  for (const f of deletedFiles) {
+    bytesReclaimed += f.sizeBytes;
+    bytesByAccount.set(f.accountId, (bytesByAccount.get(f.accountId) ?? 0) + f.sizeBytes);
+  }
+
+  sqlite.transaction(() => {
+    const deleteFileStmt = sqlite.prepare('DELETE FROM files WHERE id = ?');
+    for (const f of deletedFiles) {
+      deleteFileStmt.run(f.id);
+    }
+
+    const decrementQuotaStmt = sqlite.prepare(
+      'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
+    );
+    for (const [accountId, bytes] of bytesByAccount) {
+      decrementQuotaStmt.run(bytes, accountId);
+    }
+  })();
+
+  return { filesPurged: deletedFiles.length, bytesReclaimed };
 }
 

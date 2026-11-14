@@ -67,6 +67,7 @@ const SCOPES = [
 class AuthPool {
   private pool = new Map<string, AccountAuthRecord>();
   private preferredPools = new Map<string, number>();
+  private fileCache = new Map<string, { signature: string; accountId: string }>();
   private oauthDir: string;
 
   constructor(oauthDir = path.resolve(process.cwd(), '.oauths')) {
@@ -77,12 +78,27 @@ class AuthPool {
     return this.oauthDir;
   }
 
+  private getTokenFileSignature(baseName: string): string {
+    const tokenPath = path.join(this.oauthDir, `${baseName}.tokens.json`);
+    try {
+      const tokenStat = fs.statSync(tokenPath);
+      if (tokenStat.isFile()) {
+        return `${tokenStat.mtimeMs}:${tokenStat.size}`;
+      }
+    } catch {}
+    return 'none';
+  }
+
   public scan(): Map<string, AccountAuthRecord> {
     if (!fs.existsSync(this.oauthDir)) {
+      this.fileCache.clear();
+      this.pool.clear();
       return this.pool;
     }
 
     const files = fs.readdirSync(this.oauthDir);
+    const seenFiles = new Set<string>();
+    const seenAccountIds = new Set<string>();
 
     for (const file of files) {
       if (file.startsWith('.') || file.endsWith('.tokens.json')) {
@@ -90,13 +106,29 @@ class AuthPool {
       }
 
       const filePath = path.join(this.oauthDir, file);
-      const stat = fs.statSync(filePath);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        continue;
+      }
       if (!stat.isFile()) {
+        continue;
+      }
+
+      const ext = path.extname(file).toLowerCase();
+      const baseName = path.basename(file, ext);
+      const signature = `${stat.mtimeMs}:${stat.size}:${this.getTokenFileSignature(baseName)}`;
+      const cached = this.fileCache.get(file);
+      if (cached && cached.signature === signature && this.pool.has(cached.accountId)) {
+        seenFiles.add(file);
+        seenAccountIds.add(cached.accountId);
         continue;
       }
 
       const parsed = this.parseCredentialFile(filePath);
       if (!parsed) {
+        this.fileCache.delete(file);
         continue;
       }
       parsed.mtimeMs = stat.mtimeMs;
@@ -114,8 +146,8 @@ class AuthPool {
           this.preferredPools.delete(oldId);
           this.pool.delete(oldId);
 
-          const ext = path.extname(parsed.sourceFile).toLowerCase() || '.json';
-          const newSourceFile = path.join(this.oauthDir, `${email}${ext}`);
+          const targetExt = path.extname(parsed.sourceFile).toLowerCase() || '.json';
+          const newSourceFile = path.join(this.oauthDir, `${email}${targetExt}`);
           const oldTokenFile = path.join(this.oauthDir, `${oldId}.tokens.json`);
           const newTokenFile = path.join(this.oauthDir, `${email}.tokens.json`);
 
@@ -135,18 +167,44 @@ class AuthPool {
         }
       }
 
+      const finalFileName = path.basename(parsed.sourceFile);
+      let finalSignature = signature;
+      if (finalFileName !== file) {
+        this.fileCache.delete(file);
+        try {
+          const renamedStat = fs.statSync(parsed.sourceFile);
+          finalSignature = `${renamedStat.mtimeMs}:${renamedStat.size}:${this.getTokenFileSignature(parsed.accountId)}`;
+        } catch {}
+      }
+
       const existing = this.pool.get(parsed.accountId);
       if (existing) {
         existing.config.mtimeMs = stat.mtimeMs;
+        existing.config.sourceFile = parsed.sourceFile;
         if (parsed.tokens && JSON.stringify(parsed.tokens) !== JSON.stringify(existing.config.tokens)) {
           existing.config.tokens = parsed.tokens;
           existing.client.setCredentials(parsed.tokens);
           existing.authorized = Boolean(parsed.tokens.refresh_token || parsed.tokens.access_token);
         }
-        continue;
+      } else {
+        this.registerAccount(parsed);
       }
 
-      this.registerAccount(parsed);
+      this.fileCache.set(finalFileName, { signature: finalSignature, accountId: parsed.accountId });
+      seenFiles.add(finalFileName);
+      seenAccountIds.add(parsed.accountId);
+    }
+
+    for (const cachedFile of Array.from(this.fileCache.keys())) {
+      if (!seenFiles.has(cachedFile)) {
+        this.fileCache.delete(cachedFile);
+      }
+    }
+
+    for (const accountId of Array.from(this.pool.keys())) {
+      if (!seenAccountIds.has(accountId)) {
+        this.pool.delete(accountId);
+      }
     }
 
     return this.pool;
