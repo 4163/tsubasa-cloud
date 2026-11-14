@@ -1225,8 +1225,6 @@ const routes = app
             sourcePoolId: number;
             items: ShareTargetInput[];
             selectedAccountIds: string[];
-            recipientEmails: string[];
-            emailMessage?: string;
           }
         | Response => {
         const body = value as Record<string, unknown>;
@@ -1238,18 +1236,11 @@ const routes = app
         if (!selectedAccountIds) {
           return c.json({ error: 'selectedAccountIds must be an array of strings' }, 400);
         }
-        const recipientEmails = parseStringArray(body?.recipientEmails ?? []);
-        if (!recipientEmails) {
-          return c.json({ error: 'recipientEmails must be an array of strings' }, 400);
-        }
-        const emailMessage = typeof body?.emailMessage === 'string' ? body.emailMessage : undefined;
         const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
         return {
           sourcePoolId,
           items,
           selectedAccountIds,
-          recipientEmails,
-          emailMessage,
         };
       }
     ),

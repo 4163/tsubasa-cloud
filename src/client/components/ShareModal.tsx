@@ -8,7 +8,6 @@ import {
   IconClose,
   IconShare,
   IconLink,
-  IconMail,
   IconFolderFilled,
   IconFile,
   IconCheck,
@@ -43,25 +42,6 @@ export interface ShareModalProps {
   items: ShareTargetItem[];
   sourcePoolId: number;
   onComplete: (result: ShareExecuteResult) => Promise<void> | void;
-}
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function parseEmailTokens(raw: string): { valid: string[]; invalid: string[] } {
-  const parts = raw
-    .split(/[,\s;]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const valid: string[] = [];
-  const invalid: string[] = [];
-  for (const part of parts) {
-    if (EMAIL_PATTERN.test(part)) {
-      valid.push(part);
-    } else {
-      invalid.push(part);
-    }
-  }
-  return { valid, invalid };
 }
 
 function getDriveStatusBadge(
@@ -328,19 +308,6 @@ const styles = stylex.create({
     fontWeight: typography.fontWeightTitle,
     color: colors.secondaryText,
   },
-  optionalMeta: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: typography.fontWeightMeta,
-    color: colors.dimText,
-  },
-  sectionHelperText: {
-    margin: 0,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    lineHeight: typography.lineHeightMeta,
-    color: colors.secondaryText,
-  },
   allocationPrompt: {
     margin: 0,
     fontFamily: typography.fontFamilyBody,
@@ -596,163 +563,6 @@ const styles = stylex.create({
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
   },
-  emailInputRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-  },
-  emailBox: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: '36px',
-    paddingTop: spacing.space1,
-    paddingBottom: spacing.space1,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing.space1,
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-    ':focus-within': {
-      borderColor: colors.focusRing,
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-  },
-  emailInputIcon: {
-    color: colors.secondaryText,
-    display: 'inline-flex',
-    alignItems: 'center',
-    marginRight: spacing.space1,
-    flexShrink: 0,
-  },
-  emailChip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space1,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space1,
-    borderRadius: radius.compact,
-    backgroundColor: colors.selectionBg,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    color: colors.primaryText,
-    fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeMeta,
-    maxWidth: '100%',
-  },
-  chipText: {
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  chipRemoveBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    padding: '2px',
-    cursor: 'pointer',
-    color: colors.secondaryText,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.compact,
-    outline: 'none',
-    ':hover': {
-      color: colors.dangerTextOnSurface,
-      backgroundColor: colors.dangerSurface,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-    },
-  },
-  emailTextInput: {
-    flex: 1,
-    minWidth: '140px',
-    height: '26px',
-    borderWidth: '0px',
-    backgroundColor: 'transparent',
-    color: colors.primaryText,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    outline: 'none',
-    padding: '0px',
-  },
-  addEmailBtn: {
-    height: '36px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: typography.fontWeightTitle,
-    cursor: 'pointer',
-    flexShrink: 0,
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-  },
-  inlineErrorText: {
-    fontSize: typography.fontSizeMeta,
-    color: colors.dangerTextOnSurface,
-    fontFamily: typography.fontFamilyBody,
-  },
-  noteTextarea: {
-    width: '100%',
-    minHeight: '64px',
-    padding: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    color: colors.primaryText,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    lineHeight: '1.4',
-    resize: 'vertical',
-    boxSizing: 'border-box',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':focus-visible': {
-      borderColor: colors.focusRing,
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-  },
   linkCard: {
     padding: spacing.space3,
     borderRadius: radius.compact,
@@ -889,79 +699,6 @@ const styles = stylex.create({
     paddingBottom: spacing.space2,
     boxSizing: 'border-box',
   },
-  emailDeliveryRow: {
-    padding: spacing.space2,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space2,
-  },
-  emailDeliveryLeft: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1px',
-    minWidth: 0,
-    flex: 1,
-  },
-  emailDeliveryTarget: {
-    fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeMeta,
-    color: colors.primaryText,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  emailDeliveryDrive: {
-    fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeBadge,
-    color: colors.secondaryText,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  deliveryBadgeOk: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
-    color: colors.success,
-    backgroundColor: colors.successSurface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    flexShrink: 0,
-  },
-  deliveryBadgeFail: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
-    color: colors.dangerTextOnSurface,
-    backgroundColor: colors.dangerSurface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.dangerBorder,
-    borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    flexShrink: 0,
-    maxWidth: layout.deliveryBadgeMaxWidth,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
   footer: {
     paddingLeft: spacing.space5,
     paddingRight: spacing.space5,
@@ -1063,11 +800,6 @@ export function ShareModal({
   const [validationData, setValidationData] = useState<ValidateResponse | null>(null);
   const [isValidating, setIsValidating] = useState(false);
 
-  const [emailChips, setEmailChips] = useState<string[]>([]);
-  const [emailInput, setEmailInput] = useState('');
-  const [emailInputError, setEmailInputError] = useState<string | null>(null);
-  const [emailMessage, setEmailMessage] = useState('');
-
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [executeResult, setExecuteResult] = useState<ExecuteResponse | null>(null);
@@ -1076,7 +808,6 @@ export function ShareModal({
 
   const driveListRef = useRef<HTMLDivElement | null>(null);
   const linksListRef = useRef<HTMLDivElement | null>(null);
-  const deliveriesListRef = useRef<HTMLDivElement | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -1103,10 +834,6 @@ export function ShareModal({
       setSelectedAccountIds([]);
       setValidationData(null);
       setIsValidating(false);
-      setEmailChips([]);
-      setEmailInput('');
-      setEmailInputError(null);
-      setEmailMessage('');
       setIsSubmitting(false);
       setSubmitError(null);
       setExecuteResult(null);
@@ -1121,10 +848,6 @@ export function ShareModal({
     setSelectedAccountIds([]);
     setValidationData(null);
     setIsValidating(false);
-    setEmailChips([]);
-    setEmailInput('');
-    setEmailInputError(null);
-    setEmailMessage('');
     setIsSubmitting(false);
     setSubmitError(null);
     setExecuteResult(null);
@@ -1241,13 +964,6 @@ export function ShareModal({
     overscan: 4,
   });
 
-  const deliveriesVirtualizer = useVirtualizer({
-    count: executeResult?.emailDeliveries.length ?? 0,
-    getScrollElement: () => deliveriesListRef.current,
-    estimateSize: () => 52,
-    overscan: 5,
-  });
-
   const neededBytes = useMemo(() => {
     if (!inspectData) return 0;
     if (
@@ -1307,44 +1023,6 @@ export function ShareModal({
     setSelectedAccountIds(picked);
   }, [eligibleEmptyAccounts, neededBytes]);
 
-  const addEmailsFromText = useCallback(
-    (raw: string): boolean => {
-      const trimmed = raw.trim();
-      if (!trimmed) return true;
-      const { valid, invalid } = parseEmailTokens(trimmed);
-      if (invalid.length > 0) {
-        setEmailInputError(`Invalid email: ${invalid[0]}`);
-        return false;
-      }
-      if (valid.length === 0) return true;
-      setEmailChips((prev) => {
-        const seen = new Set(prev.map((e) => e.toLowerCase()));
-        const next = [...prev];
-        for (const email of valid) {
-          const key = email.toLowerCase();
-          if (!seen.has(key)) {
-            seen.add(key);
-            next.push(email);
-          }
-        }
-        return next;
-      });
-      setEmailInput('');
-      setEmailInputError(null);
-      return true;
-    },
-    []
-  );
-
-  const handleEmailKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault();
-      addEmailsFromText(emailInput);
-    } else if (e.key === 'Backspace' && emailInput === '' && emailChips.length > 0) {
-      setEmailChips((prev) => prev.slice(0, -1));
-    }
-  };
-
   const handleCopyText = async (key: string, text: string) => {
     const ok = await copyTextToClipboard(text);
     if (!ok) return;
@@ -1368,8 +1046,6 @@ export function ShareModal({
   };
 
   if (!isOpen || items.length === 0) return null;
-
-  const showNoteField = emailChips.length > 0 || emailInput.trim().length > 0;
 
   const hasOverCeiling = (inspectData?.overCeilingFiles.length ?? 0) > 0;
   const allocationReady = Boolean(
@@ -1397,25 +1073,6 @@ export function ShareModal({
     e.preventDefault();
     if (!inspectData || isSubmitting || isValidating) return;
 
-    let finalEmails = [...emailChips];
-    if (emailInput.trim()) {
-      const parsed = parseEmailTokens(emailInput);
-      if (parsed.invalid.length > 0) {
-        setEmailInputError(`Invalid email: ${parsed.invalid[0]}`);
-        return;
-      }
-      const seen = new Set(finalEmails.map((em) => em.toLowerCase()));
-      for (const em of parsed.valid) {
-        if (!seen.has(em.toLowerCase())) {
-          seen.add(em.toLowerCase());
-          finalEmails.push(em);
-        }
-      }
-      setEmailChips(finalEmails);
-      setEmailInput('');
-      setEmailInputError(null);
-    }
-
     if (!allocationReady) return;
 
     setIsSubmitting(true);
@@ -1427,8 +1084,6 @@ export function ShareModal({
           sourcePoolId,
           items: items.map((i) => ({ kind: i.kind, id: i.id })),
           selectedAccountIds: inspectData.sharePoolFitsWithoutExpansion ? [] : selectedAccountIds,
-          recipientEmails: finalEmails,
-          emailMessage: emailMessage.trim() || undefined,
         },
       });
       const data = await res.json().catch(() => ({}));
@@ -1578,56 +1233,6 @@ export function ShareModal({
                                     {isCopied ? 'Copied' : 'Copy link'}
                                   </button>
                                 </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {executeResult.emailDeliveries.length > 0 && (
-                <div {...stylex.props(styles.section)}>
-                  <span {...stylex.props(styles.sectionLabel)}>Email invitations</span>
-                  <div ref={deliveriesListRef} {...stylex.props(styles.resultListContainer)}>
-                    <div
-                      {...stylex.props(styles.virtualTrack)}
-                      style={{ height: `${deliveriesVirtualizer.getTotalSize()}px` }}
-                    >
-                      {deliveriesVirtualizer.getVirtualItems().map((virtualRow) => {
-                        const delivery = executeResult.emailDeliveries[virtualRow.index];
-                        if (!delivery) return null;
-                        return (
-                          <div
-                            key={`${delivery.accountId}-${delivery.email}-${virtualRow.index}`}
-                            ref={deliveriesVirtualizer.measureElement}
-                            data-index={virtualRow.index}
-                            {...stylex.props(styles.virtualRowItem)}
-                            style={{ transform: `translateY(${virtualRow.start}px)` }}
-                          >
-                            <div {...stylex.props(styles.emailDeliveryRow)}>
-                              <div {...stylex.props(styles.emailDeliveryLeft)}>
-                                <RedactedEmail
-                                  email={delivery.email}
-                                  style={styles.emailDeliveryTarget}
-                                />
-                                <RedactedEmail
-                                  email={delivery.accountEmail}
-                                  prefix="via "
-                                  style={styles.emailDeliveryDrive}
-                                />
-                              </div>
-                              {delivery.success ? (
-                                <span {...stylex.props(styles.deliveryBadgeOk)}>Sent via Drive</span>
-                              ) : (
-                                <span
-                                  {...stylex.props(styles.deliveryBadgeFail)}
-                                  title={delivery.error || 'Failed'}
-                                >
-                                  {delivery.error || 'Failed'}
-                                </span>
                               )}
                             </div>
                           </div>
@@ -1852,76 +1457,6 @@ export function ShareModal({
                   )}
                 </div>
               )}
-
-              {/* Delivery section */}
-              <div {...stylex.props(styles.section)}>
-                <div {...stylex.props(styles.sectionHeaderRow)}>
-                  <span {...stylex.props(styles.sectionLabel)}>Recipients</span>
-                  <span {...stylex.props(styles.optionalMeta)}>Optional</span>
-                </div>
-                <p {...stylex.props(styles.sectionHelperText)}>
-                  Share links are generated automatically even without recipients.
-                </p>
-                <div {...stylex.props(styles.emailInputRow)}>
-                  <div {...stylex.props(styles.emailBox)}>
-                    <span {...stylex.props(styles.emailInputIcon)}>
-                      <IconMail size={14} />
-                    </span>
-                    {emailChips.map((email) => (
-                      <span key={email} {...stylex.props(styles.emailChip)}>
-                        <span {...stylex.props(styles.chipText)}>{email}</span>
-                        <button
-                          type="button"
-                          {...stylex.props(styles.chipRemoveBtn)}
-                          onClick={() =>
-                            setEmailChips((prev) => prev.filter((item) => item !== email))
-                          }
-                          aria-label={`Remove ${email}`}
-                          disabled={isSubmitting}
-                        >
-                          <IconClose size={11} />
-                        </button>
-                      </span>
-                    ))}
-                    <input
-                      type="text"
-                      value={emailInput}
-                      onChange={(e) => {
-                        setEmailInput(e.target.value);
-                        if (emailInputError) setEmailInputError(null);
-                      }}
-                      onKeyDown={handleEmailKeyDown}
-                      placeholder="Add recipient email..."
-                      disabled={isSubmitting}
-                      aria-label="Add recipient email"
-                      {...stylex.props(styles.emailTextInput)}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    {...stylex.props(styles.addEmailBtn)}
-                    onClick={() => addEmailsFromText(emailInput)}
-                    disabled={isSubmitting || !emailInput.trim()}
-                  >
-                    Add
-                  </button>
-                </div>
-
-                {emailInputError && (
-                  <span {...stylex.props(styles.inlineErrorText)}>{emailInputError}</span>
-                )}
-
-                {showNoteField && (
-                  <textarea
-                    value={emailMessage}
-                    onChange={(e) => setEmailMessage(e.target.value)}
-                    placeholder="Add note (optional)"
-                    disabled={isSubmitting}
-                    aria-label="Add note (optional)"
-                    {...stylex.props(styles.noteTextarea)}
-                  />
-                )}
-              </div>
 
               {submitError && (
                 <div {...stylex.props(styles.dangerBanner)}>

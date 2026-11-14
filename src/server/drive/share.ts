@@ -126,8 +126,6 @@ export interface ExecuteShareParams {
   sourcePoolId: number;
   items: ShareTargetInput[];
   selectedAccountIds: string[];
-  recipientEmails: string[];
-  emailMessage?: string;
 }
 
 export interface ShareAccountLinkResult {
@@ -145,14 +143,6 @@ async function loadEmptyAccountsWithAuthStatus(nowMs = Date.now()) {
   return getEmptyAccountsAcrossAllPools(nowMs, authorizedIds);
 }
 
-export interface ShareEmailDeliveryResult {
-  accountId: string;
-  accountEmail: string;
-  email: string;
-  success: boolean;
-  error?: string;
-}
-
 export interface ExecuteShareResult {
   sharePoolId: number;
   batchFolderName: string;
@@ -160,7 +150,6 @@ export interface ExecuteShareResult {
   fileCount: number;
   folderCount: number;
   links: ShareAccountLinkResult[];
-  emailDeliveries: ShareEmailDeliveryResult[];
 }
 
 export interface ClearSharePoolResult {
@@ -750,22 +739,6 @@ export async function validateShareSelection(
   }
 }
 
-function normalizeRecipientEmails(emails: string[]): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  for (const raw of emails) {
-    const email = raw.trim();
-    if (!email) continue;
-    const key = email.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    normalized.push(email);
-  }
-
-  return normalized;
-}
-
 function ensureLocalFolderTreeExact(folderPath: string, poolId: number): void {
   const normalized = normalizeVirtualPath(folderPath);
   if (normalized === '/') return;
@@ -777,18 +750,11 @@ async function ensureShareBatchPermissionsAndLinks(params: {
   batchFolderName: string;
   participatingAccountIds: string[];
   allocations: Record<string, { filesCount: number; bytesAllocated: number }>;
-  recipientEmails: string[];
-  emailMessage?: string;
-}): Promise<{
-  links: ShareAccountLinkResult[];
-  emailDeliveries: ShareEmailDeliveryResult[];
-}> {
-  const { batchFolderName, participatingAccountIds, allocations, recipientEmails, emailMessage } = params;
-  const trimmedMessage = emailMessage?.trim() || undefined;
+}): Promise<ShareAccountLinkResult[]> {
+  const { batchFolderName, participatingAccountIds, allocations } = params;
   const batchVirtualPath = `/${batchFolderName}`;
 
   const links: ShareAccountLinkResult[] = [];
-  const emailDeliveries: ShareEmailDeliveryResult[] = [];
 
   for (const accountId of participatingAccountIds) {
     const drive = getDriveClient(accountId);
@@ -838,45 +804,12 @@ async function ensureShareBatchPermissionsAndLinks(params: {
       filesCount: alloc.filesCount,
       bytesAllocated: alloc.bytesAllocated,
     });
-
-    for (const email of recipientEmails) {
-      try {
-        await drive.permissions.create({
-          fileId: batchFolderId,
-          sendNotificationEmail: true,
-          ...(trimmedMessage ? { emailMessage: trimmedMessage } : {}),
-          requestBody: {
-            role: 'reader',
-            type: 'user',
-            emailAddress: email,
-          },
-          supportsAllDrives: false,
-        });
-
-        emailDeliveries.push({
-          accountId,
-          accountEmail,
-          email,
-          success: true,
-        });
-      } catch (err) {
-        emailDeliveries.push({
-          accountId,
-          accountEmail,
-          email,
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
   }
 
-  return { links, emailDeliveries };
+  return links;
 }
 
 export async function executeShare(params: ExecuteShareParams): Promise<ExecuteShareResult> {
-  const recipientEmails = normalizeRecipientEmails(params.recipientEmails);
-
   const validation = await validateShareSelection(
     params.sourcePoolId,
     params.items,
@@ -1044,12 +977,10 @@ export async function executeShare(params: ExecuteShareParams): Promise<ExecuteS
 
   ensureLocalFolderTreeExact(`/${batchFolderName}`, sharePoolId);
 
-  const { links, emailDeliveries } = await ensureShareBatchPermissionsAndLinks({
+  const links = await ensureShareBatchPermissionsAndLinks({
     batchFolderName,
     participatingAccountIds: Array.from(participatingAccountIds),
     allocations: accountAllocations,
-    recipientEmails,
-    emailMessage: params.emailMessage,
   });
 
   for (const link of links) {
@@ -1084,7 +1015,6 @@ export async function executeShare(params: ExecuteShareParams): Promise<ExecuteS
     fileCount: targets.fileCount,
     folderCount: targets.folderCount,
     links,
-    emailDeliveries,
   };
 }
 

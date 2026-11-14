@@ -159,7 +159,6 @@ export const layout = stylex.defineVars({
   shareModalWidth: '540px',
   shareDriveListMaxHeight: '220px',
   shareResultListMaxHeight: '180px',
-  deliveryBadgeMaxWidth: '200px',
 });
 
 /**
