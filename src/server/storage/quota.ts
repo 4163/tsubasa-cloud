@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
-import { accounts, files, transferLogs } from '../db/schema.js';
-import { eq, and, gte, sql, asc } from 'drizzle-orm';
+import { accounts, files, pools, transferLogs } from '../db/schema.js';
+import { eq, and, gte, sql, asc, inArray } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 // Safety reserve strictly set aside to protect Gmail, Google Photos, and system metadata
@@ -80,44 +80,12 @@ export function calculateHeadroom(quotaLimitBytes: number, quotaUsedBytes: numbe
   return Math.max(0, usable - quotaUsedBytes);
 }
 
-export async function getAccountTransferStats(
+function buildAccountTransferStats(
   accountId: string,
-  nowMs = Date.now()
-): Promise<AccountTransferStats> {
-  const windowStart = nowMs - ROLLING_WINDOW_MS;
-
-  // Query active upload transfers within the rolling 24-hour window, ordered chronologically
-  const activeUploads = await db
-    .select({
-      byteCount: transferLogs.byteCount,
-      timestamp: transferLogs.timestamp,
-    })
-    .from(transferLogs)
-    .where(
-      and(
-        eq(transferLogs.accountId, accountId),
-        eq(transferLogs.transferType, 'upload'),
-        gte(transferLogs.timestamp, windowStart)
-      )
-    )
-    .orderBy(transferLogs.timestamp);
-
-  // Query downloads within the rolling 24-hour window
-  const downloadResult = await db
-    .select({
-      totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
-    })
-    .from(transferLogs)
-    .where(
-      and(
-        eq(transferLogs.accountId, accountId),
-        eq(transferLogs.transferType, 'download'),
-        gte(transferLogs.timestamp, windowStart)
-      )
-    );
-
-  const downloadedBytes24h = Number(downloadResult[0]?.totalBytes || 0);
-
+  activeUploads: Array<{ byteCount: number; timestamp: number }>,
+  downloadedBytes24h: number,
+  nowMs: number
+): AccountTransferStats {
   let uploadedBytes24h = 0;
   for (const row of activeUploads) {
     uploadedBytes24h += row.byteCount;
@@ -163,6 +131,118 @@ export async function getAccountTransferStats(
     nextExpiringBytes,
     activeTransferCount24h,
   };
+}
+
+export async function getTransferStatsByAccountMap(
+  accountIds: string[],
+  nowMs = Date.now()
+): Promise<Map<string, AccountTransferStats>> {
+  const result = new Map<string, AccountTransferStats>();
+  if (accountIds.length === 0) {
+    return result;
+  }
+
+  const windowStart = nowMs - ROLLING_WINDOW_MS;
+  const allActiveUploads = await db
+    .select({
+      accountId: transferLogs.accountId,
+      byteCount: transferLogs.byteCount,
+      timestamp: transferLogs.timestamp,
+    })
+    .from(transferLogs)
+    .where(
+      and(
+        inArray(transferLogs.accountId, accountIds),
+        eq(transferLogs.transferType, 'upload'),
+        gte(transferLogs.timestamp, windowStart)
+      )
+    )
+    .orderBy(asc(transferLogs.timestamp));
+
+  const uploadsByAccount = new Map<string, Array<{ byteCount: number; timestamp: number }>>();
+  for (const row of allActiveUploads) {
+    let list = uploadsByAccount.get(row.accountId);
+    if (!list) {
+      list = [];
+      uploadsByAccount.set(row.accountId, list);
+    }
+    list.push({ byteCount: row.byteCount, timestamp: row.timestamp });
+  }
+
+  const allDownloadTotals = await db
+    .select({
+      accountId: transferLogs.accountId,
+      totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
+    })
+    .from(transferLogs)
+    .where(
+      and(
+        inArray(transferLogs.accountId, accountIds),
+        eq(transferLogs.transferType, 'download'),
+        gte(transferLogs.timestamp, windowStart)
+      )
+    )
+    .groupBy(transferLogs.accountId);
+
+  const downloadsByAccount = new Map<string, number>();
+  for (const row of allDownloadTotals) {
+    downloadsByAccount.set(row.accountId, Number(row.totalBytes || 0));
+  }
+
+  for (const accountId of accountIds) {
+    result.set(
+      accountId,
+      buildAccountTransferStats(
+        accountId,
+        uploadsByAccount.get(accountId) ?? [],
+        downloadsByAccount.get(accountId) ?? 0,
+        nowMs
+      )
+    );
+  }
+
+  return result;
+}
+
+export async function getAccountTransferStats(
+  accountId: string,
+  nowMs = Date.now()
+): Promise<AccountTransferStats> {
+  const windowStart = nowMs - ROLLING_WINDOW_MS;
+
+  // Query active upload transfers within the rolling 24-hour window, ordered chronologically
+  const activeUploads = await db
+    .select({
+      byteCount: transferLogs.byteCount,
+      timestamp: transferLogs.timestamp,
+    })
+    .from(transferLogs)
+    .where(
+      and(
+        eq(transferLogs.accountId, accountId),
+        eq(transferLogs.transferType, 'upload'),
+        gte(transferLogs.timestamp, windowStart)
+      )
+    )
+    .orderBy(transferLogs.timestamp);
+
+  // Query downloads within the rolling 24-hour window
+  const downloadResult = await db
+    .select({
+      totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
+    })
+    .from(transferLogs)
+    .where(
+      and(
+        eq(transferLogs.accountId, accountId),
+        eq(transferLogs.transferType, 'download'),
+        gte(transferLogs.timestamp, windowStart)
+      )
+    );
+
+  const downloadedBytes24h = Number(downloadResult[0]?.totalBytes || 0);
+
+  return buildAccountTransferStats(accountId, activeUploads, downloadedBytes24h, nowMs);
 }
 
 export async function pruneOldTransferLogs(nowMs = Date.now()): Promise<void> {
@@ -259,6 +339,11 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
 
   const accountSummaries: AccountStorageSummary[] = [];
 
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    allAccounts.map((acc) => acc.id),
+    nowMs
+  );
+
   for (const acc of allAccounts) {
     totalLimit += acc.quotaLimitBytes;
     totalUsed += acc.quotaUsedBytes;
@@ -269,7 +354,8 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
       totalHeadroom += headroom;
     }
 
-    const transferStats = await getAccountTransferStats(acc.id, nowMs);
+    const transferStats =
+      transferStatsByAccount.get(acc.id) ?? buildAccountTransferStats(acc.id, [], 0, nowMs);
     const tsubasaUsed = tsubasaUsedByAccount.get(acc.id) || 0;
 
     totalUploaded24h += transferStats.uploadedBytes24h;
@@ -314,5 +400,94 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
     },
     accounts: accountSummaries,
   };
+}
+
+export interface EmptyShareAccount {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl: string | null;
+  currentPoolId: number;
+  currentPoolName: string;
+  currentPoolIsShare: boolean;
+  quotaLimitBytes: number;
+  quotaUsedBytes: number;
+  usableLimitBytes: number;
+  headroomBytes: number;
+  syncState: string;
+  isDisabled: boolean;
+  authorized: boolean;
+  transferStats: AccountTransferStats;
+}
+
+export async function getEmptyAccountsAcrossAllPools(
+  nowMs = Date.now(),
+  authorizedAccountIds?: ReadonlySet<string>
+): Promise<EmptyShareAccount[]> {
+  const rows = await db
+    .select({
+      id: accounts.id,
+      email: accounts.email,
+      displayName: accounts.displayName,
+      avatarUrl: accounts.avatarUrl,
+      quotaLimitBytes: accounts.quotaLimitBytes,
+      quotaUsedBytes: accounts.quotaUsedBytes,
+      syncState: accounts.syncState,
+      isDisabled: accounts.isDisabled,
+      currentPoolId: pools.id,
+      currentPoolName: pools.name,
+      currentPoolIsShare: pools.isSharePool,
+    })
+    .from(accounts)
+    .innerJoin(pools, eq(accounts.poolId, pools.id))
+    .orderBy(asc(pools.isSharePool), asc(pools.id), asc(accounts.email));
+
+  const allAccountFileCounts = await db
+    .select({
+      accountId: files.accountId,
+      fileCount: sql<number>`count(*)`,
+    })
+    .from(files)
+    .groupBy(files.accountId);
+
+  const fileCountByAccount = new Map<string, number>();
+  for (const row of allAccountFileCounts) {
+    fileCountByAccount.set(row.accountId, Number(row.fileCount || 0));
+  }
+
+  const emptyAccounts = rows.filter((acc) => (fileCountByAccount.get(acc.id) ?? 0) === 0);
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    emptyAccounts.map((acc) => acc.id),
+    nowMs
+  );
+
+  const results: EmptyShareAccount[] = [];
+  for (const acc of emptyAccounts) {
+    const usableLimitBytes = calculateUsableLimit(acc.quotaLimitBytes);
+    const headroomBytes = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
+    const transferStats =
+      transferStatsByAccount.get(acc.id) ?? buildAccountTransferStats(acc.id, [], 0, nowMs);
+    const authorized = authorizedAccountIds ? authorizedAccountIds.has(acc.id) : false;
+
+    results.push({
+      id: acc.id,
+      email: acc.email,
+      displayName: acc.displayName,
+      avatarUrl: acc.avatarUrl,
+      currentPoolId: acc.currentPoolId,
+      currentPoolName: acc.currentPoolName,
+      currentPoolIsShare: Boolean(acc.currentPoolIsShare),
+      quotaLimitBytes: acc.quotaLimitBytes,
+      quotaUsedBytes: acc.quotaUsedBytes,
+      usableLimitBytes,
+      headroomBytes,
+      syncState: acc.syncState,
+      isDisabled: acc.isDisabled ?? false,
+      authorized,
+      transferStats,
+    });
+  }
+
+  return results;
 }
 

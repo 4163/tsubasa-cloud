@@ -47,10 +47,62 @@ import {
   FileExceedsCeilingError,
   InsufficientStorageError,
 } from './storage/index.js';
+import {
+  inspectSharePlan,
+  validateShareSelection,
+  executeShare,
+  clearSharePool,
+  listSharePoolLinks,
+  ShareValidationError,
+  SharePoolNotFoundError,
+  type ShareTargetInput,
+} from './drive/share.js';
 
 function parsePoolId(raw: unknown): number {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : 1;
+}
+
+function isSharePoolId(poolId: number): boolean {
+  const row = sqlite
+    .prepare('SELECT is_share_pool as isSharePool FROM pools WHERE id = ? LIMIT 1')
+    .get(poolId) as { isSharePool: number } | undefined;
+  return Boolean(row?.isSharePool);
+}
+
+function sharePoolReadOnlyError(message: string) {
+  return { error: message, code: 'SHARE_POOL_READ_ONLY' } as const;
+}
+
+function isAccountInSharePool(accountId: string): boolean {
+  const acc = sqlite.prepare('SELECT pool_id as poolId FROM accounts WHERE id = ? LIMIT 1').get(accountId) as
+    | { poolId: number }
+    | undefined;
+  return Boolean(acc && isSharePoolId(acc.poolId));
+}
+
+function parseShareTargetItems(raw: unknown): ShareTargetInput[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const parsed: ShareTargetInput[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null;
+    const rec = item as Record<string, unknown>;
+    if ((rec.kind !== 'file' && rec.kind !== 'folder') || typeof rec.id !== 'string' || !rec.id.trim()) {
+      return null;
+    }
+    parsed.push({ kind: rec.kind, id: rec.id });
+  }
+  return parsed;
+}
+
+function parseStringArray(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') return null;
+    out.push(item);
+  }
+  return out;
 }
 
 async function getAccountsList(poolId?: number) {
@@ -130,23 +182,30 @@ const routes = app
            p.id,
            p.name,
            p.drive_folder_name as driveFolderName,
+           p.is_share_pool as isSharePool,
            COALESCE(acc.cnt, 0) as accountCount,
            COALESCE(fil.cnt, 0) as fileCount,
            COALESCE(fil.total_bytes, 0) as totalBytes
          FROM pools p
          LEFT JOIN (SELECT pool_id, COUNT(*) as cnt FROM accounts GROUP BY pool_id) acc ON acc.pool_id = p.id
          LEFT JOIN (SELECT pool_id, COUNT(*) as cnt, SUM(size_bytes) as total_bytes FROM files WHERE is_trashed = 0 GROUP BY pool_id) fil ON fil.pool_id = p.id
-         ORDER BY p.id ASC`
+         ORDER BY p.is_share_pool ASC, p.id ASC`
       )
       .all() as Array<{
       id: number;
       name: string;
       driveFolderName: string;
+      isSharePool: number;
       accountCount: number;
       fileCount: number;
       totalBytes: number;
     }>;
-    return c.json({ pools: allPools });
+    return c.json({
+      pools: allPools.map((r) => ({
+        ...r,
+        isSharePool: Boolean(r.isSharePool),
+      })),
+    });
   })
   .post(
     '/api/pools',
@@ -157,10 +216,13 @@ const routes = app
     }),
     async (c) => {
       const { name } = c.req.valid('json');
-      const maxRow = sqlite.prepare('SELECT MAX(id) as maxId FROM pools').get() as
-        | { maxId: number | null }
-        | undefined;
-      const nextId = (maxRow?.maxId ?? 0) + 1;
+      const maxRow = sqlite
+        .prepare('SELECT MAX(id) as maxId FROM pools WHERE is_share_pool = 0')
+        .get() as { maxId: number | null } | undefined;
+      let nextId = (maxRow?.maxId ?? 0) + 1;
+      while (sqlite.prepare('SELECT 1 FROM pools WHERE id = ? LIMIT 1').get(nextId)) {
+        nextId += 1;
+      }
       const poolName = name || `Pool ${nextId}`;
       const driveFolderName = getPoolDriveFolderName(nextId);
 
@@ -173,6 +235,7 @@ const routes = app
           id: nextId,
           name: poolName,
           driveFolderName,
+          isSharePool: false,
           accountCount: 0,
           fileCount: 0,
           totalBytes: 0,
@@ -183,7 +246,7 @@ const routes = app
   )
   .patch(
     '/api/pools/:id',
-    validator('json', (value, c) => {
+    validator('json', (value, c): { name: string } | Response => {
       const body = value as Record<string, unknown>;
       if (typeof body?.name !== 'string' || !body.name.trim()) {
         return c.json({ error: 'name (string) is required' }, 400);
@@ -195,10 +258,17 @@ const routes = app
       const { name } = c.req.valid('json');
 
       const existing = sqlite
-        .prepare('SELECT id, name, drive_folder_name as driveFolderName FROM pools WHERE id = ?')
-        .get(poolId) as { id: number; name: string; driveFolderName: string } | undefined;
+        .prepare('SELECT id, name, drive_folder_name as driveFolderName, is_share_pool as isSharePool FROM pools WHERE id = ?')
+        .get(poolId) as { id: number; name: string; driveFolderName: string; isSharePool: number } | undefined;
       if (!existing) {
         return c.json({ error: `Pool ${poolId} not found` }, 404);
+      }
+
+      if (Boolean(existing.isSharePool)) {
+        return c.json(
+          { error: 'Share Pool cannot be renamed or modified', code: 'SHARE_POOL_PROTECTED' },
+          403
+        );
       }
 
       sqlite.prepare('UPDATE pools SET name = ?, updated_at = unixepoch() WHERE id = ?').run(name, poolId);
@@ -207,6 +277,7 @@ const routes = app
         id: poolId,
         name,
         driveFolderName: existing.driveFolderName,
+        isSharePool: Boolean(existing.isSharePool),
       });
     }
   )
@@ -214,13 +285,20 @@ const routes = app
     const poolId = parsePoolId(c.req.param('id'));
 
     const existing = sqlite
-      .prepare('SELECT id, name, drive_folder_name as driveFolderName FROM pools WHERE id = ?')
-      .get(poolId) as { id: number; name: string; driveFolderName: string } | undefined;
+      .prepare('SELECT id, name, drive_folder_name as driveFolderName, is_share_pool as isSharePool FROM pools WHERE id = ?')
+      .get(poolId) as { id: number; name: string; driveFolderName: string; isSharePool: number } | undefined;
     if (!existing) {
       return c.json({ error: `Pool ${poolId} not found` }, 404);
     }
 
-    const totalPoolsRow = sqlite.prepare('SELECT count(*) as count FROM pools').get() as
+    if (Boolean(existing.isSharePool)) {
+      return c.json(
+        { error: 'Share Pool cannot be deleted', code: 'SHARE_POOL_PROTECTED' },
+        403
+      );
+    }
+
+    const totalPoolsRow = sqlite.prepare('SELECT count(*) as count FROM pools WHERE is_share_pool = 0').get() as
       | { count: number }
       | undefined;
     if ((totalPoolsRow?.count ?? 0) <= 1) {
@@ -403,6 +481,9 @@ const routes = app
     async (c) => {
       const accountId = c.req.param('id');
       const { poolId } = c.req.valid('json');
+      if (isSharePoolId(poolId)) {
+        return c.json(sharePoolReadOnlyError('Moving accounts directly into Share Pool is disabled'), 403);
+      }
       try {
         const result = await switchAccountPool(accountId, poolId);
         return c.json(result);
@@ -429,6 +510,12 @@ const routes = app
     }),
     async (c) => {
       const { filename, content, poolId = 1 } = c.req.valid('json');
+      if (isSharePoolId(poolId)) {
+        return c.json(
+          sharePoolReadOnlyError('Importing OAuth credentials directly into Share Pool is disabled'),
+          403
+        );
+      }
       try {
         const result = await authPool.importCredentials(filename, content, poolId);
         if (!result.success) {
@@ -488,6 +575,9 @@ const routes = app
   .post('/api/sync/all', async (c) => {
     const rawPoolId = c.req.query('poolId');
     const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
+    if (poolId !== undefined && isSharePoolId(poolId)) {
+      return c.json(sharePoolReadOnlyError('Fetching Drive changes is disabled on Share Pool'), 403);
+    }
     try {
       const report = await syncAllAccounts(poolId);
       return c.json(report);
@@ -497,6 +587,9 @@ const routes = app
   })
   .post('/api/sync/:id', async (c) => {
     const accountId = c.req.param('id');
+    if (isAccountInSharePool(accountId)) {
+      return c.json(sharePoolReadOnlyError('Syncing Drive changes is disabled for Share Pool accounts'), 403);
+    }
     try {
       const report = await runIncrementalSync(accountId);
       return c.json(report);
@@ -506,6 +599,9 @@ const routes = app
   })
   .post('/api/sync/:id/cold', async (c) => {
     const accountId = c.req.param('id');
+    if (isAccountInSharePool(accountId)) {
+      return c.json(sharePoolReadOnlyError('Cold reconciliation is disabled for Share Pool accounts'), 403);
+    }
     try {
       const report = await runColdReconciliation(accountId);
       return c.json(report);
@@ -517,6 +613,15 @@ const routes = app
     const accountId = c.req.param('id');
     const rawPoolId = c.req.query('poolId');
     const preferredPoolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
+    if (
+      (preferredPoolId !== undefined && isSharePoolId(preferredPoolId)) ||
+      isAccountInSharePool(accountId)
+    ) {
+      return c.json(
+        sharePoolReadOnlyError('Hydrating accounts directly into Share Pool is disabled'),
+        403
+      );
+    }
     try {
       const result = await hydrateAccount(accountId, preferredPoolId);
       return c.json(result);
@@ -571,6 +676,9 @@ const routes = app
     }),
     async (c) => {
       const { virtualPath, name, poolId = 1 } = c.req.valid('json');
+      if (isSharePoolId(poolId)) {
+        return c.json(sharePoolReadOnlyError('Creating folders directly in Share Pool is disabled'), 403);
+      }
       const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
       try {
         ensureLocalFolderHierarchy(normalizedPath, poolId);
@@ -627,6 +735,9 @@ const routes = app
     ),
     async (c) => {
       const { items, targetFolderPath, poolId = 1 } = c.req.valid('json');
+      if (isSharePoolId(poolId)) {
+        return c.json(sharePoolReadOnlyError('Moving items inside Share Pool is disabled'), 403);
+      }
       try {
         const result = await moveItems(items, targetFolderPath, poolId);
         return c.json(result);
@@ -656,6 +767,9 @@ const routes = app
     ),
     async (c) => {
       const { items, targetFolderPath, poolId = 1 } = c.req.valid('json');
+      if (isSharePoolId(poolId)) {
+        return c.json(sharePoolReadOnlyError('Copying items inside Share Pool is disabled'), 403);
+      }
       try {
         const result = await copyItems(items, targetFolderPath, poolId);
         return c.json(result);
@@ -695,6 +809,9 @@ const routes = app
     ),
     async (c) => {
       const { kind, id, name, poolId = 1 } = c.req.valid('json');
+      if (isSharePoolId(poolId)) {
+        return c.json(sharePoolReadOnlyError('Renaming items inside Share Pool is disabled'), 403);
+      }
       if (!name || name.includes('/') || name.includes('\\')) {
         return c.json({ error: 'Invalid name: cannot be empty or contain slashes' }, 400);
       }
@@ -739,6 +856,9 @@ const routes = app
     ),
     async (c) => {
       const payload = c.req.valid('json');
+      if (isSharePoolId(payload.poolId ?? 1)) {
+        return c.json(sharePoolReadOnlyError('Uploading directly to Share Pool is disabled'), 403);
+      }
       try {
         const session = await initiateResumableUpload(payload);
         return c.json(session);
@@ -761,6 +881,10 @@ const routes = app
     const targetAccountId = c.req.query('accountId') || c.req.header('x-account-id');
     const poolIdHeader = c.req.query('poolId') || c.req.header('x-pool-id');
     const poolId = poolIdHeader ? parsePoolId(poolIdHeader) : 1;
+
+    if (isSharePoolId(poolId)) {
+      return c.json(sharePoolReadOnlyError('Uploading directly to Share Pool is disabled'), 403);
+    }
 
     if (!virtualPath || !sizeHeader) {
       return c.json({ error: 'virtualPath and sizeBytes (or Content-Length) required' }, 400);
@@ -865,6 +989,12 @@ const routes = app
   })
   .get('/api/sync/external-changes/:accountId', async (c) => {
     const accountId = c.req.param('accountId');
+    if (isAccountInSharePool(accountId)) {
+      return c.json(
+        sharePoolReadOnlyError('External change resolution is disabled for Share Pool accounts'),
+        403
+      );
+    }
     try {
       const report = await scanAccountDiscrepancies(accountId);
       return c.json(report);
@@ -887,6 +1017,12 @@ const routes = app
     }),
     async (c) => {
       const { accountId, driveFileId, targetVirtualPath } = c.req.valid('json');
+      if (isAccountInSharePool(accountId)) {
+        return c.json(
+          sharePoolReadOnlyError('External change resolution is disabled for Share Pool accounts'),
+          403
+        );
+      }
       try {
         const record = await acceptExternalFile(accountId, driveFileId, targetVirtualPath);
         return c.json(record);
@@ -906,6 +1042,12 @@ const routes = app
     }),
     async (c) => {
       const { accountId, driveFileId } = c.req.valid('json');
+      if (isAccountInSharePool(accountId)) {
+        return c.json(
+          sharePoolReadOnlyError('External change resolution is disabled for Share Pool accounts'),
+          403
+        );
+      }
       try {
         await ejectFileToDriveRoot(accountId, driveFileId);
         return c.json({ success: true, accountId, driveFileId });
@@ -925,6 +1067,12 @@ const routes = app
     }),
     async (c) => {
       const { accountId, driveFileId } = c.req.valid('json');
+      if (isAccountInSharePool(accountId)) {
+        return c.json(
+          sharePoolReadOnlyError('External change resolution is disabled for Share Pool accounts'),
+          403
+        );
+      }
       try {
         await removeMissingFile(accountId, driveFileId);
         return c.json({ success: true, accountId, driveFileId });
@@ -944,6 +1092,12 @@ const routes = app
     }),
     async (c) => {
       const { fileId, targetAccountId } = c.req.valid('json');
+      const fileRow = sqlite.prepare('SELECT pool_id as poolId FROM files WHERE id = ? LIMIT 1').get(fileId) as
+        | { poolId: number }
+        | undefined;
+      if (fileRow && isSharePoolId(fileRow.poolId)) {
+        return c.json(sharePoolReadOnlyError('Moving Share Pool files between accounts is disabled'), 403);
+      }
       try {
         const result = await rebalanceFile(fileId, targetAccountId);
         return c.json(result);
@@ -966,6 +1120,15 @@ const routes = app
     }),
     async (c) => {
       const { fileIds, targetAccountId } = c.req.valid('json');
+      const placeholders = fileIds.map(() => '?').join(',');
+      const shareRows = sqlite
+        .prepare(
+          `SELECT 1 FROM files f INNER JOIN pools p ON p.id = f.pool_id WHERE f.id IN (${placeholders}) AND p.is_share_pool = 1 LIMIT 1`
+        )
+        .get(...fileIds);
+      if (shareRows) {
+        return c.json(sharePoolReadOnlyError('Moving Share Pool files in batches is disabled'), 403);
+      }
       try {
         const result = await rebalanceFilesBatch(fileIds, targetAccountId);
         return c.json(result);
@@ -982,10 +1145,161 @@ const routes = app
   )
   .post('/api/sync/rebalance/auto/:accountId', async (c) => {
     const accountId = c.req.param('accountId');
+    if (isAccountInSharePool(accountId)) {
+      return c.json(sharePoolReadOnlyError('Auto-rebalance is disabled for Share Pool accounts'), 403);
+    }
     try {
       const results = await executeAutoRebalance(accountId);
       return c.json({ results });
     } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  })
+  .post(
+    '/api/share/inspect',
+    validator(
+      'json',
+      (value, c): { sourcePoolId: number; items: ShareTargetInput[] } | Response => {
+        const body = value as Record<string, unknown>;
+        const items = parseShareTargetItems(body?.items);
+        if (!items) {
+          return c.json({ error: 'items (non-empty array of { kind: "file" | "folder", id: string }) is required' }, 400);
+        }
+        const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
+        return { sourcePoolId, items };
+      }
+    ),
+    async (c) => {
+      const { sourcePoolId, items } = c.req.valid('json');
+      if (isSharePoolId(sourcePoolId)) {
+        return c.json(sharePoolReadOnlyError('Items inside Share Pool cannot be shared again'), 403);
+      }
+      try {
+        const plan = await inspectSharePlan(sourcePoolId, items);
+        return c.json(plan);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/share/validate',
+    validator(
+      'json',
+      (value, c): { sourcePoolId: number; items: ShareTargetInput[]; selectedAccountIds: string[] } | Response => {
+        const body = value as Record<string, unknown>;
+        const items = parseShareTargetItems(body?.items);
+        if (!items) {
+          return c.json({ error: 'items (non-empty array of { kind: "file" | "folder", id: string }) is required' }, 400);
+        }
+        const selectedAccountIds = parseStringArray(body?.selectedAccountIds ?? []);
+        if (!selectedAccountIds) {
+          return c.json({ error: 'selectedAccountIds must be an array of strings' }, 400);
+        }
+        const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
+        return { sourcePoolId, items, selectedAccountIds };
+      }
+    ),
+    async (c) => {
+      const { sourcePoolId, items, selectedAccountIds } = c.req.valid('json');
+      if (isSharePoolId(sourcePoolId)) {
+        return c.json(sharePoolReadOnlyError('Items inside Share Pool cannot be shared again'), 403);
+      }
+      try {
+        const result = await validateShareSelection(sourcePoolId, items, selectedAccountIds);
+        return c.json(result);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/share/execute',
+    validator(
+      'json',
+      (
+        value,
+        c
+      ):
+        | {
+            sourcePoolId: number;
+            items: ShareTargetInput[];
+            selectedAccountIds: string[];
+            recipientEmails: string[];
+            emailMessage?: string;
+          }
+        | Response => {
+        const body = value as Record<string, unknown>;
+        const items = parseShareTargetItems(body?.items);
+        if (!items) {
+          return c.json({ error: 'items (non-empty array of { kind: "file" | "folder", id: string }) is required' }, 400);
+        }
+        const selectedAccountIds = parseStringArray(body?.selectedAccountIds ?? []);
+        if (!selectedAccountIds) {
+          return c.json({ error: 'selectedAccountIds must be an array of strings' }, 400);
+        }
+        const recipientEmails = parseStringArray(body?.recipientEmails ?? []);
+        if (!recipientEmails) {
+          return c.json({ error: 'recipientEmails must be an array of strings' }, 400);
+        }
+        const emailMessage = typeof body?.emailMessage === 'string' ? body.emailMessage : undefined;
+        const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
+        return {
+          sourcePoolId,
+          items,
+          selectedAccountIds,
+          recipientEmails,
+          emailMessage,
+        };
+      }
+    ),
+    async (c) => {
+      const payload = c.req.valid('json');
+      if (isSharePoolId(payload.sourcePoolId)) {
+        return c.json(sharePoolReadOnlyError('Items inside Share Pool cannot be shared again'), 403);
+      }
+      try {
+        const result = await executeShare(payload);
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof ShareValidationError) {
+          return c.json({ error: err.message, code: 'VALIDATION_ERROR' }, 400);
+        }
+        if (err instanceof FileExceedsCeilingError) {
+          return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
+        }
+        if (err instanceof InsufficientStorageError) {
+          return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
+        }
+        if (err instanceof AccountPoolLockedError) {
+          return c.json({ error: err.message, code: 'ACCOUNT_POOL_LOCKED' }, 409);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .get('/api/share/links', (c) => {
+    const rawPoolId = c.req.query('poolId');
+    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
+    const links = listSharePoolLinks(poolId);
+    return c.json({ links });
+  })
+  .post('/api/pools/:id/clear-share', async (c) => {
+    const rawId = Number(c.req.param('id'));
+    if (!Number.isInteger(rawId) || rawId < 1) {
+      return c.json({ error: 'Invalid pool id' }, 400);
+    }
+
+    try {
+      const result = await clearSharePool(rawId);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof SharePoolNotFoundError) {
+        return c.json({ error: err.message, code: 'NOT_FOUND' }, 404);
+      }
+      if (err instanceof ShareValidationError) {
+        return c.json({ error: err.message, code: 'VALIDATION_ERROR' }, 400);
+      }
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   });

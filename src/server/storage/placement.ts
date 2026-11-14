@@ -5,6 +5,7 @@ import { eq, and, sql, not } from 'drizzle-orm';
 import {
   calculateHeadroom,
   getAccountTransferStats,
+  getTransferStatsByAccountMap,
   MAX_SINGLE_FILE_BYTES,
   type AccountTransferStats,
 } from './quota.js';
@@ -56,7 +57,10 @@ export interface PlacementItem {
 /**
  * Returns candidate accounts with their current headroom and 24h upload stats.
  */
-export async function getEligibleAccounts(poolId = 1, nowMs = Date.now()): Promise<CandidateAccount[]> {
+export async function getEligibleAccounts(
+  poolId = 1,
+  nowMs = Date.now()
+): Promise<CandidateAccount[]> {
   const allAccounts = await db
     .select()
     .from(accounts)
@@ -68,11 +72,16 @@ export async function getEligibleAccounts(poolId = 1, nowMs = Date.now()): Promi
       )
     );
 
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    allAccounts.map((acc) => acc.id),
+    nowMs
+  );
+
   const candidates: CandidateAccount[] = [];
 
   for (const acc of allAccounts) {
     const headroom = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
-    const transferStats = await getAccountTransferStats(acc.id, nowMs);
+    const transferStats = transferStatsByAccount.get(acc.id)!;
 
     candidates.push({
       id: acc.id,
@@ -122,23 +131,18 @@ export async function findFolderAffinityAccounts(normalizedPath: string, poolId 
   return [];
 }
 
-/**
- * Selects an account for a single file upload using Folder-Cohesion Best-Fit.
- */
-export async function selectPlacementForFile(
+async function selectPlacementFromCandidates(
   item: PlacementItem,
+  candidates: CandidateAccount[],
   simulatedHeadrooms?: Map<string, number>,
-  nowMs = Date.now(),
   simulatedTransferBudgets?: Map<string, number>,
-  poolId = 1
+  poolId?: number
 ): Promise<PlacementDecision> {
   const normalizedPath = normalizeVirtualPath(item.virtualPath);
 
   if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
     throw new FileExceedsCeilingError(item.sizeBytes);
   }
-
-  const candidates = await getEligibleAccounts(poolId, nowMs);
 
   const getEffectiveHeadroom = (accId: string, baseHeadroom: number) => {
     if (simulatedHeadrooms && simulatedHeadrooms.has(accId)) {
@@ -175,8 +179,9 @@ export async function selectPlacementForFile(
     );
   }
 
-  // Check 1: Folder Affinity (Existing path priority)
-  const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath, poolId);
+  // Check 1: Folder Affinity (Existing path priority, restricted to provided candidates)
+  const affinityAccountIds =
+    poolId !== undefined ? await findFolderAffinityAccounts(normalizedPath, poolId) : [];
   for (const affId of affinityAccountIds) {
     const match = eligible.find((cand) => cand.id === affId);
     if (match) {
@@ -230,6 +235,30 @@ export async function selectPlacementForFile(
     headroomBeforeBytes: before,
     headroomAfterBytes: after,
   };
+}
+
+/**
+ * Selects an account for a single file upload using Folder-Cohesion Best-Fit.
+ */
+export async function selectPlacementForFile(
+  item: PlacementItem,
+  simulatedHeadrooms?: Map<string, number>,
+  nowMs = Date.now(),
+  simulatedTransferBudgets?: Map<string, number>,
+  poolId = 1
+): Promise<PlacementDecision> {
+  if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
+    throw new FileExceedsCeilingError(item.sizeBytes);
+  }
+
+  const candidates = await getEligibleAccounts(poolId, nowMs);
+  return selectPlacementFromCandidates(
+    item,
+    candidates,
+    simulatedHeadrooms,
+    simulatedTransferBudgets,
+    poolId
+  );
 }
 
 interface TreeNode {
@@ -292,14 +321,13 @@ function buildDirectoryTree(items: PlacementItem[]): TreeNode {
 }
 
 /**
- * Plans batch upload placements using bottom-up branch sizing.
- * Subfolder branches fitting into an account are placed together.
- * Oversized branches split at subfolder boundaries.
+ * Simulates batch upload placements against an explicit candidate list
+ * using bottom-up branch sizing and Folder-Cohesion Best-Fit.
  */
-export async function planBatchPlacement(
+export async function simulateBatchPlacement(
   items: PlacementItem[],
-  nowMs = Date.now(),
-  poolId = 1
+  candidates: CandidateAccount[],
+  poolId?: number
 ): Promise<BatchPlacementPlan> {
   for (const item of items) {
     if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
@@ -309,7 +337,6 @@ export async function planBatchPlacement(
 
   const simulatedHeadrooms = new Map<string, number>();
   const simulatedTransferBudgets = new Map<string, number>();
-  const candidates = await getEligibleAccounts(poolId, nowMs);
   for (const c of candidates) {
     simulatedHeadrooms.set(c.id, c.headroomBytes);
     simulatedTransferBudgets.set(c.id, c.transferStats.remainingUploadBytes24h);
@@ -350,9 +377,17 @@ export async function planBatchPlacement(
     });
 
     if (eligibleForBranch.length > 0 && node.fullPath !== '/') {
-      // Find affinity or best-fit for the branch as a whole
-      const affinityIds = await findFolderAffinityAccounts(node.fullPath, poolId);
-      let targetAccount = eligibleForBranch.find((cand) => affinityIds.includes(cand.id));
+      // Find affinity or best-fit for the branch as a whole (restricted to provided candidates)
+      const affinityIds =
+        poolId !== undefined ? await findFolderAffinityAccounts(node.fullPath, poolId) : [];
+      let targetAccount: CandidateAccount | undefined;
+      for (const affId of affinityIds) {
+        const match = eligibleForBranch.find((cand) => cand.id === affId);
+        if (match) {
+          targetAccount = match;
+          break;
+        }
+      }
       let reason: 'folder_affinity' | 'best_fit' = 'folder_affinity';
 
       if (!targetAccount) {
@@ -395,9 +430,15 @@ export async function planBatchPlacement(
       await placeNode(child);
     }
 
-    // Place remaining direct files in this node individually
+    // Place remaining direct files in this node individually against the same candidate set
     for (const f of node.files) {
-      const decision = await selectPlacementForFile(f, simulatedHeadrooms, nowMs, simulatedTransferBudgets, poolId);
+      const decision = await selectPlacementFromCandidates(
+        f,
+        candidates,
+        simulatedHeadrooms,
+        simulatedTransferBudgets,
+        poolId
+      );
       recordDecision(decision);
     }
   }
@@ -412,6 +453,20 @@ export async function planBatchPlacement(
     decisions,
     accountAllocations,
   };
+}
+
+/**
+ * Plans batch upload placements using bottom-up branch sizing.
+ * Subfolder branches fitting into an account are placed together.
+ * Oversized branches split at subfolder boundaries.
+ */
+export async function planBatchPlacement(
+  items: PlacementItem[],
+  nowMs = Date.now(),
+  poolId = 1
+): Promise<BatchPlacementPlan> {
+  const candidates = await getEligibleAccounts(poolId, nowMs);
+  return simulateBatchPlacement(items, candidates, poolId);
 }
 
 /**

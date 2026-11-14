@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { getDriveClient } from './client.js';
+import { getDriveClient, refreshAccountLiveQuota } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import {
   runColdReconciliation,
@@ -318,18 +318,16 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
       pageToken = res.data.nextPageToken || undefined;
     }
 
-    const aboutRes = await drive.about.get({ fields: 'storageQuota' });
-    const usageBytes = Number(aboutRes.data.storageQuota?.usage || 0);
-
     await db
       .update(accounts)
       .set({
         syncState: 'idle',
         lastSyncToken: newStartToken || accountRecord.lastSyncToken,
-        quotaUsedBytes: usageBytes,
         updatedAt: new Date(),
       })
       .where(eq(accounts.id, accountId));
+
+    await refreshAccountLiveQuota(accountId);
 
     return {
       accountId,

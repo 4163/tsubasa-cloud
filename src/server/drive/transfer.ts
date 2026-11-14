@@ -50,7 +50,7 @@ export interface CopyCrossAccountOptions {
   sourceAccountId: string;
   sourceDriveFileId: string;
   targetAccountId: string;
-  targetAccountEmail: string;
+  targetAccountEmail?: string;
   targetRemoteFolderId: string;
   destFileName: string;
   appProperties: Record<string, string>;
@@ -71,8 +71,32 @@ export async function copyDriveFileCrossAccount(
     fields = 'id, name, size',
   } = options;
 
-  const driveSource = getDriveClient(sourceAccountId);
   const driveTarget = getDriveClient(targetAccountId);
+
+  if (sourceAccountId === targetAccountId) {
+    const copyRes = await driveTarget.files.copy({
+      fileId: sourceDriveFileId,
+      requestBody: {
+        name: destFileName,
+        parents: [targetRemoteFolderId],
+        appProperties,
+      },
+      fields,
+      supportsAllDrives: false,
+    });
+
+    const newDriveFileId = copyRes.data.id;
+    if (!newDriveFileId) {
+      throw new Error('Google Drive server-side copy returned empty file ID');
+    }
+    return newDriveFileId;
+  }
+
+  if (!targetAccountEmail) {
+    throw new Error('targetAccountEmail is required for cross-account Drive copy');
+  }
+
+  const driveSource = getDriveClient(sourceAccountId);
 
   const shareRes = await driveSource.permissions.create({
     fileId: sourceDriveFileId,

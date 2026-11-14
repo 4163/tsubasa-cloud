@@ -624,47 +624,21 @@ export async function copyItems(
         );
 
         const newFileId = randomUUID();
-        let newDriveFileId: string;
-
-        if (targetAccountId === file.accountId) {
-          // Same-account direct Drive copy
-          const copyRes = await driveTarget.files.copy({
-            fileId: file.driveFileId,
-            requestBody: {
-              name: destFileName,
-              parents: [targetRemoteFolderId],
-              appProperties: {
-                tsubasa_managed: 'true',
-                tsubasa_virtual_path: destVirtualPath,
-                tsubasa_virtual_id: newFileId,
-                tsubasa_checksum: file.hash || '',
-              },
-            },
-            fields: 'id, name, size',
-            supportsAllDrives: false,
-          });
-
-          if (!copyRes.data.id) {
-            throw new Error('Google Drive server-side copy returned empty file ID');
-          }
-          newDriveFileId = copyRes.data.id;
-        } else {
-          newDriveFileId = await copyDriveFileCrossAccount({
-            sourceAccountId: file.accountId,
-            sourceDriveFileId: file.driveFileId,
-            targetAccountId,
-            targetAccountEmail: targetAccount.email,
-            targetRemoteFolderId,
-            destFileName,
-            appProperties: {
-              tsubasa_managed: 'true',
-              tsubasa_virtual_path: destVirtualPath,
-              tsubasa_virtual_id: newFileId,
-              tsubasa_checksum: file.hash || '',
-            },
-            fields: 'id, name, size',
-          });
-        }
+        const newDriveFileId = await copyDriveFileCrossAccount({
+          sourceAccountId: file.accountId,
+          sourceDriveFileId: file.driveFileId,
+          targetAccountId,
+          targetAccountEmail: targetAccount.email,
+          targetRemoteFolderId,
+          destFileName,
+          appProperties: {
+            tsubasa_managed: 'true',
+            tsubasa_virtual_path: destVirtualPath,
+            tsubasa_virtual_id: newFileId,
+            tsubasa_checksum: file.hash || '',
+          },
+          fields: 'id, name, size',
+        });
 
         const parentDir = path.posix.dirname(destVirtualPath);
         const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
@@ -1043,6 +1017,10 @@ export async function trashFolder(
     sqlite
       .prepare('DELETE FROM folders WHERE pool_id = ? AND (virtual_path = ? OR virtual_path LIKE ?)')
       .run(poolId, normPath, `${normPath}/%`);
+
+    sqlite
+      .prepare("DELETE FROM share_links WHERE pool_id = ? AND ('/' || batch_folder_name) = ?")
+      .run(poolId, normPath);
   })();
 
   return { trashedFilesCount: descendantFiles.length };

@@ -23,6 +23,65 @@ export interface AccountHydrationResult {
   rootFolderId: string;
 }
 
+const RECENT_DELETION_COOLDOWN_MS = 15_000;
+const recentDeletionUntilMs = new Map<string, number>();
+
+export function markAccountQuotaDecreased(
+  accountId: string,
+  cooldownMs = RECENT_DELETION_COOLDOWN_MS
+): void {
+  recentDeletionUntilMs.set(accountId, Date.now() + cooldownMs);
+}
+
+export async function refreshAccountLiveQuota(accountId: string): Promise<number | null> {
+  if (!authPool.getRecord(accountId)?.authorized) {
+    return null;
+  }
+
+  const drive = getDriveClient(accountId);
+  const aboutRes = await drive.about.get({ fields: 'storageQuota' });
+  const storage = aboutRes.data.storageQuota;
+
+  const liveUsage = Number(storage?.usage ?? NaN);
+  if (!Number.isFinite(liveUsage)) {
+    return null;
+  }
+
+  const existing = await db.query.accounts.findFirst({
+    where: eq(accounts.id, accountId),
+  });
+  if (!existing) {
+    return null;
+  }
+
+  const untilMs = recentDeletionUntilMs.get(accountId) ?? 0;
+  let nextUsage: number;
+  if (Date.now() < untilMs) {
+    // Clamp against stale pre-deletion Drive quota while Google's backend settles.
+    nextUsage = Math.min(existing.quotaUsedBytes, liveUsage);
+  } else {
+    if (untilMs > 0) {
+      recentDeletionUntilMs.delete(accountId);
+    }
+    nextUsage = liveUsage;
+  }
+
+  const liveLimit = storage?.limit ? Number(storage.limit) : NaN;
+  const nextLimit =
+    Number.isFinite(liveLimit) && liveLimit > 0 ? liveLimit : existing.quotaLimitBytes;
+
+  await db
+    .update(accounts)
+    .set({
+      quotaUsedBytes: nextUsage,
+      quotaLimitBytes: nextLimit,
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.id, accountId));
+
+  return nextUsage;
+}
+
 export function getDriveClient(clientOrId: string | OAuth2Client): drive_v3.Drive {
   if (typeof clientOrId === 'string') {
     const authClient = authPool.getClient(clientOrId);
@@ -36,15 +95,41 @@ export function getDriveClient(clientOrId: string | OAuth2Client): drive_v3.Driv
 }
 
 export const POOL_FOLDER_PREFIX = '_Tsubasa~ Pool ';
+export const SHARE_POOL_FOLDER_NAME = '_Tsubasa~ Pool share';
+// Reserve a high positive ID range so Share Pool never shifts sequential standard Pool IDs (Pool 2, Pool 3, ...).
+export const SHARE_POOL_RESERVE_ID = 1_000_000;
+
+export interface PoolFolderDescriptor {
+  kind: 'share' | 'standard';
+  poolNumber: number | null;
+}
 
 export function getPoolDriveFolderName(poolId: number): string {
   return `_Tsubasa~ Pool ${poolId}`;
 }
 
-export function parsePoolIdFromFolderName(name: string): number | null {
-  const match = /^_Tsubasa~ Pool ([1-9]\d*)$/.exec(name.trim());
+export function resolvePoolDriveFolderName(poolId: number): string {
+  const row = sqlite
+    .prepare('SELECT drive_folder_name FROM pools WHERE id = ?')
+    .get(poolId) as { drive_folder_name: string } | undefined;
+  return row?.drive_folder_name || getPoolDriveFolderName(poolId);
+}
+
+export function parsePoolFolderDescriptor(name: string): PoolFolderDescriptor | null {
+  const trimmed = name.trim();
+  if (trimmed === SHARE_POOL_FOLDER_NAME) {
+    return { kind: 'share', poolNumber: null };
+  }
+
+  const match = /^_Tsubasa~ Pool ([1-9]\d*)$/.exec(trimmed);
   if (!match) return null;
-  return Number(match[1]);
+  return { kind: 'standard', poolNumber: Number(match[1]) };
+}
+
+export function parsePoolIdFromFolderName(name: string): number | null {
+  const descriptor = parsePoolFolderDescriptor(name);
+  if (!descriptor || descriptor.kind !== 'standard') return null;
+  return descriptor.poolNumber;
 }
 
 export function ensurePoolExistsInDb(poolId: number): void {
@@ -54,6 +139,30 @@ export function ensurePoolExistsInDb(poolId: number): void {
       `INSERT INTO pools (id, name, drive_folder_name) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING`
     )
     .run(poolId, `Pool ${poolId}`, folderName);
+}
+
+export function ensureSharePoolExistsInDb(): number {
+  return sqlite.transaction(() => {
+    const existing = sqlite
+      .prepare('SELECT id FROM pools WHERE is_share_pool = 1 OR drive_folder_name = ? LIMIT 1')
+      .get(SHARE_POOL_FOLDER_NAME) as { id: number } | undefined;
+    if (existing) {
+      return existing.id;
+    }
+
+    const maxRow = sqlite
+      .prepare('SELECT MAX(id) as maxId FROM pools')
+      .get() as { maxId: number | null } | undefined;
+    const nextId = Math.max(SHARE_POOL_RESERVE_ID, (maxRow?.maxId ?? 0) + 1);
+
+    sqlite
+      .prepare(
+        `INSERT INTO pools (id, name, drive_folder_name, is_share_pool) VALUES (?, ?, ?, 1)`
+      )
+      .run(nextId, 'Share Pool', SHARE_POOL_FOLDER_NAME);
+
+    return nextId;
+  })();
 }
 
 export async function ensureRootFolder(
@@ -69,25 +178,53 @@ export async function ensureRootFolder(
     supportsAllDrives: false,
   });
 
-  const matchingFolders: Array<{ id: string; name: string; poolId: number }> = [];
+  const matchingFolders: Array<{
+    id: string;
+    name: string;
+    poolId: number | null;
+    isSharePool: boolean;
+  }> = [];
+
   for (const f of searchRes.data.files || []) {
     if (f.id && f.name) {
-      const parsed = parsePoolIdFromFolderName(f.name);
-      if (parsed !== null && parsed > 0) {
-        matchingFolders.push({ id: f.id, name: f.name, poolId: parsed });
+      const descriptor = parsePoolFolderDescriptor(f.name);
+      if (!descriptor) continue;
+      if (descriptor.kind === 'share') {
+        matchingFolders.push({ id: f.id, name: f.name, poolId: null, isSharePool: true });
+      } else if (descriptor.poolNumber !== null && descriptor.poolNumber > 0) {
+        matchingFolders.push({
+          id: f.id,
+          name: f.name,
+          poolId: descriptor.poolNumber,
+          isSharePool: false,
+        });
       }
     }
   }
 
   if (matchingFolders.length > 0) {
+    const existingSharePool = sqlite
+      .prepare('SELECT id FROM pools WHERE is_share_pool = 1 LIMIT 1')
+      .get() as { id: number } | undefined;
+
     const chosen =
-      matchingFolders.find((f) => f.poolId === preferredPoolId) || matchingFolders[0];
-    ensurePoolExistsInDb(chosen.poolId);
-    return { rootFolderId: chosen.id, poolId: chosen.poolId };
+      matchingFolders.find((f) =>
+        f.isSharePool
+          ? existingSharePool?.id === preferredPoolId
+          : f.poolId === preferredPoolId
+      ) || matchingFolders[0];
+
+    if (chosen.isSharePool) {
+      const sharePoolId = ensureSharePoolExistsInDb();
+      return { rootFolderId: chosen.id, poolId: sharePoolId };
+    }
+
+    ensurePoolExistsInDb(chosen.poolId!);
+    return { rootFolderId: chosen.id, poolId: chosen.poolId! };
   }
 
   ensurePoolExistsInDb(preferredPoolId);
-  const folderName = getPoolDriveFolderName(preferredPoolId);
+  const folderName = resolvePoolDriveFolderName(preferredPoolId);
   const createRes = await drive.files.create({
     requestBody: {
       name: folderName,
@@ -359,6 +496,8 @@ export async function switchAccountPool(
     return { accountId, poolId: targetPoolId, rootFolderId: accountRecord.rootFolderId };
   }
 
+  let resolvedRootFolderId = accountRecord.rootFolderId;
+
   const authRecord = authPool.getRecord(accountId);
   if (authRecord?.authorized) {
     const drive = getDriveClient(accountId);
@@ -377,8 +516,8 @@ export async function switchAccountPool(
       );
     }
 
-    if (accountRecord.rootFolderId) {
-      const tree = await resolveRemoteFolderTree(drive, accountRecord.rootFolderId);
+    if (resolvedRootFolderId) {
+      const tree = await resolveRemoteFolderTree(drive, resolvedRootFolderId);
       const folderIdArray = Array.from(tree.folderIds);
       for (let i = 0; i < folderIdArray.length; i += 20) {
         const chunk = folderIdArray.slice(i, i + 20);
@@ -399,7 +538,7 @@ export async function switchAccountPool(
       }
 
       const childFoldersRes: any = await drive.files.list({
-        q: `'${accountRecord.rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        q: `'${resolvedRootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder'`,
         fields: 'files(id, name)',
         pageSize: 100,
         spaces: 'drive',
@@ -417,9 +556,9 @@ export async function switchAccountPool(
       }
 
       await drive.files.update({
-        fileId: accountRecord.rootFolderId,
+        fileId: resolvedRootFolderId,
         requestBody: {
-          name: getPoolDriveFolderName(targetPoolId),
+          name: resolvePoolDriveFolderName(targetPoolId),
           appProperties: {
             tsubasa_root: 'true',
             tsubasa_pool_id: String(targetPoolId),
@@ -427,16 +566,26 @@ export async function switchAccountPool(
         },
         supportsAllDrives: false,
       });
+    } else {
+      const ensured = await ensureRootFolder(drive, targetPoolId);
+      resolvedRootFolderId = ensured.rootFolderId;
     }
   }
 
   await db
     .update(accounts)
-    .set({ poolId: targetPoolId, updatedAt: new Date() })
+    .set({ poolId: targetPoolId, rootFolderId: resolvedRootFolderId, updatedAt: new Date() })
     .where(eq(accounts.id, accountId));
 
   authPool.setPreferredPool(accountId, targetPoolId);
-  return { accountId, poolId: targetPoolId, rootFolderId: accountRecord.rootFolderId };
+
+  if (authRecord?.authorized) {
+    await refreshAccountLiveQuota(accountId).catch((err) => {
+      console.warn(`Quota refresh warning for ${accountId} during pool switch:`, err);
+    });
+  }
+
+  return { accountId, poolId: targetPoolId, rootFolderId: resolvedRootFolderId };
 }
 
 

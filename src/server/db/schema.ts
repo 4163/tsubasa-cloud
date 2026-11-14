@@ -5,6 +5,7 @@ export const pools = sqliteTable('pools', {
   id: integer('id').primaryKey(),
   name: text('name').notNull(),
   driveFolderName: text('drive_folder_name').notNull().unique(),
+  isSharePool: integer('is_share_pool', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 });
@@ -75,6 +76,21 @@ export const transferLogs = sqliteTable('transfer_logs', {
 }, (table) => [
   index('transfer_account_ts_idx').on(table.accountId, table.timestamp),
   index('transfer_ts_idx').on(table.timestamp),
+]);
+
+export const shareLinks = sqliteTable('share_links', {
+  id: text('id').primaryKey(),
+  poolId: integer('pool_id').notNull().references(() => pools.id, { onDelete: 'cascade' }),
+  batchFolderName: text('batch_folder_name').notNull(),
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  driveFolderId: text('drive_folder_id').notNull(),
+  webViewLink: text('web_view_link').notNull(),
+  filesCount: integer('files_count').notNull().default(0),
+  bytesAllocated: integer('bytes_allocated').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  uniqueIndex('share_links_pool_batch_account_idx').on(table.poolId, table.batchFolderName, table.accountId),
+  index('share_links_pool_batch_idx').on(table.poolId, table.batchFolderName),
 ]);
 
 export type Pool = typeof pools.$inferSelect;
