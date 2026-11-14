@@ -516,6 +516,7 @@ export function App() {
           if (res.ok) {
             const report = await res.json();
             const count =
+              (report?.conflicts?.length ?? 0) +
               (report?.overCeiling?.length ?? 0) +
               (report?.unindexed?.length ?? 0) +
               (report?.modified?.length ?? 0) +
@@ -533,7 +534,7 @@ export function App() {
   }, []);
 
   const loadClusterData = useCallback(
-    async (targetPoolId?: number) => {
+    async (targetPoolId?: number): Promise<DiscoveredAccount[] | undefined> => {
       const effectivePoolId = targetPoolId ?? activePoolId;
       try {
         const poolsRes = await client.api.pools.$get();
@@ -559,10 +560,12 @@ export function App() {
         if (poolRes.ok) {
           const poolData = await poolRes.json();
           setDiscovered(poolData.accounts);
+          return poolData.accounts as DiscoveredAccount[];
         }
       } catch (err) {
         setErrorNotice(err instanceof Error ? err.message : 'Cluster offline');
       }
+      return undefined;
     },
     [activePoolId]
   );
@@ -648,15 +651,103 @@ export function App() {
     }
   }, [discovered, checkAccountDiscrepancies]);
 
+  const clearWorkspaceState = useCallback(() => {
+    setFiles([]);
+    setFolders([]);
+    setTrashedFiles([]);
+    setLoadedFilesPoolId(null);
+    setLoadedTrashPoolId(null);
+    setShareLinksByBatch({});
+    setShareLinksPoolId(null);
+    setFilteredAccountIds(new Set());
+    setSelectedIds(new Set());
+    setClipboard(null);
+  }, []);
+
+  const handleSelectPool = useCallback(
+    (nextPoolId: number) => {
+      if (nextPoolId === activePoolId) return;
+      clearWorkspaceState();
+      setActivePoolId(nextPoolId);
+      setCurrentPath('/');
+      setIsUploadDrawerOpen(false);
+      setIsExternalChangesOpen(false);
+      setShareModalState(null);
+      setIsClearSharePoolOpen(false);
+      setMoveFilesModalGroup(null);
+      setRenameModalItem(null);
+    },
+    [activePoolId, clearWorkspaceState]
+  );
+
+  const presentAuthorizedAccount = useCallback(
+    async ({
+      accountFilterId,
+      targetPool,
+      conflictsCount,
+      conflictToast,
+      cleanToast,
+    }: {
+      accountFilterId?: string;
+      targetPool: number;
+      conflictsCount: number;
+      conflictToast: string;
+      cleanToast: string;
+    }) => {
+      const nextPath = targetPool !== activePoolId ? '/' : currentPath;
+      if (targetPool !== activePoolId) {
+        handleSelectPool(targetPool);
+      }
+      lastDiscrepancyScanMs = 0;
+      const [freshAccounts] = await Promise.all([
+        loadClusterData(targetPool),
+        loadFiles(nextPath, targetPool),
+      ]);
+      if (freshAccounts) {
+        await checkAccountDiscrepancies(freshAccounts, true);
+      }
+      if (conflictsCount > 0) {
+        showToast(conflictToast);
+        if (accountFilterId) {
+          setExternalChangesAccountId(accountFilterId);
+        }
+        setIsExternalChangesOpen(true);
+      } else {
+        showToast(cleanToast);
+      }
+    },
+    [
+      activePoolId,
+      currentPath,
+      handleSelectPool,
+      loadClusterData,
+      loadFiles,
+      checkAccountDiscrepancies,
+      showToast,
+    ]
+  );
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('auth') === 'success') {
-      const account = params.get('account') || 'Google account';
-      showToast(`Account "${account}" successfully authorized.`);
+      const rawAccount = params.get('account') || undefined;
+      const accountLabel = rawAccount || 'Google account';
+      const poolIdParam = Number(params.get('poolId'));
+      const parsedConflicts = Number(params.get('conflicts') || '0');
+      const conflictsCount =
+        Number.isFinite(parsedConflicts) && parsedConflicts > 0 ? parsedConflicts : 0;
+      const targetPool =
+        Number.isFinite(poolIdParam) && poolIdParam > 0 ? poolIdParam : activePoolId;
       window.history.replaceState({}, '', window.location.pathname);
-      loadClusterData();
+      void presentAuthorizedAccount({
+        accountFilterId: rawAccount,
+        targetPool,
+        conflictsCount,
+        conflictToast: `Account "${accountLabel}" authorized with ${conflictsCount} file ${conflictsCount === 1 ? 'conflict' : 'conflicts'}.`,
+        cleanToast: `Account "${accountLabel}" successfully authorized.`,
+      });
     }
-  }, [loadClusterData, showToast]);
+  }, [activePoolId, presentAuthorizedAccount]);
 
   useEffect(() => {
     function handleFocus() {
@@ -824,9 +915,22 @@ export function App() {
 
       if (res.ok) {
         const result = await res.json();
-        showToast(`Imported credentials for "${result.accountId}".`);
-        await loadClusterData();
-        if (!result.authorized) {
+        if (result.authorized && result.accountId) {
+          const targetPool =
+            'poolId' in result && typeof result.poolId === 'number' ? result.poolId : activePoolId;
+          const conflictsCount =
+            'conflictsCount' in result && typeof result.conflictsCount === 'number'
+              ? result.conflictsCount
+              : 0;
+          await presentAuthorizedAccount({
+            accountFilterId: result.accountId,
+            targetPool,
+            conflictsCount,
+            conflictToast: `Imported "${result.accountId}" with ${conflictsCount} file ${conflictsCount === 1 ? 'conflict' : 'conflicts'}.`,
+            cleanToast: `Imported credentials for "${result.accountId}".`,
+          });
+        } else {
+          await loadClusterData();
           showToast(`Account "${result.accountId}" added. Click "Authorize" to complete Google sign-in.`);
         }
       } else {
@@ -1729,35 +1833,6 @@ export function App() {
       }));
   }, [accountItems, externalChangesAccountId]);
 
-  const clearWorkspaceState = useCallback(() => {
-    setFiles([]);
-    setFolders([]);
-    setTrashedFiles([]);
-    setLoadedFilesPoolId(null);
-    setLoadedTrashPoolId(null);
-    setShareLinksByBatch({});
-    setShareLinksPoolId(null);
-    setFilteredAccountIds(new Set());
-    setSelectedIds(new Set());
-    setClipboard(null);
-  }, []);
-
-  const handleSelectPool = useCallback(
-    (nextPoolId: number) => {
-      if (nextPoolId === activePoolId) return;
-      clearWorkspaceState();
-      setActivePoolId(nextPoolId);
-      setCurrentPath('/');
-      setIsUploadDrawerOpen(false);
-      setIsExternalChangesOpen(false);
-      setShareModalState(null);
-      setIsClearSharePoolOpen(false);
-      setMoveFilesModalGroup(null);
-      setRenameModalItem(null);
-    },
-    [activePoolId, clearWorkspaceState]
-  );
-
   const handleCreatePool = useCallback(async () => {
     await runPendingOp(async () => {
       try {
@@ -2305,8 +2380,11 @@ export function App() {
           accounts={externalChangesAccounts}
           initialAccountId={externalChangesAccountId}
           onResolved={async () => {
-            await loadClusterData();
+            const freshAccounts = await loadClusterData();
             await loadFiles(currentPath);
+            if (freshAccounts) {
+              await checkAccountDiscrepancies(freshAccounts, true);
+            }
             showToast('Discrepancies updated.');
           }}
         />

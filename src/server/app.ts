@@ -22,6 +22,8 @@ import {
   acceptExternalFile,
   ejectFileToDriveRoot,
   removeMissingFile,
+  resolvePathConflict,
+  type ConflictResolutionAction,
   rebalanceFile,
   rebalanceFilesBatch,
   RebalanceValidationError,
@@ -512,15 +514,32 @@ const routes = app
         if (!result.success) {
           return c.json({ error: result.error || 'Failed to import credentials' }, 400);
         }
+        let resolvedPoolId = poolId;
+        let filesIndexed = 0;
+        let conflictsCount = 0;
         if (result.authorized && result.accountId) {
           try {
             const hydRes = await hydrateAccount(result.accountId, poolId);
             result.accountId = hydRes.accountId;
+            resolvedPoolId = hydRes.poolId;
+            if (!isSharePoolId(hydRes.poolId)) {
+              const syncReport = await runColdReconciliation(hydRes.accountId);
+              filesIndexed = syncReport.filesIndexed;
+              conflictsCount = syncReport.conflictsDetected;
+            }
           } catch (err) {
-            console.warn(`Hydration deferred for ${result.accountId}:`, err);
+            console.warn(`Hydration or cold sync deferred for ${result.accountId}:`, err);
           }
         }
-        return c.json(result, 201);
+        return c.json(
+          {
+            ...result,
+            poolId: resolvedPoolId,
+            filesIndexed,
+            conflictsCount,
+          },
+          201
+        );
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
@@ -556,9 +575,20 @@ const routes = app
       const { accountId: targetAccountId } = await authPool.handleCallback(accountId, code, redirectUri);
 
       const hydRes = await hydrateAccount(targetAccountId);
+      let conflictsCount = 0;
+      if (!isSharePoolId(hydRes.poolId)) {
+        try {
+          const syncReport = await runColdReconciliation(hydRes.accountId);
+          conflictsCount = syncReport.conflictsDetected;
+        } catch (syncErr) {
+          console.warn(`Cold sync deferred on auth callback for ${hydRes.accountId}:`, syncErr);
+        }
+      }
 
       const clientOrigin = process.env.CLIENT_URL || (url.port === '3000' ? 'http://localhost:5173' : url.origin);
-      return c.redirect(`${clientOrigin}/?auth=success&account=` + encodeURIComponent(hydRes.accountId));
+      return c.redirect(
+        `${clientOrigin}/?auth=success&account=${encodeURIComponent(hydRes.accountId)}&poolId=${hydRes.poolId}&conflicts=${conflictsCount}`
+      );
     } catch (err) {
       return c.text(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`, 500);
     }
@@ -1008,6 +1038,63 @@ const routes = app
       try {
         const record = await acceptExternalFile(accountId, driveFileId, targetVirtualPath);
         return c.json(record);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+  )
+  .post(
+    '/api/sync/resolve/conflict',
+    validator(
+      'json',
+      (
+        value,
+        c
+      ):
+        | {
+            accountId: string;
+            driveFileId: string;
+            resolution: ConflictResolutionAction;
+            targetVirtualPath?: string;
+          }
+        | Response => {
+        const body = value as Record<string, unknown>;
+        const resolution = body?.resolution;
+        if (
+          typeof body?.accountId !== 'string' ||
+          typeof body?.driveFileId !== 'string' ||
+          (resolution !== 'keep_both' &&
+            resolution !== 'deduplicate' &&
+            resolution !== 'replace_existing' &&
+            resolution !== 'eject')
+        ) {
+          return c.json(
+            {
+              error:
+                'accountId, driveFileId, and valid resolution (keep_both | deduplicate | replace_existing | eject) required',
+            },
+            400
+          );
+        }
+        return {
+          accountId: body.accountId,
+          driveFileId: body.driveFileId,
+          resolution,
+          targetVirtualPath: typeof body.targetVirtualPath === 'string' ? body.targetVirtualPath : undefined,
+        };
+      }
+    ),
+    async (c) => {
+      const { accountId, driveFileId, resolution, targetVirtualPath } = c.req.valid('json');
+      if (isAccountInSharePool(accountId)) {
+        return c.json(
+          sharePoolReadOnlyError('Conflict resolution is disabled for Share Pool accounts'),
+          403
+        );
+      }
+      try {
+        const res = await resolvePathConflict(accountId, driveFileId, resolution, targetVirtualPath);
+        return c.json(res);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }

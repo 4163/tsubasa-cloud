@@ -508,7 +508,7 @@ export interface CopyResult {
   error?: string;
 }
 
-async function getAvailableCopyPath(
+export async function getAvailableCopyPath(
   targetDir: string,
   baseName: string,
   kind: 'file' | 'folder',

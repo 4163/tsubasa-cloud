@@ -16,9 +16,35 @@ export interface ExternalDiscrepancyItem {
   discrepancyType: 'unindexed' | 'modified' | 'over_ceiling';
 }
 
+export interface PathConflictItem {
+  driveFileId: string;
+  name: string;
+  virtualPath: string;
+  sizeBytes: number;
+  mimeType: string;
+  hash: string | null;
+  modifiedTime: string | null;
+  accountId: string;
+  accountEmail: string;
+  accountDisplayName: string;
+  discrepancyType: 'conflict';
+  isExactDuplicate: boolean;
+  existingFile: {
+    fileId: string;
+    driveFileId: string;
+    accountId: string;
+    accountEmail: string;
+    accountDisplayName: string;
+    sizeBytes: number;
+    hash: string | null;
+    updatedAt: string | null;
+  };
+}
+
 export interface DiscrepancyReport {
   accountId: string;
   scannedFiles: number;
+  conflicts: PathConflictItem[];
   unindexed: ExternalDiscrepancyItem[];
   modified: ExternalDiscrepancyItem[];
   overCeiling: ExternalDiscrepancyItem[];
@@ -274,6 +300,112 @@ const styles = stylex.create({
     '@media (max-width: 768px)': {
       borderLeftColor: colors.danger,
     },
+  },
+  cardConflict: {
+    '::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: spacing.space2,
+      width: '3px',
+      backgroundColor: colors.warning,
+      pointerEvents: 'none',
+      display: {
+        default: 'block',
+        '@media (max-width: 768px)': 'none',
+      },
+    },
+    '@media (max-width: 768px)': {
+      borderLeftColor: colors.warning,
+    },
+  },
+  batchActionsBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    flexWrap: 'wrap',
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space5,
+    marginTop: spacing.space2,
+  },
+  conflictBadgeExact: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    height: '20px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    backgroundColor: colors.brandAccentSurface,
+    color: colors.brandAccent,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '600',
+    flexShrink: 0,
+  },
+  conflictBadgeDiff: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    height: '20px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    backgroundColor: colors.warningSurface,
+    color: colors.warning,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '600',
+    flexShrink: 0,
+  },
+  conflictCompareBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing.space1,
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.compact,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+  },
+  conflictCompareRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
+    fontSize: typography.fontSizeMeta,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  conflictCompareLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+    flex: 1,
+  },
+  conflictOriginTag: {
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '600',
+    color: colors.primaryText,
+    minWidth: '66px',
+    flexShrink: 0,
+  },
+  conflictAccountEmail: {
+    fontFamily: typography.fontFamilyMono,
+    fontSize: typography.fontSizeMeta,
+    color: colors.secondaryText,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+  },
+  conflictSizeText: {
+    fontSize: typography.fontSizeMeta,
+    color: colors.primaryText,
+    fontWeight: '500',
+    fontVariantNumeric: 'tabular-nums',
+    flexShrink: 0,
   },
   fileHeaderRow: {
     display: 'flex',
@@ -678,13 +810,78 @@ export function ExternalChangesDrawer({
     }
   };
 
+  const handleResolveConflict = async (
+    item: PathConflictItem,
+    resolution: 'keep_both' | 'deduplicate' | 'replace_existing' | 'eject'
+  ) => {
+    setActiveActionId(item.driveFileId);
+    setStatusNotice(null);
+    try {
+      const res = await client.api.sync.resolve.conflict.$post({
+        json: {
+          accountId: item.accountId,
+          driveFileId: item.driveFileId,
+          resolution,
+          targetVirtualPath: item.virtualPath,
+        },
+      });
+
+      if (res.ok) {
+        await scanAccount(selectedAccount);
+        await onResolved();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setStatusNotice(('error' in err ? err.error : null) || 'Failed to resolve conflict');
+      }
+    } catch (err) {
+      setStatusNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActiveActionId(null);
+    }
+  };
+
+  const handleBatchResolveConflicts = async (
+    items: PathConflictItem[],
+    resolution: 'keep_both' | 'deduplicate'
+  ) => {
+    if (items.length === 0) return;
+    setActiveActionId('batch-conflict');
+    setStatusNotice(null);
+    try {
+      for (const item of items) {
+        const res = await client.api.sync.resolve.conflict.$post({
+          json: {
+            accountId: item.accountId,
+            driveFileId: item.driveFileId,
+            resolution,
+            targetVirtualPath: item.virtualPath,
+          },
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setStatusNotice(('error' in err ? err.error : null) || `Failed to resolve ${item.name}`);
+          break;
+        }
+      }
+      await scanAccount(selectedAccount);
+      await onResolved();
+    } catch (err) {
+      setStatusNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActiveActionId(null);
+    }
+  };
+
   const isLocked = activeActionId !== null;
 
   useDialogLock(isOpen, isLocked, onClose);
 
   if (!isOpen) return null;
 
+  const exactDuplicates = (report?.conflicts ?? []).filter((c) => c.isExactDuplicate);
+
   const totalDiscrepancies =
+    (report?.conflicts?.length ?? 0) +
     (report?.overCeiling.length ?? 0) +
     (report?.unindexed.length ?? 0) +
     (report?.modified.length ?? 0) +
@@ -805,6 +1002,169 @@ export function ExternalChangesDrawer({
                       >
                         Move to root (Eject)
                       </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Path conflicts in pool */}
+          {report?.conflicts && report.conflicts.length > 0 && (
+            <div>
+              <h3 {...stylex.props(styles.sectionTitle)}>
+                <IconAlertTriangle size={16} color={colors.warning} />
+                Path conflicts in pool, {report.conflicts.length}
+              </h3>
+              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
+                These files share the same folder path as files already stored on another drive in this pool.
+              </p>
+
+              {report.conflicts.length > 1 && (
+                <div {...stylex.props(styles.batchActionsBar)}>
+                  {exactDuplicates.length > 1 && (
+                    <button
+                      type="button"
+                      {...stylex.props(styles.btnPrimary)}
+                      onClick={() => handleBatchResolveConflicts(exactDuplicates, 'deduplicate')}
+                      disabled={isLocked}
+                    >
+                      Remove {exactDuplicates.length} identical duplicates
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    {...stylex.props(exactDuplicates.length > 1 ? styles.btnSecondary : styles.btnPrimary)}
+                    onClick={() => handleBatchResolveConflicts(report.conflicts, 'keep_both')}
+                    disabled={isLocked}
+                  >
+                    Keep both for all {report.conflicts.length}
+                  </button>
+                </div>
+              )}
+
+              <div {...stylex.props(styles.cardList)}>
+                {report.conflicts.map((item) => (
+                  <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardConflict)}>
+                    <div {...stylex.props(styles.fileHeaderRow)}>
+                      <div {...stylex.props(styles.fileTitleGroup)}>
+                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        <div {...stylex.props(styles.fileTitleCol)}>
+                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                            {item.name}
+                          </span>
+                          <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+                            {item.virtualPath}
+                          </span>
+                        </div>
+                      </div>
+                      <span
+                        {...stylex.props(
+                          item.isExactDuplicate ? styles.conflictBadgeExact : styles.conflictBadgeDiff
+                        )}
+                      >
+                        {item.isExactDuplicate ? 'Identical copy' : 'Different version'}
+                      </span>
+                    </div>
+
+                    <div {...stylex.props(styles.conflictCompareBox)}>
+                      <div {...stylex.props(styles.conflictCompareRow)}>
+                        <div {...stylex.props(styles.conflictCompareLeft)}>
+                          <span {...stylex.props(styles.conflictOriginTag)}>In pool</span>
+                          <span
+                            {...stylex.props(styles.conflictAccountEmail)}
+                            title={item.existingFile.accountEmail}
+                          >
+                            {item.existingFile.accountEmail}
+                          </span>
+                        </div>
+                        <span {...stylex.props(styles.conflictSizeText)}>
+                          {formatBytes(item.existingFile.sizeBytes)}
+                        </span>
+                      </div>
+                      <div {...stylex.props(styles.conflictCompareRow)}>
+                        <div {...stylex.props(styles.conflictCompareLeft)}>
+                          <span {...stylex.props(styles.conflictOriginTag)}>This drive</span>
+                          <span {...stylex.props(styles.conflictAccountEmail)} title={item.accountEmail}>
+                            {item.accountEmail}
+                          </span>
+                        </div>
+                        <span {...stylex.props(styles.conflictSizeText)}>{formatBytes(item.sizeBytes)}</span>
+                      </div>
+                    </div>
+
+                    <div {...stylex.props(styles.actionsRow)}>
+                      {item.isExactDuplicate ? (
+                        <>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnPrimary)}
+                            onClick={() => handleResolveConflict(item, 'deduplicate')}
+                            disabled={isLocked}
+                          >
+                            Remove duplicate
+                          </button>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnSecondary)}
+                            onClick={() => handleResolveConflict(item, 'keep_both')}
+                            disabled={isLocked}
+                          >
+                            Keep both, rename
+                          </button>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnSecondary)}
+                            onClick={() => handleResolveConflict(item, 'replace_existing')}
+                            disabled={isLocked}
+                          >
+                            Use this drive&apos;s copy
+                          </button>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnSecondary)}
+                            onClick={() => handleResolveConflict(item, 'eject')}
+                            disabled={isLocked}
+                          >
+                            Eject to Drive root
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnPrimary)}
+                            onClick={() => handleResolveConflict(item, 'keep_both')}
+                            disabled={isLocked}
+                          >
+                            Keep both, rename
+                          </button>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnSecondary)}
+                            onClick={() => handleResolveConflict(item, 'replace_existing')}
+                            disabled={isLocked}
+                          >
+                            Replace pool copy
+                          </button>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnSecondary)}
+                            onClick={() => handleResolveConflict(item, 'deduplicate')}
+                            disabled={isLocked}
+                          >
+                            Discard this copy
+                          </button>
+                          <button
+                            type="button"
+                            {...stylex.props(styles.btnSecondary)}
+                            onClick={() => handleResolveConflict(item, 'eject')}
+                            disabled={isLocked}
+                          >
+                            Eject to Drive root
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
