@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
+import { compress } from 'hono/compress';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { validator } from 'hono/validator';
-import { db, sqlite } from './db/index.js';
+import { db, sqlite, getPoolRevision, bumpPoolRevision } from './db/index.js';
 import { accounts, files, folders, pools } from './db/schema.js';
-import { eq, and, asc, sql } from 'drizzle-orm';
+import { eq, and, asc, isNull, sql } from 'drizzle-orm';
 import {
   authPool,
   hydrateAccount,
@@ -39,18 +40,23 @@ import {
   copyItems,
   renameItem,
   trashFolder,
-  ensureLocalFolderHierarchy,
+  ensureLocalFolderPath,
+  normalizeVirtualPath,
   AccountPoolLockedError,
   switchAccountPool,
   getPoolDriveFolderName,
   formatFolderId,
   isSharePoolId,
+  getOutboxStatusSummary,
+  retryOutboxEntries,
+  startBackgroundJob,
 } from './drive/index.js';
 import {
   getPooledStorageOverview,
   getAccountTransferStats,
   selectPlacementForFile,
   planBatchPlacement,
+  MAX_SINGLE_FILE_BYTES,
   FileExceedsCeilingError,
   InsufficientStorageError,
 } from './storage/index.js';
@@ -65,21 +71,96 @@ import {
   type ShareTargetInput,
 } from './drive/share.js';
 
-function parsePoolId(raw: unknown): number {
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : 1;
+const INVALID_POOL_ID_ERROR = 'poolId must be a positive integer';
+
+function parseStrictPoolId(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isInteger(raw) && raw > 0 ? raw : null;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    const n = Number(trimmed);
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+function parsePoolIdWithDefault(raw: unknown, defaultValue = 1): number | null {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return defaultValue;
+  }
+  return parseStrictPoolId(raw);
+}
+
+function parseOptionalPoolId(raw: unknown): { ok: true; poolId: number | undefined } | { ok: false } {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return { ok: true, poolId: undefined };
+  }
+  const parsed = parseStrictPoolId(raw);
+  if (parsed === null) return { ok: false };
+  return { ok: true, poolId: parsed };
 }
 
 function sharePoolReadOnlyError(message: string) {
   return { error: message, code: 'SHARE_POOL_READ_ONLY' } as const;
 }
 
-function isAccountInSharePool(accountId: string): boolean {
+function getAccountPoolId(accountId: string): number | undefined {
   const acc = sqlite.prepare('SELECT pool_id as poolId FROM accounts WHERE id = ? LIMIT 1').get(accountId) as
     | { poolId: number }
     | undefined;
-  return Boolean(acc && isSharePoolId(acc.poolId));
+  return acc?.poolId;
 }
+
+function getFilePoolId(fileId: string): number | undefined {
+  const fileRow = sqlite.prepare('SELECT pool_id as poolId FROM files WHERE id = ? LIMIT 1').get(fileId) as
+    | { poolId: number }
+    | undefined;
+  return fileRow?.poolId;
+}
+
+function isAccountInSharePool(accountId: string): boolean {
+  const poolId = getAccountPoolId(accountId);
+  return poolId !== undefined && isSharePoolId(poolId);
+}
+
+function buildContentDisposition(filename: string): string {
+  const asciiSafe =
+    filename
+      .replace(/[\r\n"\\]/g, '_')
+      .replace(/[^\x20-\x7E]/g, '_') || 'download';
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*!]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `attachment; filename="${asciiSafe}"; filename*=UTF-8''${encoded}`;
+}
+
+const projectedFileColumns = {
+  id: files.id,
+  poolId: files.poolId,
+  virtualPath: files.virtualPath,
+  name: files.name,
+  sizeBytes: files.sizeBytes,
+  mimeType: files.mimeType,
+  accountId: files.accountId,
+  folderId: files.folderId,
+  isTrashed: files.isTrashed,
+  trashedAt: files.trashedAt,
+  createdAt: files.createdAt,
+  updatedAt: files.updatedAt,
+};
+
+const projectedFolderColumns = {
+  id: folders.id,
+  poolId: folders.poolId,
+  virtualPath: folders.virtualPath,
+  name: folders.name,
+  parentFolderId: folders.parentFolderId,
+  createdAt: folders.createdAt,
+  updatedAt: folders.updatedAt,
+};
 
 const INSTANCE_LEASE_TTL_MS = 15_000;
 
@@ -193,8 +274,15 @@ async function getAccountsList(poolId?: number) {
 }
 
 const app = new Hono();
+const httpLogger = logger();
 
-app.use('*', logger());
+app.use('*', compress());
+app.use('*', async (c, next) => {
+  if (c.req.path === '/api/instance/heartbeat' || c.req.path === '/api/health') {
+    return next();
+  }
+  return httpLogger(c, next);
+});
 app.use('*', cors());
 
 const routes = app
@@ -431,7 +519,10 @@ const routes = app
       return { name: body.name.trim() };
     }),
     async (c) => {
-      const poolId = parsePoolId(c.req.param('id'));
+      const poolId = parseStrictPoolId(c.req.param('id'));
+      if (poolId === null) {
+        return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+      }
       const { name } = c.req.valid('json');
 
       const existing = sqlite
@@ -459,7 +550,10 @@ const routes = app
     }
   )
   .delete('/api/pools/:id', async (c) => {
-    const poolId = parsePoolId(c.req.param('id'));
+    const poolId = parseStrictPoolId(c.req.param('id'));
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
 
     const existing = sqlite
       .prepare('SELECT id, name, drive_folder_name as driveFolderName, is_share_pool as isSharePool FROM pools WHERE id = ?')
@@ -506,14 +600,18 @@ const routes = app
     });
   })
   .get('/api/storage', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : 1;
+    const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
     const overview = await getPooledStorageOverview(poolId);
     return c.json(overview);
   })
   .get('/api/storage/overview', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : 1;
+    const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
     const overview = await getPooledStorageOverview(poolId);
     return c.json(overview);
   })
@@ -533,10 +631,14 @@ const routes = app
       if (typeof body?.virtualPath !== 'string' || typeof body?.sizeBytes !== 'number') {
         return c.json({ error: 'Invalid payload: virtualPath (string) and sizeBytes (number) required' }, 400);
       }
+      const parsedPool = parseOptionalPoolId(body?.poolId);
+      if (!parsedPool.ok) {
+        return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+      }
       return {
         virtualPath: body.virtualPath,
         sizeBytes: body.sizeBytes,
-        poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+        poolId: parsedPool.poolId,
       };
     }),
     async (c) => {
@@ -578,9 +680,13 @@ const routes = app
             return c.json({ error: 'Each item requires virtualPath (string) and sizeBytes (number)' }, 400);
           }
         }
+        const parsedPool = parseOptionalPoolId(body?.poolId);
+        if (!parsedPool.ok) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return {
           items: body.items as Array<{ virtualPath: string; sizeBytes: number }>,
-          poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+          poolId: parsedPool.poolId,
         };
       }
     ),
@@ -601,15 +707,19 @@ const routes = app
     }
   )
   .get('/api/accounts', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
-    const list = await getAccountsList(poolId);
+    const parsedPool = parseOptionalPoolId(c.req.query('poolId'));
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+    const list = await getAccountsList(parsedPool.poolId);
     return c.json({ accounts: list });
   })
   .get('/api/accounts/pool', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
-    const list = await getAccountsList(poolId);
+    const parsedPool = parseOptionalPoolId(c.req.query('poolId'));
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+    const list = await getAccountsList(parsedPool.poolId);
     return c.json({ accounts: list });
   })
   .post('/api/accounts/:id/disable', async (c) => {
@@ -636,8 +746,50 @@ const routes = app
   .delete('/api/accounts/:id', async (c) => {
     const accountId = c.req.param('id');
     try {
-      const result = await removeDriveAccount(accountId);
-      return c.json(result);
+      const fileCountRow = sqlite
+        .prepare('SELECT COUNT(*) as cnt FROM files WHERE account_id = ?')
+        .get(accountId) as { cnt: number } | undefined;
+      const fileCount = Number(fileCountRow?.cnt ?? 0);
+
+      if (fileCount === 0) {
+        const result = await removeDriveAccount(accountId);
+        return c.json(result, 200);
+      }
+
+      const accountPoolId = getAccountPoolId(accountId);
+      const otherActive =
+        accountPoolId !== undefined
+          ? sqlite
+              .prepare(
+                "SELECT 1 FROM accounts WHERE pool_id = ? AND id != ? AND is_disabled = 0 AND (sync_state IS NULL OR sync_state != 'error') LIMIT 1"
+              )
+              .get(accountPoolId, accountId)
+          : undefined;
+
+      if (!otherActive) {
+        return c.json(
+          {
+            error: 'No other active account available in this pool to evacuate files to',
+            code: 'INSUFFICIENT_STORAGE',
+          },
+          507
+        );
+      }
+
+      const job = startBackgroundJob('account_evacuate', accountId, () => removeDriveAccount(accountId));
+      return c.json(
+        {
+          sourceAccountId: accountId,
+          filesMoved: 0,
+          bytesMoved: 0,
+          transfers: [],
+          removed: false,
+          queued: true,
+          jobId: job.id,
+          filesQueued: fileCount,
+        },
+        202
+      );
     } catch (err) {
       if (err instanceof InsufficientStorageError) {
         return c.json({ error: err.message, code: 'INSUFFICIENT_STORAGE' }, 507);
@@ -676,10 +828,14 @@ const routes = app
       if (typeof body?.filename !== 'string' || typeof body?.content !== 'string') {
         return c.json({ error: 'filename (string) and content (string) are required' }, 400);
       }
+      const parsedPool = parseOptionalPoolId(body?.poolId);
+      if (!parsedPool.ok) {
+        return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+      }
       return {
         filename: body.filename,
         content: body.content,
-        poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+        poolId: parsedPool.poolId,
       };
     }),
     async (c) => {
@@ -690,17 +846,15 @@ const routes = app
           return c.json({ error: result.error || 'Failed to import credentials' }, 400);
         }
         let resolvedPoolId = poolId;
-        let filesIndexed = 0;
-        let conflictsCount = 0;
+        const filesIndexed = 0;
+        const conflictsCount = 0;
         if (result.authorized && result.accountId) {
           try {
             const hydRes = await hydrateAccount(result.accountId, poolId);
             result.accountId = hydRes.accountId;
             resolvedPoolId = hydRes.poolId;
             if (!isSharePoolId(hydRes.poolId)) {
-              const syncReport = await runColdReconciliation(hydRes.accountId);
-              filesIndexed = syncReport.filesIndexed;
-              conflictsCount = syncReport.conflictsDetected;
+              startBackgroundJob('oauth_cold_sync', hydRes.accountId, () => runColdReconciliation(hydRes.accountId));
             }
           } catch (err) {
             console.warn(`Hydration or cold sync deferred for ${result.accountId}:`, err);
@@ -750,14 +904,9 @@ const routes = app
       const { accountId: targetAccountId } = await authPool.handleCallback(accountId, code, redirectUri);
 
       const hydRes = await hydrateAccount(targetAccountId);
-      let conflictsCount = 0;
+      const conflictsCount = 0;
       if (!isSharePoolId(hydRes.poolId)) {
-        try {
-          const syncReport = await runColdReconciliation(hydRes.accountId);
-          conflictsCount = syncReport.conflictsDetected;
-        } catch (syncErr) {
-          console.warn(`Cold sync deferred on auth callback for ${hydRes.accountId}:`, syncErr);
-        }
+        startBackgroundJob('oauth_cold_sync', hydRes.accountId, () => runColdReconciliation(hydRes.accountId));
       }
 
       const clientOrigin = process.env.CLIENT_URL || (url.port === '3000' ? 'http://localhost:5173' : url.origin);
@@ -768,9 +917,32 @@ const routes = app
       return c.text(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`, 500);
     }
   })
+  .get('/api/sync/status', (c) => {
+    return c.json(getOutboxStatusSummary());
+  })
+  .post('/api/sync/outbox/retry', async (c) => {
+    let accountId: string | undefined;
+    try {
+      const raw = await c.req.text();
+      if (raw.trim()) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed?.accountId !== undefined) {
+          if (typeof parsed.accountId !== 'string' || !parsed.accountId.trim()) {
+            return c.json({ error: 'accountId must be a non-empty string' }, 400);
+          }
+          accountId = parsed.accountId.trim();
+        }
+      }
+    } catch {
+      return c.json({ error: 'Invalid JSON payload' }, 400);
+    }
+    return c.json(retryOutboxEntries(accountId));
+  })
   .post('/api/sync/all', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = parsePoolId(rawPoolId);
+    const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
     if (isSharePoolId(poolId)) {
       return c.json(sharePoolReadOnlyError('Fetching Drive changes is disabled on Share Pool'), 403);
     }
@@ -807,10 +979,12 @@ const routes = app
   })
   .post('/api/accounts/hydrate/:id', async (c) => {
     const accountId = c.req.param('id');
-    const rawPoolId = c.req.query('poolId');
-    const preferredPoolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
+    const parsedPool = parseOptionalPoolId(c.req.query('poolId'));
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
     try {
-      const result = await hydrateAccount(accountId, preferredPoolId);
+      const result = await hydrateAccount(accountId, parsedPool.poolId);
       return c.json(result);
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -818,35 +992,95 @@ const routes = app
   })
   .get(
     '/api/files',
-    validator('query', (value): { path?: string; poolId?: string } => {
+    validator('query', (value): { path?: string; poolId?: string; mode?: 'dir' | 'tree' } => {
       const folderPath = typeof value.path === 'string' ? value.path : undefined;
       const poolId = typeof value.poolId === 'string' ? value.poolId : undefined;
-      return { path: folderPath, poolId };
+      const mode = value.mode === 'dir' ? 'dir' : value.mode === 'tree' ? 'tree' : undefined;
+      return { path: folderPath, poolId, mode };
     }),
     async (c) => {
-      const { path: folderPath = '/', poolId: rawPoolId } = c.req.valid('query');
-      const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : 1;
+      const { path: folderPath = '/', poolId: rawPoolId, mode = 'tree' } = c.req.valid('query');
+      const poolId = parsePoolIdWithDefault(rawPoolId, 1);
+      if (poolId === null) {
+        return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+      }
+
+      const normPath = normalizeVirtualPath(folderPath);
+      const etag = `W/"files-${poolId}-${mode}-${normPath}-r${getPoolRevision(poolId)}"`;
+      c.header('ETag', etag);
+      c.header('Cache-Control', 'no-cache');
+      if (c.req.header('if-none-match') === etag) {
+        return c.body(null, 304);
+      }
+
+      if (mode === 'dir') {
+        const targetFolderId = normPath === '/' ? null : formatFolderId(poolId, normPath);
+        const fileRecords = await db
+          .select(projectedFileColumns)
+          .from(files)
+          .where(
+            and(
+              eq(files.poolId, poolId),
+              eq(files.isTrashed, false),
+              targetFolderId === null ? isNull(files.folderId) : eq(files.folderId, targetFolderId)
+            )
+          );
+        const folderRecords = await db
+          .select(projectedFolderColumns)
+          .from(folders)
+          .where(
+            and(
+              eq(folders.poolId, poolId),
+              targetFolderId === null
+                ? isNull(folders.parentFolderId)
+                : eq(folders.parentFolderId, targetFolderId)
+            )
+          );
+
+        return c.json(
+          {
+            currentPath: normPath,
+            folders: folderRecords,
+            files: fileRecords,
+          },
+          200
+        );
+      }
+
       const fileRecords = await db
-        .select()
+        .select(projectedFileColumns)
         .from(files)
         .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false)));
       const folderRecords = await db
-        .select()
+        .select(projectedFolderColumns)
         .from(folders)
         .where(eq(folders.poolId, poolId));
 
-      return c.json({
-        currentPath: folderPath,
-        folders: folderRecords,
-        files: fileRecords,
-      });
+      return c.json(
+        {
+          currentPath: normPath,
+          folders: folderRecords,
+          files: fileRecords,
+        },
+        200
+      );
     }
   )
   .get('/api/folders', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : 1;
-    const folderRecords = await db.select().from(folders).where(eq(folders.poolId, poolId));
-    return c.json({ folders: folderRecords });
+    const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+
+    const etag = `W/"folders-${poolId}-r${getPoolRevision(poolId)}"`;
+    c.header('ETag', etag);
+    c.header('Cache-Control', 'no-cache');
+    if (c.req.header('if-none-match') === etag) {
+      return c.body(null, 304);
+    }
+
+    const folderRecords = await db.select(projectedFolderColumns).from(folders).where(eq(folders.poolId, poolId));
+    return c.json({ folders: folderRecords }, 200);
   })
   .post(
     '/api/folders',
@@ -855,10 +1089,14 @@ const routes = app
       if (typeof body?.virtualPath !== 'string' || typeof body?.name !== 'string') {
         return c.json({ error: 'virtualPath (string) and name (string) are required' }, 400);
       }
+      const parsedPool = parseOptionalPoolId(body?.poolId);
+      if (!parsedPool.ok) {
+        return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+      }
       return {
         virtualPath: body.virtualPath,
         name: body.name,
-        poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+        poolId: parsedPool.poolId,
       };
     }),
     async (c) => {
@@ -866,9 +1104,10 @@ const routes = app
       if (isSharePoolId(poolId)) {
         return c.json(sharePoolReadOnlyError('Creating folders directly in Share Pool is disabled'), 403);
       }
-      const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
+      const normalizedPath = normalizeVirtualPath(virtualPath);
       try {
-        ensureLocalFolderHierarchy(normalizedPath, poolId);
+        ensureLocalFolderPath(normalizedPath, poolId);
+        bumpPoolRevision(poolId);
         return c.json({ id: formatFolderId(poolId, normalizedPath), poolId, virtualPath: normalizedPath, name }, 201);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -891,7 +1130,13 @@ const routes = app
       if (!virtualPath) {
         return c.json({ error: 'virtualPath query parameter required' }, 400);
       }
-      const poolId = query.poolId ? parsePoolId(query.poolId) : 1;
+      const poolId = parsePoolIdWithDefault(query.poolId, 1);
+      if (poolId === null) {
+        return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+      }
+      if (isSharePoolId(poolId)) {
+        return c.json(sharePoolReadOnlyError('Deleting folders inside Share Pool is disabled'), 403);
+      }
       const normalizedPath = virtualPath.startsWith('/') ? virtualPath : '/' + virtualPath;
       try {
         const result = await trashFolder(normalizedPath, poolId);
@@ -913,10 +1158,14 @@ const routes = app
         if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
           return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
         }
+        const parsedPool = parseOptionalPoolId(body?.poolId);
+        if (!parsedPool.ok) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return {
           items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
           targetFolderPath: body.targetFolderPath,
-          poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+          poolId: parsedPool.poolId,
         };
       }
     ),
@@ -945,10 +1194,14 @@ const routes = app
         if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
           return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
         }
+        const parsedPool = parseOptionalPoolId(body?.poolId);
+        if (!parsedPool.ok) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return {
           items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
           targetFolderPath: body.targetFolderPath,
-          poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+          poolId: parsedPool.poolId,
         };
       }
     ),
@@ -986,11 +1239,15 @@ const routes = app
         ) {
           return c.json({ error: 'kind ("file"|"folder"), id (string), and name (string) are required' }, 400);
         }
+        const parsedPool = parseOptionalPoolId(body?.poolId);
+        if (!parsedPool.ok) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return {
           kind: body.kind as 'file' | 'folder',
           id: body.id,
           name: candidateName.trim(),
-          poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+          poolId: parsedPool.poolId,
         };
       }
     ),
@@ -1031,13 +1288,17 @@ const routes = app
         if (typeof body?.virtualPath !== 'string' || typeof body?.sizeBytes !== 'number') {
           return c.json({ error: 'virtualPath (string) and sizeBytes (number) are required' }, 400);
         }
+        const parsedPool = parseOptionalPoolId(body?.poolId);
+        if (!parsedPool.ok) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return {
           virtualPath: body.virtualPath,
           sizeBytes: body.sizeBytes,
           mimeType: typeof body.mimeType === 'string' ? body.mimeType : undefined,
           hash: typeof body.hash === 'string' ? body.hash : undefined,
           targetAccountId: typeof body.targetAccountId === 'string' ? body.targetAccountId : undefined,
-          poolId: body?.poolId !== undefined ? parsePoolId(body.poolId) : undefined,
+          poolId: parsedPool.poolId,
         };
       }
     ),
@@ -1067,7 +1328,10 @@ const routes = app
     const hash = c.req.query('hash') || c.req.header('x-file-hash');
     const targetAccountId = c.req.query('accountId') || c.req.header('x-account-id');
     const poolIdHeader = c.req.query('poolId') || c.req.header('x-pool-id');
-    const poolId = poolIdHeader ? parsePoolId(poolIdHeader) : 1;
+    const poolId = parsePoolIdWithDefault(poolIdHeader, 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
 
     if (isSharePoolId(poolId)) {
       return c.json(sharePoolReadOnlyError('Uploading directly to Share Pool is disabled'), 403);
@@ -1082,7 +1346,17 @@ const routes = app
       return c.json({ error: 'sizeBytes must be a valid positive number' }, 400);
     }
 
-    if (!c.req.raw.body) {
+    if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+      return c.json(
+        {
+          error: `File size ${sizeBytes} exceeds maximum single-file ceiling of ${MAX_SINGLE_FILE_BYTES} bytes`,
+          code: 'EXCEEDS_CEILING',
+        },
+        400
+      );
+    }
+
+    if (sizeBytes > 0 && !c.req.raw.body) {
       return c.json({ error: 'Request body stream is missing' }, 400);
     }
 
@@ -1096,7 +1370,8 @@ const routes = app
           targetAccountId: targetAccountId || undefined,
           poolId,
         },
-        c.req.raw.body
+        c.req.raw.body ?? null,
+        c.req.raw.signal
       );
       return c.json(record);
     } catch (err) {
@@ -1111,25 +1386,46 @@ const routes = app
   })
   .get('/api/files/:id/download', async (c) => {
     const fileId = c.req.param('id');
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
+    const parsedPool = parseOptionalPoolId(c.req.query('poolId'));
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
     try {
-      const { stream, file } = await getStreamingDownload(fileId, poolId);
+      const { stream, file, status, contentLength, contentRange } = await getStreamingDownload(
+        fileId,
+        parsedPool.poolId,
+        {
+          rangeHeader: c.req.header('range') ?? null,
+          signal: c.req.raw.signal,
+        }
+      );
+      const headers: Record<string, string> = {
+        'Content-Type': file.mimeType || 'application/octet-stream',
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(contentLength),
+        'Content-Disposition': buildContentDisposition(file.name),
+        'Cache-Control': 'no-cache',
+      };
+      if (contentRange) {
+        headers['Content-Range'] = contentRange;
+      }
       return new Response(stream, {
-        status: 200,
-        headers: {
-          'Content-Type': file.mimeType || 'application/octet-stream',
-          'Content-Length': String(file.sizeBytes),
-          'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
-          'Cache-Control': 'no-cache',
-        },
+        status,
+        headers,
       });
     } catch (err) {
+      if ((err as { status?: number })?.status === 416) {
+        return c.json({ error: 'Requested range not satisfiable' }, 416);
+      }
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 404);
     }
   })
   .post('/api/files/:id/trash', async (c) => {
     const fileId = c.req.param('id');
+    const filePoolId = getFilePoolId(fileId);
+    if (filePoolId !== undefined && isSharePoolId(filePoolId)) {
+      return c.json(sharePoolReadOnlyError('Trashing files inside Share Pool is disabled'), 403);
+    }
     try {
       const updated = await trashFile(fileId);
       return c.json(updated);
@@ -1139,6 +1435,10 @@ const routes = app
   })
   .post('/api/files/:id/restore', async (c) => {
     const fileId = c.req.param('id');
+    const filePoolId = getFilePoolId(fileId);
+    if (filePoolId !== undefined && isSharePoolId(filePoolId)) {
+      return c.json(sharePoolReadOnlyError('Restoring files inside Share Pool is disabled'), 403);
+    }
     try {
       const updated = await restoreFile(fileId);
       return c.json(updated);
@@ -1148,6 +1448,10 @@ const routes = app
   })
   .delete('/api/files/:id/permanent', async (c) => {
     const fileId = c.req.param('id');
+    const filePoolId = getFilePoolId(fileId);
+    if (filePoolId !== undefined && isSharePoolId(filePoolId)) {
+      return c.json(sharePoolReadOnlyError('Permanently deleting files inside Share Pool is disabled'), 403);
+    }
     try {
       const purged = await purgeFile(fileId);
       return c.json(purged);
@@ -1156,8 +1460,13 @@ const routes = app
     }
   })
   .delete('/api/trash/empty', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : 1;
+    const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+    if (isSharePoolId(poolId)) {
+      return c.json(sharePoolReadOnlyError('Emptying trash inside Share Pool is disabled'), 403);
+    }
     try {
       const report = await emptyTrash(poolId);
       return c.json(report);
@@ -1166,13 +1475,23 @@ const routes = app
     }
   })
   .get('/api/trash', async (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : 1;
+    const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+
+    const etag = `W/"trash-${poolId}-r${getPoolRevision(poolId)}"`;
+    c.header('ETag', etag);
+    c.header('Cache-Control', 'no-cache');
+    if (c.req.header('if-none-match') === etag) {
+      return c.body(null, 304);
+    }
+
     const trashedFiles = await db
-      .select()
+      .select(projectedFileColumns)
       .from(files)
       .where(and(eq(files.poolId, poolId), eq(files.isTrashed, true)));
-    return c.json({ files: trashedFiles });
+    return c.json({ files: trashedFiles }, 200);
   })
   .get(
     '/api/sync/external-changes/:accountId',
@@ -1244,6 +1563,7 @@ const routes = app
             ? { name, sizeBytes, mimeType, hash }
             : undefined;
         const record = await acceptExternalFile(accountId, driveFileId, targetVirtualPath, preScanned);
+        bumpPoolRevision(record.poolId);
         return c.json(record);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1305,6 +1625,7 @@ const routes = app
       }
       try {
         const result = await acceptAllExternalFiles(accountId, items);
+        bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(result);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1330,6 +1651,7 @@ const routes = app
       }
       try {
         const result = await ejectAllExternalFiles(accountId);
+        bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(result);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1387,6 +1709,7 @@ const routes = app
       }
       try {
         const res = await resolvePathConflict(accountId, driveFileId, resolution, targetVirtualPath);
+        bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(res);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1452,6 +1775,7 @@ const routes = app
       }
       try {
         const res = await resolvePathConflictsBatch(accountId, items, resolution);
+        bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(res);
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1477,6 +1801,7 @@ const routes = app
       }
       try {
         await ejectFileToDriveRoot(accountId, driveFileId);
+        bumpPoolRevision(getAccountPoolId(accountId));
         return c.json({ success: true, accountId, driveFileId });
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1502,6 +1827,7 @@ const routes = app
       }
       try {
         await removeMissingFile(accountId, driveFileId);
+        bumpPoolRevision(getAccountPoolId(accountId));
         return c.json({ success: true, accountId, driveFileId });
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1527,6 +1853,7 @@ const routes = app
       }
       try {
         const result = await rebalanceFile(fileId, targetAccountId);
+        bumpPoolRevision(fileRow?.poolId);
         return c.json(result);
       } catch (err) {
         if (err instanceof InsufficientStorageError) {
@@ -1558,6 +1885,7 @@ const routes = app
       }
       try {
         const result = await rebalanceFilesBatch(fileIds, targetAccountId);
+        bumpPoolRevision(getAccountPoolId(targetAccountId));
         return c.json(result);
       } catch (err) {
         if (err instanceof RebalanceValidationError) {
@@ -1577,6 +1905,7 @@ const routes = app
     }
     try {
       const results = await executeAutoRebalance(accountId);
+      bumpPoolRevision(getAccountPoolId(accountId));
       return c.json({ results });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -1592,7 +1921,10 @@ const routes = app
         if (!items) {
           return c.json({ error: 'items (non-empty array of { kind: "file" | "folder", id: string }) is required' }, 400);
         }
-        const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
+        const sourcePoolId = parsePoolIdWithDefault(body?.sourcePoolId ?? body?.poolId, 1);
+        if (sourcePoolId === null) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return { sourcePoolId, items };
       }
     ),
@@ -1623,7 +1955,10 @@ const routes = app
         if (!selectedAccountIds) {
           return c.json({ error: 'selectedAccountIds must be an array of strings' }, 400);
         }
-        const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
+        const sourcePoolId = parsePoolIdWithDefault(body?.sourcePoolId ?? body?.poolId, 1);
+        if (sourcePoolId === null) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return { sourcePoolId, items, selectedAccountIds };
       }
     ),
@@ -1663,7 +1998,10 @@ const routes = app
         if (!selectedAccountIds) {
           return c.json({ error: 'selectedAccountIds must be an array of strings' }, 400);
         }
-        const sourcePoolId = parsePoolId(body?.sourcePoolId ?? body?.poolId);
+        const sourcePoolId = parsePoolIdWithDefault(body?.sourcePoolId ?? body?.poolId, 1);
+        if (sourcePoolId === null) {
+          return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+        }
         return {
           sourcePoolId,
           items,
@@ -1697,9 +2035,11 @@ const routes = app
     }
   )
   .get('/api/share/links', (c) => {
-    const rawPoolId = c.req.query('poolId');
-    const poolId = rawPoolId !== undefined ? parsePoolId(rawPoolId) : undefined;
-    const links = listSharePoolLinks(poolId);
+    const parsedPool = parseOptionalPoolId(c.req.query('poolId'));
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+    const links = listSharePoolLinks(parsedPool.poolId);
     return c.json({ links });
   })
   .post('/api/pools/:id/clear-share', async (c) => {
