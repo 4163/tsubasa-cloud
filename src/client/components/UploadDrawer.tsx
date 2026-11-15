@@ -5,7 +5,7 @@ import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconUpload, FileTypeIcon, IconCheck, IconAlertTriangle, IconChevronDown, IconChevronUp, IconFolder, IconMinus, IconRotateCcw } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
-import { useBeforeUnload, useDialogLock } from '../utils/useBeforeUnload.js';
+import { useBeforeUnload } from '../utils/useBeforeUnload.js';
 import type { AccountItem } from './Sidebar.js';
 
 export interface StagedItem {
@@ -56,32 +56,57 @@ const MAX_CONCURRENT_UPLOADS = 3;
 const VIRTUALIZE_THRESHOLD = 30;
 
 const styles = stylex.create({
-  backdrop: {
+  dialog: {
     position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    zIndex: 90,
-    transition: motion.transitionFast,
-  },
-  drawer: {
-    position: 'fixed',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    width: '420px',
+    inset: {
+      default: '0 0 0 auto',
+      '@media (max-width: 768px)': '0 0 auto 0',
+    },
+    margin: 0,
+    padding: 0,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
+    color: 'inherit',
+    outline: 'none',
+    overflow: 'hidden',
+    width: {
+      default: '420px',
+      '@media (max-width: 768px)': '100vw',
+    },
     maxWidth: '100vw',
+    height: {
+      default: '100dvh',
+      '@media (max-width: 768px)': 'auto',
+    },
+    maxHeight: {
+      default: '100dvh',
+      '@media (max-width: 768px)': '92dvh',
+    },
+    '::backdrop': {
+      backgroundColor: colors.modalBackdrop,
+    },
+  },
+  drawerSurface: {
+    width: '100%',
+    height: '100%',
+    maxHeight: 'inherit',
     backgroundColor: colors.surface,
-    borderLeftWidth: '1px',
+    borderLeftWidth: {
+      default: '1px',
+      '@media (max-width: 768px)': '0px',
+    },
     borderLeftStyle: 'solid',
     borderLeftColor: colors.borderSubtle,
     display: 'flex',
     flexDirection: 'column',
-    zIndex: 100,
     boxSizing: 'border-box',
-    transform: 'translateX(0)',
-    transition: 'transform 0.25s ease-out',
+    overflow: 'hidden',
     '@media (max-width: 768px)': {
-      width: '100vw',
+      borderBottomWidth: '1px',
+      borderBottomStyle: 'solid',
+      borderBottomColor: colors.border,
+      borderBottomLeftRadius: radius.card,
+      borderBottomRightRadius: radius.card,
     },
   },
   drawerHeader: {
@@ -240,10 +265,12 @@ const styles = stylex.create({
     marginTop: spacing.space1,
   },
   progressBarFill: {
+    width: '100%',
     height: '100%',
     backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
-    transition: 'width 0.2s ease',
+    transformOrigin: 'left center',
+    transition: 'transform 0.2s ease',
   },
   progressBarComplete: {
     backgroundColor: colors.success,
@@ -456,10 +483,12 @@ const styles = stylex.create({
     marginTop: spacing.space1,
   },
   miniProgressFill: {
+    width: '100%',
     height: '100%',
     backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
-    transition: 'width 0.15s ease',
+    transformOrigin: 'left center',
+    transition: 'transform 0.15s ease',
   },
   footer: {
     padding: spacing.space5,
@@ -862,7 +891,7 @@ const UploadFileCard = React.memo(function UploadFileCard({
               styles.miniProgressFill,
               progress.status === 'complete' && styles.progressBarComplete
             )}
-            style={{ width: `${pct}%` }}
+            style={{ transform: `scaleX(${Math.min(100, Math.max(0, pct)) / 100})` }}
           />
         </div>
       )}
@@ -1377,12 +1406,6 @@ export function UploadDrawer({
     setSelectedAccounts((prev) => ({ ...prev, [key]: accountId }));
   }, []);
 
-  const handleClearAndClose = useCallback(() => {
-    clearActiveXhrs();
-    onClearFiles();
-    onClose();
-  }, [clearActiveXhrs, onClearFiles, onClose]);
-
   const hasUnallocatedFiles = useMemo(() => {
     return normalizedItems.some((it) => {
       if (it.file.size > CEILING_14_25_GB) return false;
@@ -1400,16 +1423,85 @@ export function UploadDrawer({
     overscan: 6,
   });
 
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pointerDownOutsideRef = useRef(false);
+  const isClosingRef = useRef(false);
+  const clearOnCloseRef = useRef(false);
+
+  const requestClose = useCallback(() => {
+    if (isUploading || isClosingRef.current) return;
+    const dialog = dialogRef.current;
+    if (!dialog || !dialog.open) {
+      onClose();
+      return;
+    }
+
+    const skipExitAnimation =
+      document.body.classList.contains('resize-animation-stopper') ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (skipExitAnimation) {
+      dialog.removeAttribute('data-closing');
+      dialog.close();
+      return;
+    }
+
+    isClosingRef.current = true;
+    dialog.setAttribute('data-closing', '');
+    const animations = dialog.getAnimations();
+    Promise.all(animations.map((anim) => anim.finished.catch(() => {}))).then(() => {
+      if (!isClosingRef.current) return;
+      isClosingRef.current = false;
+      dialog.removeAttribute('data-closing');
+      if (dialog.open) {
+        dialog.close();
+      }
+    });
+  }, [isUploading, onClose]);
+
+  const handleClearAndClose = useCallback(() => {
+    clearActiveXhrs();
+    if (!dialogRef.current?.open) {
+      onClearFiles();
+      onClose();
+      return;
+    }
+    clearOnCloseRef.current = true;
+    requestClose();
+  }, [clearActiveXhrs, onClearFiles, onClose, requestClose]);
+
   const handleEscapeOrBackdrop = useCallback(() => {
     if (isUploading) {
       handleMinimize();
     } else {
-      onClose();
+      requestClose();
     }
-  }, [isUploading, handleMinimize, onClose]);
+  }, [isUploading, handleMinimize, requestClose]);
 
   useBeforeUnload(isUploading);
-  useDialogLock(isOpen && !effectiveMinimized, false, handleEscapeOrBackdrop);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen && !effectiveMinimized) {
+      isClosingRef.current = false;
+      clearOnCloseRef.current = false;
+      dialog.removeAttribute('data-closing');
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+    } else if (dialog.open) {
+      dialog.removeAttribute('data-closing');
+      dialog.close();
+    }
+  }, [isOpen, effectiveMinimized]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.setAttribute('closedby', isUploading ? 'none' : 'any');
+  }, [isUploading, isOpen, effectiveMinimized]);
 
   if (!isOpen) return null;
 
@@ -1463,20 +1555,66 @@ export function UploadDrawer({
               styles.progressBarFill,
               isDone && styles.progressBarComplete
             )}
-            style={{ width: `${overallProgress.percent}%` }}
+            style={{ transform: `scaleX(${Math.min(100, Math.max(0, overallProgress.percent)) / 100})` }}
           />
         </div>
       </div>
     );
   }
 
+  const isOutsideDialogBounds = (e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) => {
+    const rect = dialog.getBoundingClientRect();
+    return (
+      e.clientX < rect.left ||
+      e.clientX > rect.right ||
+      e.clientY < rect.top ||
+      e.clientY > rect.bottom
+    );
+  };
+
+  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.preventDefault();
+    handleEscapeOrBackdrop();
+  };
+
+  const handleDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.currentTarget.returnValue = '';
+    e.currentTarget.removeAttribute('data-closing');
+    isClosingRef.current = false;
+    if (clearOnCloseRef.current) {
+      clearOnCloseRef.current = false;
+      onClearFiles();
+    }
+    onClose();
+  };
+
+  const handleDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if ('closedBy' in HTMLDialogElement.prototype && !isUploading) return;
+    pointerDownOutsideRef.current = isOutsideDialogBounds(e, e.currentTarget);
+  };
+
+  const handleDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if ('closedBy' in HTMLDialogElement.prototype && !isUploading) return;
+    const startedOutside = pointerDownOutsideRef.current;
+    pointerDownOutsideRef.current = false;
+    if (!startedOutside) return;
+    if (isOutsideDialogBounds(e, e.currentTarget)) {
+      handleEscapeOrBackdrop();
+    }
+  };
+
   return (
-    <>
-      <div
-        {...stylex.props(styles.backdrop)}
-        onClick={handleEscapeOrBackdrop}
-      />
-      <div {...stylex.props(styles.drawer)} role="dialog" aria-modal="true" aria-label="Upload files">
+    <dialog
+      ref={dialogRef}
+      data-tsubasa-dialog="drawer-sheet"
+      aria-label="Upload files"
+      onCancel={handleDialogCancel}
+      onClose={handleDialogClose}
+      onPointerDown={handleDialogPointerDown}
+      onPointerUp={handleDialogPointerUp}
+      {...stylex.props(styles.dialog)}
+    >
+      <div {...stylex.props(styles.drawerSurface)}>
         <div {...stylex.props(styles.drawerHeader)}>
           <div {...stylex.props(styles.titleGroup)}>
             <IconUpload size={20} strokeWidth={2.5} />
@@ -1497,7 +1635,7 @@ export function UploadDrawer({
             <button
               type="button"
               {...stylex.props(styles.closeBtn)}
-              onClick={onClose}
+              onClick={requestClose}
               disabled={isUploading}
               aria-label="Close upload drawer"
             >
@@ -1563,7 +1701,7 @@ export function UploadDrawer({
                     normalizedItems.length > 0 &&
                     styles.progressBarComplete
                 )}
-                style={{ width: `${overallProgress.percent}%` }}
+                style={{ transform: `scaleX(${Math.min(100, Math.max(0, overallProgress.percent)) / 100})` }}
               />
             </div>
           )}
@@ -1700,7 +1838,7 @@ export function UploadDrawer({
           )}
         </div>
       </div>
-    </>
+    </dialog>
   );
 }
 

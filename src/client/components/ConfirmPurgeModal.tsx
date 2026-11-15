@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconTrash, IconClose, IconAlertTriangle } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
-import { useDialogLock } from '../utils/useBeforeUnload.js';
+import { ModalDialog } from './ModalDialog.js';
 
 interface ConfirmPurgeModalProps {
   isOpen: boolean;
@@ -15,31 +15,8 @@ interface ConfirmPurgeModalProps {
 }
 
 const styles = stylex.create({
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-  },
-  modal: {
+  surface: {
     width: '400px',
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
   },
   header: {
     height: '48px',
@@ -76,16 +53,27 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.35,
       color: colors.secondaryText,
       backgroundColor: 'transparent',
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   body: {
@@ -157,11 +145,18 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     fontWeight: '500',
     cursor: 'pointer',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
       borderColor: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
@@ -169,6 +164,9 @@ const styles = stylex.create({
       color: colors.secondaryText,
       borderColor: colors.border,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
   purgeBtn: {
@@ -186,13 +184,23 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerHover,
     },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
 });
@@ -207,20 +215,14 @@ export function ConfirmPurgeModal({
 }: ConfirmPurgeModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
+  const titleId = useId();
   const isSharePool = mode === 'share_pool';
-
-  useDialogLock(isOpen, isSubmitting, onClose);
 
   useEffect(() => {
     if (isOpen) {
       setIsSubmitting(false);
-      setTimeout(() => {
-        confirmBtnRef.current?.focus();
-      }, 50);
     }
   }, [isOpen]);
-
-  if (!isOpen) return null;
 
   const handleConfirm = async () => {
     if (isSubmitting) return;
@@ -234,89 +236,84 @@ export function ConfirmPurgeModal({
   };
 
   return (
-    <div
-      {...stylex.props(styles.backdrop)}
-      onClick={() => {
-        if (!isSubmitting) onClose();
-      }}
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      isBusy={isSubmitting}
+      ariaLabelledBy={titleId}
+      initialFocusRef={confirmBtnRef}
+      surfaceStyle={styles.surface}
     >
-      <div
-        {...stylex.props(styles.modal)}
-        role="dialog"
-        aria-modal="true"
-        aria-label={isSharePool ? 'Confirm clear share pool' : 'Confirm permanent purge'}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div {...stylex.props(styles.header)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            <IconTrash size={16} />
-            <h3 {...stylex.props(styles.title)}>
-              {isSharePool ? 'Clear share pool?' : 'Permanently purge trash'}
-            </h3>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={onClose}
-            disabled={isSubmitting}
-            aria-label="Close dialog"
-          >
-            <IconClose size={14} />
-          </button>
+      <div {...stylex.props(styles.header)}>
+        <div {...stylex.props(styles.titleGroup)}>
+          <IconTrash size={16} />
+          <h3 id={titleId} {...stylex.props(styles.title)}>
+            {isSharePool ? 'Clear share pool?' : 'Permanently purge trash'}
+          </h3>
+        </div>
+        <button
+          type="button"
+          {...stylex.props(styles.closeBtn)}
+          onClick={onClose}
+          disabled={isSubmitting}
+          aria-label="Close dialog"
+        >
+          <IconClose size={14} />
+        </button>
+      </div>
+
+      <div {...stylex.props(styles.body)}>
+        <div {...stylex.props(styles.pathHint)}>
+          {isSharePool ? (
+            <>
+              Target: share pool (_Tsubasa~ Pool share) · {itemCount} {itemCount === 1 ? 'item' : 'items'}
+              {totalBytes > 0 ? ` (${formatBytes(totalBytes)})` : ''}
+            </>
+          ) : (
+            <>
+              Target: Trash · {itemCount} {itemCount === 1 ? 'file' : 'files'}
+              {totalBytes > 0 ? ` (${formatBytes(totalBytes)} recoverable quota)` : ''}
+            </>
+          )}
         </div>
 
-        <div {...stylex.props(styles.body)}>
-          <div {...stylex.props(styles.pathHint)}>
-            {isSharePool ? (
-              <>
-                Target: share pool (_Tsubasa~ Pool share) · {itemCount} {itemCount === 1 ? 'item' : 'items'}
-                {totalBytes > 0 ? ` (${formatBytes(totalBytes)})` : ''}
-              </>
-            ) : (
-              <>
-                Target: Trash · {itemCount} {itemCount === 1 ? 'file' : 'files'}
-                {totalBytes > 0 ? ` (${formatBytes(totalBytes)} recoverable quota)` : ''}
-              </>
-            )}
+        <div {...stylex.props(styles.warningBox)}>
+          <div {...stylex.props(styles.warningHeader)}>
+            <IconAlertTriangle size={15} />
+            <span>{isSharePool ? 'Permanent deletion' : 'Irreversible action'}</span>
           </div>
-
-          <div {...stylex.props(styles.warningBox)}>
-            <div {...stylex.props(styles.warningHeader)}>
-              <IconAlertTriangle size={15} />
-              <span>{isSharePool ? 'Permanent deletion' : 'Irreversible action'}</span>
-            </div>
-            <p {...stylex.props(styles.warningDesc)}>
-              {isSharePool
-                ? 'All copied files and folders in _Tsubasa~ Pool share will be permanently deleted across share pool drives. Original files in your storage pools remain untouched.'
-                : `Permanently purge all ${itemCount} ${itemCount === 1 ? 'file' : 'files'}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.`}
-            </p>
-          </div>
-        </div>
-
-        <div {...stylex.props(styles.footer)}>
-          <button
-            type="button"
-            {...stylex.props(styles.cancelBtn)}
-            onClick={onClose}
-            disabled={isSubmitting}
-          >
-            Cancel
-          </button>
-          <button
-            ref={confirmBtnRef}
-            type="button"
-            {...stylex.props(styles.purgeBtn)}
-            onClick={handleConfirm}
-            disabled={isSubmitting}
-          >
-            <IconTrash size={14} />
+          <p {...stylex.props(styles.warningDesc)}>
             {isSharePool
-              ? (isSubmitting ? 'Clearing...' : 'Clear share pool')
-              : (isSubmitting ? 'Purging...' : 'Confirm purge')}
-          </button>
+              ? 'All copied files and folders in _Tsubasa~ Pool share will be permanently deleted across share pool drives. Original files in your storage pools remain untouched.'
+              : `Permanently purge all ${itemCount} ${itemCount === 1 ? 'file' : 'files'}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.`}
+          </p>
         </div>
       </div>
-    </div>
+
+      <div {...stylex.props(styles.footer)}>
+        <button
+          type="button"
+          {...stylex.props(styles.cancelBtn)}
+          onClick={onClose}
+          disabled={isSubmitting}
+        >
+          Cancel
+        </button>
+        <button
+          ref={confirmBtnRef}
+          type="button"
+          autoFocus
+          {...stylex.props(styles.purgeBtn)}
+          onClick={handleConfirm}
+          disabled={isSubmitting}
+        >
+          <IconTrash size={14} />
+          {isSharePool
+            ? (isSubmitting ? 'Clearing...' : 'Clear share pool')
+            : (isSubmitting ? 'Purging...' : 'Confirm purge')}
+        </button>
+      </div>
+    </ModalDialog>
   );
 }
 

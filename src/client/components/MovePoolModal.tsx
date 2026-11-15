@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconFolder, IconChevronDown } from './Icons.js';
 import { type AccountItem, type PoolSummary } from './Sidebar.js';
 import { sortPools } from '../utils/format.js';
-import { useDialogLock } from '../utils/useBeforeUnload.js';
+import { ModalDialog } from './ModalDialog.js';
 
 export interface MovePoolModalProps {
   isOpen: boolean;
@@ -16,31 +16,8 @@ export interface MovePoolModalProps {
 }
 
 const styles = stylex.create({
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-  },
-  modal: {
+  surface: {
     width: '440px',
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
   },
   header: {
     height: '48px',
@@ -77,16 +54,27 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.35,
       color: colors.secondaryText,
       backgroundColor: 'transparent',
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   body: {
@@ -168,6 +156,9 @@ const styles = stylex.create({
       opacity: 0.5,
       cursor: 'not-allowed',
     },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+    },
   },
   selectChevron: {
     position: 'absolute',
@@ -181,7 +172,7 @@ const styles = stylex.create({
   },
   errorMessage: {
     fontSize: typography.fontSizeMeta,
-    color: colors.danger,
+    color: colors.dangerTextOnSurface,
     fontFamily: typography.fontFamilyMono,
   },
   footer: {
@@ -213,11 +204,18 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     fontWeight: '500',
     cursor: 'pointer',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
       borderColor: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
@@ -225,6 +223,9 @@ const styles = stylex.create({
       color: colors.secondaryText,
       borderColor: colors.border,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
   confirmBtn: {
@@ -242,13 +243,23 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
     },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
 });
@@ -271,22 +282,18 @@ export function MovePoolModal({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const selectRef = useRef<HTMLSelectElement | null>(null);
-
-  useDialogLock(isOpen && Boolean(account), isLoading, onClose);
+  const titleId = useId();
+  const selectId = useId();
+  const effectiveOpen = isOpen && Boolean(account);
 
   useEffect(() => {
-    if (isOpen && account) {
+    if (effectiveOpen) {
       const defaultTarget = candidatePools[0]?.id ?? currentPoolId;
       setTargetPoolId(defaultTarget);
       setError(null);
       setIsLoading(false);
-      setTimeout(() => {
-        selectRef.current?.focus();
-      }, 50);
     }
-  }, [isOpen, account, currentPoolId]);
-
-  if (!isOpen || !account) return null;
+  }, [effectiveOpen, account, currentPoolId]);
 
   const selectedTargetPool = sortedPools.find((p) => p.id === targetPoolId);
   const canMoveToTarget = Boolean(
@@ -295,7 +302,7 @@ export function MovePoolModal({
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (isLoading || !canMoveToTarget) return;
+    if (isLoading || !canMoveToTarget || !account) return;
 
     setIsLoading(true);
     setError(null);
@@ -309,96 +316,98 @@ export function MovePoolModal({
   };
 
   return (
-    <div
-      {...stylex.props(styles.backdrop)}
-      onClick={() => {
-        if (!isLoading) onClose();
-      }}
+    <ModalDialog
+      isOpen={effectiveOpen}
+      onClose={onClose}
+      isBusy={isLoading}
+      ariaLabelledBy={titleId}
+      initialFocusRef={selectRef}
+      surfaceStyle={styles.surface}
     >
-      <div
-        {...stylex.props(styles.modal)}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Move account to pool"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div {...stylex.props(styles.header)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            <IconFolder size={16} />
-            <h2 {...stylex.props(styles.title)}>Move account to pool</h2>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={onClose}
-            disabled={isLoading}
-            aria-label="Close"
-          >
-            <IconClose size={16} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <div {...stylex.props(styles.body)}>
-            <div {...stylex.props(styles.accountCard)}>
-              <span {...stylex.props(styles.accountName)}>
-                {account.displayName || account.id}
-              </span>
-              <span {...stylex.props(styles.accountMeta)}>
-                {account.email || account.id}
-              </span>
+      {account && (
+        <>
+          <div {...stylex.props(styles.header)}>
+            <div {...stylex.props(styles.titleGroup)}>
+              <IconFolder size={16} />
+              <h2 id={titleId} {...stylex.props(styles.title)}>Move account to pool</h2>
             </div>
-
-            <div {...stylex.props(styles.fieldGroup)}>
-              <label {...stylex.props(styles.label)}>Target storage pool</label>
-              <div {...stylex.props(styles.selectWrapper)}>
-                <select
-                  ref={selectRef}
-                  value={targetPoolId}
-                  onChange={(e) => {
-                    setTargetPoolId(Number(e.target.value));
-                    if (error) setError(null);
-                  }}
-                  disabled={isLoading || candidatePools.length === 0}
-                  {...stylex.props(styles.select)}
-                >
-                  {sortedPools.map((pool) => (
-                    <option
-                      key={pool.id}
-                      value={pool.id}
-                      disabled={pool.id === currentPoolId}
-                    >
-                      {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'}){pool.id === currentPoolId ? ' (Current)' : ''}
-                    </option>
-                  ))}
-                </select>
-                <div {...stylex.props(styles.selectChevron)}>
-                  <IconChevronDown size={14} strokeWidth={2.5} />
-                </div>
-              </div>
-              {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
-            </div>
-          </div>
-
-          <div {...stylex.props(styles.footer)}>
             <button
               type="button"
-              {...stylex.props(styles.cancelBtn)}
+              {...stylex.props(styles.closeBtn)}
               onClick={onClose}
               disabled={isLoading}
+              aria-label="Close"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              {...stylex.props(styles.confirmBtn)}
-              disabled={isLoading || !canMoveToTarget}
-            >
-              {isLoading ? 'Moving...' : 'Move pool'}
+              <IconClose size={16} />
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+
+          <form onSubmit={handleSubmit}>
+            <div {...stylex.props(styles.body)}>
+              <div {...stylex.props(styles.accountCard)}>
+                <span {...stylex.props(styles.accountName)}>
+                  {account.displayName || account.id}
+                </span>
+                <span {...stylex.props(styles.accountMeta)}>
+                  {account.email || account.id}
+                </span>
+              </div>
+
+              <div {...stylex.props(styles.fieldGroup)}>
+                <label htmlFor={selectId} {...stylex.props(styles.label)}>Target storage pool</label>
+                <div {...stylex.props(styles.selectWrapper)}>
+                  <select
+                    id={selectId}
+                    ref={selectRef}
+                    autoFocus
+                    value={targetPoolId}
+                    onChange={(e) => {
+                      setTargetPoolId(Number(e.target.value));
+                      if (error) setError(null);
+                    }}
+                    disabled={isLoading || candidatePools.length === 0}
+                    {...stylex.props(styles.select)}
+                  >
+                    {sortedPools.map((pool) => (
+                      <option
+                        key={pool.id}
+                        value={pool.id}
+                        disabled={pool.id === currentPoolId}
+                      >
+                        {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'}){pool.id === currentPoolId ? ' (Current)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div {...stylex.props(styles.selectChevron)}>
+                    <IconChevronDown size={14} strokeWidth={2.5} />
+                  </div>
+                </div>
+                <div role="status" aria-live="polite">
+                  {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
+                </div>
+              </div>
+            </div>
+
+            <div {...stylex.props(styles.footer)}>
+              <button
+                type="button"
+                {...stylex.props(styles.cancelBtn)}
+                onClick={onClose}
+                disabled={isLoading}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                {...stylex.props(styles.confirmBtn)}
+                disabled={isLoading || !canMoveToTarget}
+              >
+                {isLoading ? 'Moving...' : 'Move pool'}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </ModalDialog>
   );
 }

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconEdit, IconClose } from './Icons.js';
-import { useDialogLock } from '../utils/useBeforeUnload.js';
+import { ModalDialog } from './ModalDialog.js';
 
 export interface RenameTarget {
   kind: 'file' | 'folder' | 'pool';
@@ -18,31 +18,8 @@ interface RenameModalProps {
 }
 
 const styles = stylex.create({
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-  },
-  modal: {
+  surface: {
     width: '420px',
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
   },
   header: {
     height: '48px',
@@ -79,16 +56,27 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.35,
       color: colors.secondaryText,
       backgroundColor: 'transparent',
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   body: {
@@ -137,10 +125,13 @@ const styles = stylex.create({
       opacity: 0.6,
       cursor: 'not-allowed',
     },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+    },
   },
   errorMessage: {
     fontSize: typography.fontSizeMeta,
-    color: colors.danger,
+    color: colors.dangerTextOnSurface,
     fontFamily: typography.fontFamilyMono,
   },
   footer: {
@@ -172,11 +163,18 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     fontWeight: '500',
     cursor: 'pointer',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
       borderColor: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
@@ -184,6 +182,9 @@ const styles = stylex.create({
       color: colors.secondaryText,
       borderColor: colors.border,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
   saveBtn: {
@@ -201,13 +202,23 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
     },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
 });
@@ -218,37 +229,41 @@ export function RenameModal({
   item,
   onRename,
 }: RenameModalProps) {
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => item?.name ?? '');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const titleId = useId();
+  const inputId = useId();
 
-  useDialogLock(isOpen && Boolean(item), isSubmitting, onClose);
+  const effectiveOpen = isOpen && Boolean(item);
 
   useEffect(() => {
-    if (isOpen && item) {
-      setName(item.name);
-      setError(null);
-      setIsSubmitting(false);
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          const dotIdx = item.kind === 'file' ? item.name.lastIndexOf('.') : -1;
-          if (dotIdx > 0) {
-            inputRef.current.setSelectionRange(0, dotIdx);
-          } else {
-            inputRef.current.select();
-          }
-        }
-      }, 50);
-    }
-  }, [isOpen, item]);
+    if (!isOpen || !item) return;
 
-  if (!isOpen || !item) return null;
+    setName(item.name);
+    setError(null);
+    setIsSubmitting(false);
+
+    // Wait one frame so ModalDialog's showModal() and the updated input value have committed.
+    const rafId = requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      const dotIdx = item.kind === 'file' ? item.name.lastIndexOf('.') : -1;
+      if (dotIdx > 0) {
+        input.setSelectionRange(0, dotIdx);
+      } else {
+        input.select();
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [isOpen, item]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (isSubmitting) return;
+    if (isSubmitting || !item) return;
 
     const trimmed = name.trim();
     if (!trimmed) {
@@ -282,77 +297,78 @@ export function RenameModal({
   };
 
   return (
-    <div
-      {...stylex.props(styles.backdrop)}
-      onClick={() => {
-        if (!isSubmitting) onClose();
-      }}
+    <ModalDialog
+      isOpen={effectiveOpen}
+      onClose={onClose}
+      isBusy={isSubmitting}
+      ariaLabelledBy={titleId}
+      surfaceStyle={styles.surface}
     >
-      <div
-        {...stylex.props(styles.modal)}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Rename"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div {...stylex.props(styles.header)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            <IconEdit size={16} />
-            <h2 {...stylex.props(styles.title)}>
-              Rename {item.kind}
-            </h2>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={onClose}
-            disabled={isSubmitting}
-            aria-label="Close"
-          >
-            <IconClose size={16} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <div {...stylex.props(styles.body)}>
-            <div {...stylex.props(styles.fieldGroup)}>
-              <label {...stylex.props(styles.label)}>New name</label>
-              <input
-                ref={inputRef}
-                type="text"
-                placeholder={item.kind === 'pool' ? 'Pool X' : undefined}
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  if (error) setError(null);
-                }}
-                onKeyDown={handleInputKeyDown}
-                {...stylex.props(styles.input)}
-                disabled={isSubmitting}
-              />
-              {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
+      {item && (
+        <>
+          <div {...stylex.props(styles.header)}>
+            <div {...stylex.props(styles.titleGroup)}>
+              <IconEdit size={16} />
+              <h2 id={titleId} {...stylex.props(styles.title)}>
+                Rename {item.kind}
+              </h2>
             </div>
-          </div>
-
-          <div {...stylex.props(styles.footer)}>
             <button
               type="button"
-              {...stylex.props(styles.cancelBtn)}
+              {...stylex.props(styles.closeBtn)}
               onClick={onClose}
               disabled={isSubmitting}
+              aria-label="Close"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              {...stylex.props(styles.saveBtn)}
-              disabled={isSubmitting || !name.trim()}
-            >
-              {isSubmitting ? 'Saving...' : 'Rename'}
+              <IconClose size={16} />
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+
+          <form onSubmit={handleSubmit}>
+            <div {...stylex.props(styles.body)}>
+              <div {...stylex.props(styles.fieldGroup)}>
+                <label htmlFor={inputId} {...stylex.props(styles.label)}>New name</label>
+                <input
+                  id={inputId}
+                  ref={inputRef}
+                  type="text"
+                  autoFocus
+                  placeholder={item.kind === 'pool' ? 'Pool X' : undefined}
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  onKeyDown={handleInputKeyDown}
+                  {...stylex.props(styles.input)}
+                  disabled={isSubmitting}
+                />
+                <div role="status" aria-live="polite">
+                  {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
+                </div>
+              </div>
+            </div>
+
+            <div {...stylex.props(styles.footer)}>
+              <button
+                type="button"
+                {...stylex.props(styles.cancelBtn)}
+                onClick={onClose}
+                disabled={isSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                {...stylex.props(styles.saveBtn)}
+                disabled={isSubmitting || !name.trim()}
+              >
+                {isSubmitting ? 'Saving...' : 'Rename'}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </ModalDialog>
   );
 }

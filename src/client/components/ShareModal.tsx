@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
@@ -19,7 +19,8 @@ import {
   copyTextToClipboard,
   COPY_FEEDBACK_DURATION_MS,
 } from '../utils/format.js';
-import { useDialogLock, useMediaQuery } from '../utils/useBeforeUnload.js';
+import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import { ModalDialog } from './ModalDialog.js';
 
 export type ShareTargetItem = {
   kind: 'file' | 'folder';
@@ -65,33 +66,20 @@ function getAccountLabel(
   return displayName && displayName !== email ? displayName : fallbackId;
 }
 
+const INSPECT_CACHE_TTL_MS = 15_000;
+const inspectCache = new Map<string, { data: InspectResponse; ts: number }>();
+
+function buildInspectSignature(sourcePoolId: number, items: ShareTargetItem[]): string {
+  const itemKeys = items
+    .map((i) => `${i.kind}:${i.id}`)
+    .sort()
+    .join(',');
+  return `${sourcePoolId}:${itemKeys}`;
+}
+
 const styles = stylex.create({
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-  },
-  modal: {
+  surface: {
     width: layout.shareModalWidth,
-    maxWidth: '100%',
-    maxHeight: 'calc(100vh - 32px)',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
   },
   header: {
     height: '48px',
@@ -149,6 +137,10 @@ const styles = stylex.create({
       cursor: 'not-allowed',
       backgroundColor: 'transparent',
       color: colors.secondaryText,
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   body: {
@@ -369,7 +361,7 @@ const styles = stylex.create({
       cursor: 'not-allowed',
     },
     '@media (pointer: coarse)': {
-      minHeight: '36px',
+      minHeight: '44px',
     },
   },
   driveListContainer: {
@@ -380,6 +372,13 @@ const styles = stylex.create({
     padding: spacing.space0,
     position: 'relative',
     boxSizing: 'border-box',
+    outline: 'none',
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
+    },
   },
   virtualTrack: {
     width: '100%',
@@ -423,6 +422,9 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.selectionBg,
     },
+  },
+  driveRowActive: {
+    boxShadow: `inset 2px 0 0 0 ${colors.focusRing}`,
   },
   rowLast: {
     borderBottomWidth: '0px',
@@ -660,6 +662,9 @@ const styles = stylex.create({
       outlineColor: colors.focusRing,
       outlineOffset: '1px',
     },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+    },
   },
   copyBtnCopied: {
     backgroundColor: colors.successSurface,
@@ -783,7 +788,10 @@ export function ShareModal({
   const [error, setError] = useState<string | null>(null);
   const [executeResult, setExecuteResult] = useState<ExecuteResponse | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [activeDriveIndex, setActiveDriveIndex] = useState<number>(0);
   const isCoarsePointer = useMediaQuery('(pointer: coarse)');
+  const titleId = useId();
+  const driveOptionIdPrefix = useId();
 
   const driveListRef = useRef<HTMLDivElement | null>(null);
   const linksListRef = useRef<HTMLDivElement | null>(null);
@@ -795,7 +803,7 @@ export function ShareModal({
     };
   }, []);
 
-  // Reset state cleanly on close/open and run inspect on open
+  // Reset state cleanly on close/open and run inspect on open (with signature cache)
   useEffect(() => {
     if (!isOpen || items.length === 0) {
       setInspectData(null);
@@ -807,12 +815,14 @@ export function ShareModal({
       setError(null);
       setExecuteResult(null);
       setCopiedKey(null);
+      setActiveDriveIndex(0);
       return;
     }
 
-    let cancelled = false;
-    setInspectData(null);
-    setIsInspecting(true);
+    const signature = buildInspectSignature(sourcePoolId, items);
+    const cached = inspectCache.get(signature);
+    const isFreshCache = cached && Date.now() - cached.ts < INSPECT_CACHE_TTL_MS;
+
     setSelectedAccountIds([]);
     setValidationData(null);
     setIsValidating(false);
@@ -820,37 +830,53 @@ export function ShareModal({
     setError(null);
     setExecuteResult(null);
     setCopiedKey(null);
+    setActiveDriveIndex(0);
+
+    if (isFreshCache) {
+      setInspectData(cached.data);
+      setIsInspecting(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setInspectData(null);
+    setIsInspecting(true);
 
     (async () => {
       try {
-        const res = await client.api.share.inspect.$post({
-          json: {
-            sourcePoolId,
-            items: items.map((i) => ({ kind: i.kind, id: i.id })),
+        const res = await client.api.share.inspect.$post(
+          {
+            json: {
+              sourcePoolId,
+              items: items.map((i) => ({ kind: i.kind, id: i.id })),
+            },
           },
-        });
+          { init: { signal: controller.signal } }
+        );
         const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         if (res.ok) {
-          setInspectData(data as InspectResponse);
+          const parsed = data as InspectResponse;
+          inspectCache.set(signature, { data: parsed, ts: Date.now() });
+          setInspectData(parsed);
         } else {
           setError(
             ('error' in data ? (data.error as string) : null) || 'Failed to inspect share targets'
           );
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setIsInspecting(false);
         }
       }
     })();
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [isOpen, items, sourcePoolId]);
 
@@ -858,7 +884,7 @@ export function ShareModal({
     inspectData && !inspectData.sharePoolFitsWithoutExpansion && inspectData.overCeilingFiles.length === 0
   );
 
-  // Live validation whenever selectedAccountIds changes while expansion is needed
+  // Debounced live validation whenever selectedAccountIds changes while expansion is needed
   useEffect(() => {
     if (!isOpen || !needsExpansion || items.length === 0) {
       setValidationData(null);
@@ -872,48 +898,54 @@ export function ShareModal({
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     setIsValidating(true);
 
-    (async () => {
-      try {
-        const res = await client.api.share.validate.$post({
-          json: {
-            sourcePoolId,
-            items: items.map((i) => ({ kind: i.kind, id: i.id })),
-            selectedAccountIds,
-          },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (res.ok) {
-          setValidationData(data as ValidateResponse);
-        } else {
-          setValidationData({
-            valid: false,
-            reason: ('error' in data ? (data.error as string) : null) || 'Validation failed',
-            totalAvailableHeadroomBytes: 0,
-            requiredBytes: inspectData?.totalBytes ?? 0,
-          });
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          const res = await client.api.share.validate.$post(
+            {
+              json: {
+                sourcePoolId,
+                items: items.map((i) => ({ kind: i.kind, id: i.id })),
+                selectedAccountIds,
+              },
+            },
+            { init: { signal: controller.signal } }
+          );
+          const data = await res.json().catch(() => ({}));
+          if (controller.signal.aborted) return;
+          if (res.ok) {
+            setValidationData(data as ValidateResponse);
+          } else {
+            setValidationData({
+              valid: false,
+              reason: ('error' in data ? (data.error as string) : null) || 'Validation failed',
+              totalAvailableHeadroomBytes: 0,
+              requiredBytes: inspectData?.totalBytes ?? 0,
+            });
+          }
+        } catch (err) {
+          if (!controller.signal.aborted) {
+            setValidationData({
+              valid: false,
+              reason: err instanceof Error ? err.message : String(err),
+              totalAvailableHeadroomBytes: 0,
+              requiredBytes: inspectData?.totalBytes ?? 0,
+            });
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setIsValidating(false);
+          }
         }
-      } catch (err) {
-        if (!cancelled) {
-          setValidationData({
-            valid: false,
-            reason: err instanceof Error ? err.message : String(err),
-            totalAvailableHeadroomBytes: 0,
-            requiredBytes: inspectData?.totalBytes ?? 0,
-          });
-        }
-      } finally {
-        if (!cancelled) {
-          setIsValidating(false);
-        }
-      }
-    })();
+      })();
+    }, 180);
 
     return () => {
-      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
     };
   }, [isOpen, needsExpansion, selectedAccountIds, items, sourcePoolId, inspectData?.totalBytes]);
 
@@ -1006,9 +1038,7 @@ export function ShareModal({
     onClose();
   }, [isSubmitting, onClose]);
 
-  useDialogLock(isOpen && items.length > 0, isSubmitting, onClose);
-
-  if (!isOpen || items.length === 0) return null;
+  const effectiveOpen = isOpen && items.length > 0;
 
   const hasOverCeiling = (inspectData?.overCeilingFiles.length ?? 0) > 0;
   const allocationReady = Boolean(
@@ -1052,6 +1082,7 @@ export function ShareModal({
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         const executed = data as ExecuteResponse;
+        inspectCache.clear();
         setExecuteResult(executed);
         void onComplete(executed);
       } else {
@@ -1068,35 +1099,67 @@ export function ShareModal({
 
   const linksWithUrl = executeResult?.links.filter((l) => Boolean(l.webViewLink)) ?? [];
 
+  const activeDriveAccount = emptyAccounts[activeDriveIndex];
+  const activeDescendantId = activeDriveAccount
+    ? `${driveOptionIdPrefix}-${activeDriveAccount.id}`
+    : undefined;
+
+  const handleDriveListboxKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (emptyAccounts.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextIdx = Math.min(emptyAccounts.length - 1, activeDriveIndex + 1);
+      setActiveDriveIndex(nextIdx);
+      driveVirtualizer.scrollToIndex(nextIdx, { align: 'auto' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const nextIdx = Math.max(0, activeDriveIndex - 1);
+      setActiveDriveIndex(nextIdx);
+      driveVirtualizer.scrollToIndex(nextIdx, { align: 'auto' });
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveDriveIndex(0);
+      driveVirtualizer.scrollToIndex(0, { align: 'auto' });
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      const lastIdx = emptyAccounts.length - 1;
+      setActiveDriveIndex(lastIdx);
+      driveVirtualizer.scrollToIndex(lastIdx, { align: 'auto' });
+    } else if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      const acc = emptyAccounts[activeDriveIndex];
+      if (acc) {
+        handleToggleAccount(acc);
+      }
+    }
+  };
+
   return (
-    <div
-      {...stylex.props(styles.backdrop)}
-      onClick={handleDismiss}
+    <ModalDialog
+      isOpen={effectiveOpen}
+      onClose={onClose}
+      isBusy={isSubmitting}
+      ariaLabelledBy={titleId}
+      surfaceStyle={styles.surface}
     >
-      <div
-        {...stylex.props(styles.modal)}
-        role="dialog"
-        aria-modal="true"
-        aria-label={executeResult ? 'Share links ready' : 'Share via Drive'}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div {...stylex.props(styles.header)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            {executeResult ? <IconLink size={16} /> : <IconShare size={16} />}
-            <h2 {...stylex.props(styles.title)}>
-              {executeResult ? 'Share links ready' : 'Share via Drive'}
-            </h2>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={handleDismiss}
-            disabled={isSubmitting}
-            aria-label="Close"
-          >
-            <IconClose size={16} />
-          </button>
+      <div {...stylex.props(styles.header)}>
+        <div {...stylex.props(styles.titleGroup)}>
+          {executeResult ? <IconLink size={16} /> : <IconShare size={16} />}
+          <h2 id={titleId} {...stylex.props(styles.title)}>
+            {executeResult ? 'Share links ready' : 'Share via Drive'}
+          </h2>
         </div>
+        <button
+          type="button"
+          {...stylex.props(styles.closeBtn)}
+          onClick={handleDismiss}
+          disabled={isSubmitting}
+          aria-label="Close"
+        >
+          <IconClose size={16} />
+        </button>
+      </div>
 
         {executeResult ? (
           <>
@@ -1328,7 +1391,16 @@ export function ShareModal({
                       new Google Drive account to expand the Share Pool.
                     </div>
                   ) : (
-                    <div ref={driveListRef} {...stylex.props(styles.driveListContainer)}>
+                    <div
+                      ref={driveListRef}
+                      role="listbox"
+                      aria-multiselectable="true"
+                      aria-label="Select empty drives for Share Pool"
+                      aria-activedescendant={activeDescendantId}
+                      tabIndex={0}
+                      onKeyDown={handleDriveListboxKeyDown}
+                      {...stylex.props(styles.driveListContainer)}
+                    >
                       <div
                         {...stylex.props(styles.virtualTrack)}
                         style={{ height: `${driveVirtualizer.getTotalSize()}px` }}
@@ -1338,25 +1410,24 @@ export function ShareModal({
                           if (!acc) return null;
                           const selectable = isDriveSelectable(acc);
                           const isSelected = selectedAccountIds.includes(acc.id);
+                          const isActive = virtualRow.index === activeDriveIndex;
                           const statusBadge = getDriveStatusBadge(acc);
 
                           return (
                             <div
                               key={acc.id}
-                              role="checkbox"
-                              aria-checked={isSelected}
+                              id={`${driveOptionIdPrefix}-${acc.id}`}
+                              role="option"
+                              aria-selected={isSelected}
                               aria-disabled={!selectable || isSubmitting}
-                              tabIndex={selectable && !isSubmitting ? 0 : -1}
-                              onClick={() => handleToggleAccount(acc)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  handleToggleAccount(acc);
-                                }
+                              onClick={() => {
+                                setActiveDriveIndex(virtualRow.index);
+                                handleToggleAccount(acc);
                               }}
                               {...stylex.props(
                                 styles.driveRow,
                                 isSelected && styles.driveRowSelected,
+                                isActive && styles.driveRowActive,
                                 (!selectable || isSubmitting) && styles.driveRowDisabled,
                                 virtualRow.index === emptyAccounts.length - 1 && styles.rowLast
                               )}
@@ -1414,15 +1485,17 @@ export function ShareModal({
                 </div>
               )}
 
-              {error && (
-                <div {...stylex.props(styles.dangerBanner)}>
-                  <div {...stylex.props(styles.dangerBannerHeader)}>
-                    <IconAlertTriangle size={15} />
-                    <span>Unable to share</span>
+              <div role="status" aria-live="polite">
+                {error && (
+                  <div {...stylex.props(styles.dangerBanner)}>
+                    <div {...stylex.props(styles.dangerBannerHeader)}>
+                      <IconAlertTriangle size={15} />
+                      <span>Unable to share</span>
+                    </div>
+                    <p {...stylex.props(styles.dangerBannerText)}>{error}</p>
                   </div>
-                  <p {...stylex.props(styles.dangerBannerText)}>{error}</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             <div {...stylex.props(styles.footer)}>
@@ -1445,7 +1518,6 @@ export function ShareModal({
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

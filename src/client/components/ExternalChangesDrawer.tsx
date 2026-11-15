@@ -4,7 +4,7 @@ import { client } from '../api.js';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
-import { useDialogLock } from '../utils/useBeforeUnload.js';
+import { useBeforeUnload } from '../utils/useBeforeUnload.js';
 import {
   getDiscrepancyReportCache,
   setDiscrepancyReportCache,
@@ -75,6 +75,7 @@ interface ExternalChangesDrawerProps {
     tsubasaUsedBytes?: number;
   }>;
   initialAccountId?: string;
+  isMobileSidebarOpen?: boolean;
   onResolved: (summary?: { accountId: string; remainingCount: number; refreshFiles?: boolean }) => Promise<void>;
 }
 
@@ -90,32 +91,63 @@ function countDiscrepancies(report: DiscrepancyReport | null | undefined): numbe
 }
 
 const styles = stylex.create({
-  backdrop: {
+  dialog: {
     position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    zIndex: 90,
-    transition: motion.transitionFast,
-  },
-  drawer: {
-    position: 'fixed',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    width: '460px',
+    inset: {
+      default: '0 0 0 auto',
+      '@media (max-width: 768px)': '0 0 auto 0',
+    },
+    margin: 0,
+    padding: 0,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
+    color: 'inherit',
+    outline: 'none',
+    overflow: 'hidden',
+    width: {
+      default: '460px',
+      '@media (max-width: 768px)': '100vw',
+    },
     maxWidth: '100vw',
+    height: {
+      default: '100dvh',
+      '@media (max-width: 768px)': 'auto',
+    },
+    maxHeight: {
+      default: '100dvh',
+      '@media (max-width: 768px)': '92dvh',
+    },
+    '::backdrop': {
+      backgroundColor: colors.modalBackdrop,
+    },
+  },
+  dialogWithMobileSidebarOpen: {
+    '::backdrop': {
+      backgroundColor: {
+        default: colors.modalBackdrop,
+        '@media (max-width: 768px)': 'transparent',
+      },
+    },
+  },
+  drawerSurface: {
+    width: '100%',
+    height: '100%',
+    maxHeight: 'inherit',
     backgroundColor: colors.surface,
-    borderLeftWidth: '1px',
+    borderLeftWidth: {
+      default: '1px',
+      '@media (max-width: 768px)': '0px',
+    },
     borderLeftStyle: 'solid',
     borderLeftColor: colors.borderSubtle,
     display: 'flex',
     flexDirection: 'column',
-    zIndex: 100,
     boxSizing: 'border-box',
-    transform: 'translateX(0)',
-    transition: 'transform 0.25s ease-out',
+    overflow: 'hidden',
     '@media (max-width: 768px)': {
-      width: '100vw',
+      borderBottomWidth: '1px',
+      borderBottomStyle: 'solid',
+      borderBottomColor: colors.border,
     },
   },
   drawerHeader: {
@@ -668,6 +700,7 @@ export function ExternalChangesDrawer({
   onClose,
   accounts,
   initialAccountId,
+  isMobileSidebarOpen = false,
   onResolved,
 }: ExternalChangesDrawerProps) {
   const [selectedAccount, setSelectedAccount] = useState<string>(() => {
@@ -1078,10 +1111,105 @@ export function ExternalChangesDrawer({
   };
 
   const isLocked = activeActionId !== null;
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pointerDownOutsideRef = useRef(false);
+  const isClosingRef = useRef(false);
 
-  useDialogLock(isOpen, isLocked, onClose);
+  useBeforeUnload(isLocked);
+
+  const requestClose = useCallback(() => {
+    if (isLocked || isClosingRef.current) return;
+    const dialog = dialogRef.current;
+    if (!dialog || !dialog.open) {
+      onClose();
+      return;
+    }
+
+    const skipExitAnimation =
+      document.body.classList.contains('resize-animation-stopper') ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (skipExitAnimation) {
+      dialog.removeAttribute('data-closing');
+      dialog.close();
+      return;
+    }
+
+    isClosingRef.current = true;
+    dialog.setAttribute('data-closing', '');
+    const animations = dialog.getAnimations();
+    Promise.all(animations.map((anim) => anim.finished.catch(() => {}))).then(() => {
+      if (!isClosingRef.current) return;
+      isClosingRef.current = false;
+      dialog.removeAttribute('data-closing');
+      if (dialog.open) {
+        dialog.close();
+      }
+    });
+  }, [isLocked, onClose]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen) {
+      isClosingRef.current = false;
+      dialog.removeAttribute('data-closing');
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+    } else if (dialog.open) {
+      dialog.removeAttribute('data-closing');
+      dialog.close();
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.setAttribute('closedby', isLocked ? 'none' : 'any');
+  }, [isLocked]);
 
   if (!isOpen) return null;
+
+  const isOutsideDialogBounds = (e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) => {
+    const rect = dialog.getBoundingClientRect();
+    return (
+      e.clientX < rect.left ||
+      e.clientX > rect.right ||
+      e.clientY < rect.top ||
+      e.clientY > rect.bottom
+    );
+  };
+
+  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.preventDefault();
+    if (!isLocked) {
+      requestClose();
+    }
+  };
+
+  const handleDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.currentTarget.returnValue = '';
+    e.currentTarget.removeAttribute('data-closing');
+    isClosingRef.current = false;
+    onClose();
+  };
+
+  const handleDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    pointerDownOutsideRef.current = isOutsideDialogBounds(e, e.currentTarget);
+  };
+
+  const handleDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    const startedOutside = pointerDownOutsideRef.current;
+    pointerDownOutsideRef.current = false;
+    if (!startedOutside || isLocked) return;
+    if (isOutsideDialogBounds(e, e.currentTarget)) {
+      requestClose();
+    }
+  };
 
   const exactDuplicates = (report?.conflicts ?? []).filter((c) => c.isExactDuplicate);
 
@@ -1106,14 +1234,20 @@ export function ExternalChangesDrawer({
   const totalDiscrepancies = countDiscrepancies(report);
 
   return (
-    <>
-      <div
-        {...stylex.props(styles.backdrop)}
-        onClick={() => {
-          if (!isLocked) onClose();
-        }}
-      />
-      <div {...stylex.props(styles.drawer)} role="dialog" aria-modal="true" aria-label="External modifications">
+    <dialog
+      ref={dialogRef}
+      data-tsubasa-dialog="drawer-sheet"
+      aria-label="External modifications"
+      onCancel={handleDialogCancel}
+      onClose={handleDialogClose}
+      onPointerDown={handleDialogPointerDown}
+      onPointerUp={handleDialogPointerUp}
+      {...stylex.props(
+        styles.dialog,
+        isMobileSidebarOpen && styles.dialogWithMobileSidebarOpen
+      )}
+    >
+      <div {...stylex.props(styles.drawerSurface)}>
         <div {...stylex.props(styles.drawerHeader)}>
           <div {...stylex.props(styles.titleGroup)}>
             <IconAlertTriangle size={18} />
@@ -1122,7 +1256,7 @@ export function ExternalChangesDrawer({
           <button
             type="button"
             {...stylex.props(styles.closeBtn)}
-            onClick={onClose}
+            onClick={requestClose}
             disabled={isLocked}
             aria-label="Close drawer"
           >
@@ -1670,7 +1804,7 @@ export function ExternalChangesDrawer({
           )}
         </div>
       </div>
-    </>
+    </dialog>
   );
 }
 

@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconFolder, IconChevronDown } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
-import { useDialogLock } from '../utils/useBeforeUnload.js';
+import { ModalDialog } from './ModalDialog.js';
 import type { AccountItem } from './Sidebar.js';
 
 export interface MoveFileItem {
@@ -56,31 +56,8 @@ function evaluateCandidate(acc: AccountItem, totalBytes: number) {
 }
 
 const styles = stylex.create({
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-  },
-  modal: {
+  surface: {
     width: '460px',
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
   },
   header: {
     height: '48px',
@@ -117,16 +94,27 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.35,
       color: colors.secondaryText,
       backgroundColor: 'transparent',
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
     },
   },
   body: {
@@ -278,6 +266,9 @@ const styles = stylex.create({
       opacity: 0.5,
       cursor: 'not-allowed',
     },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+    },
   },
   selectChevron: {
     position: 'absolute',
@@ -291,7 +282,7 @@ const styles = stylex.create({
   },
   errorMessage: {
     fontSize: typography.fontSizeMeta,
-    color: colors.danger,
+    color: colors.dangerTextOnSurface,
     fontFamily: typography.fontFamilyMono,
   },
   footer: {
@@ -323,11 +314,18 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     fontWeight: typography.fontWeightBody,
     cursor: 'pointer',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
       borderColor: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
@@ -335,6 +333,9 @@ const styles = stylex.create({
       color: colors.secondaryText,
       borderColor: colors.border,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
   confirmBtn: {
@@ -352,13 +353,23 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
     },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
 });
@@ -399,6 +410,8 @@ export function MoveFilesModal({
   const [isLoading, setIsLoading] = useState(false);
   const selectRef = useRef<HTMLSelectElement | null>(null);
   const fileListRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  const selectId = useId();
 
   const virtualizer = useVirtualizer({
     count: files.length,
@@ -407,21 +420,13 @@ export function MoveFilesModal({
     overscan: 5,
   });
 
-  useDialogLock(isOpen, isLoading, onClose);
-
   useEffect(() => {
     if (isOpen) {
       setTargetAccountId(firstEligibleId);
       setError(null);
       setIsLoading(false);
-      const timer = setTimeout(() => {
-        selectRef.current?.focus();
-      }, 50);
-      return () => clearTimeout(timer);
     }
   }, [isOpen, firstEligibleId]);
-
-  if (!isOpen) return null;
 
   const currentTarget = candidateAccounts.find((acc) => acc.id === targetAccountId);
   const currentCanHold = currentTarget
@@ -444,150 +449,148 @@ export function MoveFilesModal({
   };
 
   return (
-    <div
-      {...stylex.props(styles.backdrop)}
-      onClick={() => {
-        if (!isLoading) onClose();
-      }}
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      isBusy={isLoading}
+      ariaLabelledBy={titleId}
+      initialFocusRef={selectRef}
+      surfaceStyle={styles.surface}
     >
-      <div
-        {...stylex.props(styles.modal)}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Move files to another account"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div {...stylex.props(styles.header)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            <IconFolder size={16} />
-            <h2 {...stylex.props(styles.title)}>Move files to another account</h2>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={onClose}
-            disabled={isLoading}
-            aria-label="Close"
-          >
-            <IconClose size={16} />
-          </button>
+      <div {...stylex.props(styles.header)}>
+        <div {...stylex.props(styles.titleGroup)}>
+          <IconFolder size={16} />
+          <h2 id={titleId} {...stylex.props(styles.title)}>Move files to another account</h2>
         </div>
+        <button
+          type="button"
+          {...stylex.props(styles.closeBtn)}
+          onClick={onClose}
+          disabled={isLoading}
+          aria-label="Close"
+        >
+          <IconClose size={16} />
+        </button>
+      </div>
 
-        <form onSubmit={handleSubmit}>
-          <div {...stylex.props(styles.body)}>
-            <div {...stylex.props(styles.accountCard)}>
-              <span {...stylex.props(styles.accountName)}>
-                {sourceAccount ? sourceAccount.displayName || sourceAccount.id : 'Unknown account'}
-              </span>
-              <span {...stylex.props(styles.accountMeta)}>
-                {sourceAccount?.email || sourceAccount?.id || ''}
-              </span>
-              <span {...stylex.props(styles.accountFilesInfo)}>
-                {effectiveFileIds.length} file{effectiveFileIds.length === 1 ? '' : 's'} ({formatBytes(effectiveTotalBytes)})
-              </span>
-            </div>
+      <form onSubmit={handleSubmit}>
+        <div {...stylex.props(styles.body)}>
+          <div {...stylex.props(styles.accountCard)}>
+            <span {...stylex.props(styles.accountName)}>
+              {sourceAccount ? sourceAccount.displayName || sourceAccount.id : 'Unknown account'}
+            </span>
+            <span {...stylex.props(styles.accountMeta)}>
+              {sourceAccount?.email || sourceAccount?.id || ''}
+            </span>
+            <span {...stylex.props(styles.accountFilesInfo)}>
+              {effectiveFileIds.length} file{effectiveFileIds.length === 1 ? '' : 's'} ({formatBytes(effectiveTotalBytes)})
+            </span>
+          </div>
 
-            {files.length > 0 && (
-              <div {...stylex.props(styles.fileListGroup)}>
-                <span {...stylex.props(styles.fileListLabel)}>
-                  Files to move ({files.length})
-                </span>
-                <div ref={fileListRef} {...stylex.props(styles.fileListContainer)}>
-                  <div
-                    {...stylex.props(styles.virtualTrack)}
-                    style={{ height: `${virtualizer.getTotalSize()}px` }}
-                  >
-                    {virtualizer.getVirtualItems().map((virtualRow) => {
-                      const file = files[virtualRow.index];
-                      if (!file) return null;
-                      const displayPath = formatFilePath(file);
-                      return (
-                        <div
-                          key={file.id}
-                          {...stylex.props(styles.fileRow)}
-                          style={{
-                            height: `${virtualRow.size}px`,
-                            transform: `translateY(${virtualRow.start}px)`,
-                          }}
-                        >
-                          <span {...stylex.props(styles.fileName)} title={displayPath}>
-                            {displayPath}
-                          </span>
-                          <span {...stylex.props(styles.fileSize)}>
-                            {formatBytes(file.sizeBytes)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div {...stylex.props(styles.fieldGroup)}>
-              <label {...stylex.props(styles.label)}>Target storage account</label>
-              <div {...stylex.props(styles.selectWrapper)}>
-                <select
-                  ref={selectRef}
-                  value={targetAccountId}
-                  onChange={(e) => {
-                    setTargetAccountId(e.target.value);
-                    if (error) setError(null);
-                  }}
-                  disabled={isLoading || candidateAccounts.length === 0}
-                  {...stylex.props(styles.select)}
+          {files.length > 0 && (
+            <div {...stylex.props(styles.fileListGroup)}>
+              <span {...stylex.props(styles.fileListLabel)}>
+                Files to move ({files.length})
+              </span>
+              <div ref={fileListRef} {...stylex.props(styles.fileListContainer)}>
+                <div
+                  {...stylex.props(styles.virtualTrack)}
+                  style={{ height: `${virtualizer.getTotalSize()}px` }}
                 >
-                  {candidateAccounts.length === 0 ? (
-                    <option value="" disabled>
-                      No candidate accounts available
-                    </option>
-                  ) : (
-                    candidateAccounts.map((acc) => {
-                      const { canHold, labelSuffix } = evaluateCandidate(
-                        acc,
-                        effectiveTotalBytes
-                      );
-                      const optTitle = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
-                      return (
-                        <option
-                          key={acc.id}
-                          value={acc.id}
-                          disabled={!canHold}
-                          title={optTitle}
-                        >
-                          {(acc.displayName || acc.id) + labelSuffix}
-                        </option>
-                      );
-                    })
-                  )}
-                </select>
-                <div {...stylex.props(styles.selectChevron)}>
-                  <IconChevronDown size={14} strokeWidth={2.5} />
+                  {virtualizer.getVirtualItems().map((virtualRow) => {
+                    const file = files[virtualRow.index];
+                    if (!file) return null;
+                    const displayPath = formatFilePath(file);
+                    return (
+                      <div
+                        key={file.id}
+                        {...stylex.props(styles.fileRow)}
+                        style={{
+                          height: `${virtualRow.size}px`,
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        <span {...stylex.props(styles.fileName)} title={displayPath}>
+                          {displayPath}
+                        </span>
+                        <span {...stylex.props(styles.fileSize)}>
+                          {formatBytes(file.sizeBytes)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+            </div>
+          )}
+
+          <div {...stylex.props(styles.fieldGroup)}>
+            <label htmlFor={selectId} {...stylex.props(styles.label)}>Target storage account</label>
+            <div {...stylex.props(styles.selectWrapper)}>
+              <select
+                id={selectId}
+                ref={selectRef}
+                autoFocus
+                value={targetAccountId}
+                onChange={(e) => {
+                  setTargetAccountId(e.target.value);
+                  if (error) setError(null);
+                }}
+                disabled={isLoading || candidateAccounts.length === 0}
+                {...stylex.props(styles.select)}
+              >
+                {candidateAccounts.length === 0 ? (
+                  <option value="" disabled>
+                    No candidate accounts available
+                  </option>
+                ) : (
+                  candidateAccounts.map((acc) => {
+                    const { canHold, labelSuffix } = evaluateCandidate(
+                      acc,
+                      effectiveTotalBytes
+                    );
+                    const optTitle = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
+                    return (
+                      <option
+                        key={acc.id}
+                        value={acc.id}
+                        disabled={!canHold}
+                        title={optTitle}
+                      >
+                        {(acc.displayName || acc.id) + labelSuffix}
+                      </option>
+                    );
+                  })
+                )}
+              </select>
+              <div {...stylex.props(styles.selectChevron)}>
+                <IconChevronDown size={14} strokeWidth={2.5} />
+              </div>
+            </div>
+            <div role="status" aria-live="polite">
               {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
             </div>
           </div>
+        </div>
 
-          <div {...stylex.props(styles.footer)}>
-            <button
-              type="button"
-              {...stylex.props(styles.cancelBtn)}
-              onClick={onClose}
-              disabled={isLoading}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              {...stylex.props(styles.confirmBtn)}
-              disabled={isLoading || !targetAccountId || !currentCanHold || effectiveFileIds.length === 0}
-            >
-              {isLoading ? 'Moving...' : 'Move files'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div {...stylex.props(styles.footer)}>
+          <button
+            type="button"
+            {...stylex.props(styles.cancelBtn)}
+            onClick={onClose}
+            disabled={isLoading}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            {...stylex.props(styles.confirmBtn)}
+            disabled={isLoading || !targetAccountId || !currentCanHold || effectiveFileIds.length === 0}
+          >
+            {isLoading ? 'Moving...' : 'Move files'}
+          </button>
+        </div>
+      </form>
+    </ModalDialog>
   );
 }

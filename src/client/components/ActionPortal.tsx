@@ -91,6 +91,12 @@ const styles = stylex.create({
     gap: spacing.space3,
     flexWrap: 'nowrap',
     overflowX: 'hidden',
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: layout.actionsPortalHeight,
+      paddingTop: spacing.space1,
+      paddingBottom: spacing.space1,
+    },
   },
   portalCompact: {
     overflowX: 'auto',
@@ -108,6 +114,8 @@ const styles = stylex.create({
     flexShrink: 0,
   },
   crumbBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
     backgroundColor: 'transparent',
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -127,6 +135,9 @@ const styles = stylex.create({
     },
     ':active': {
       backgroundColor: colors.selectionBg,
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
   crumbActive: {
@@ -179,6 +190,10 @@ const styles = stylex.create({
     ':active': {
       transform: 'scale(0.98)',
     },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
+    },
   },
   secondaryBtn: {
     height: '32px',
@@ -211,6 +226,10 @@ const styles = stylex.create({
       opacity: 0.5,
       cursor: 'not-allowed',
     },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
+    },
   },
   hiddenInput: {
     display: 'none',
@@ -225,6 +244,11 @@ const styles = stylex.create({
     paddingLeft: spacing.space0,
     paddingRight: spacing.space0,
     justifyContent: 'center',
+    '@media (pointer: coarse)': {
+      width: '44px',
+      minWidth: '44px',
+      minHeight: '44px',
+    },
   },
   compactHiddenLabel: {
     display: 'none',
@@ -252,6 +276,10 @@ const styles = stylex.create({
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   selectionBadgeSize: {
@@ -325,6 +353,10 @@ const styles = stylex.create({
     ':active': {
       transform: 'scale(0.98)',
     },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
+    },
   },
   selectionBadge: {
     height: '32px',
@@ -345,14 +377,18 @@ const styles = stylex.create({
     boxSizing: 'border-box',
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
+    },
   },
   deleteSelectedBtn: {
-    color: colors.danger,
+    color: colors.dangerTextOnSurface,
     borderColor: colors.border,
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
-      color: colors.danger,
+      color: colors.dangerTextOnSurface,
     },
   },
   clearBtn: {
@@ -377,6 +413,10 @@ const styles = stylex.create({
     },
     ':active': {
       backgroundColor: colors.selectionBg,
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   clusterDivider: {
@@ -470,11 +510,9 @@ export function ActionPortal({
 
   const styledBadgeBtnsRef = useRef<Set<HTMLElement>>(new Set());
 
+  // Compute badge floor widths once per layout signature so badges truncate
+  // down to 3.5ch before toolbar buttons collapse to icon-only.
   const syncBadgeFloorWidths = useCallback((container: HTMLElement) => {
-    const badgeButtons = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-badge-btn="true"]')
-    );
-
     if (styledBadgeBtnsRef.current.size > 0) {
       for (const prevBtn of styledBadgeBtnsRef.current) {
         prevBtn.style.minWidth = '';
@@ -482,6 +520,9 @@ export function ActionPortal({
       styledBadgeBtnsRef.current.clear();
     }
 
+    const badgeButtons = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-badge-btn="true"]')
+    );
     if (badgeButtons.length === 0) return;
 
     const floors: Array<{ btn: HTMLElement; minWidth: string }> = [];
@@ -574,7 +615,6 @@ export function ActionPortal({
   const reconcileOverflow = useCallback(() => {
     const el = portalRef.current;
     if (!el) return;
-    syncBadgeFloorWidths(el);
 
     const { scrollWidth, clientWidth } = el;
     if (clientWidth === 0) return;
@@ -616,25 +656,33 @@ export function ActionPortal({
         collapseThresholdRef.current = expandedWidth;
       }
     }
-  }, [syncBadgeFloorWidths, measureExpandedScrollWidth]);
+  }, [measureExpandedScrollWidth]);
 
-  const prevSignatureRef = useRef<string>(layoutSignature);
+  const prevSignatureRef = useRef<string | null>(null);
   useLayoutEffect(() => {
+    const el = portalRef.current;
+    if (!el) return;
     if (prevSignatureRef.current !== layoutSignature) {
       prevSignatureRef.current = layoutSignature;
       collapseThresholdRef.current = 0;
+      syncBadgeFloorWidths(el);
     }
     reconcileOverflow();
-  }, [layoutSignature, compact, reconcileOverflow]);
+  }, [layoutSignature, compact, syncBadgeFloorWidths, reconcileOverflow]);
 
   useEffect(() => {
     const el = portalRef.current;
     if (!el) return;
 
+    let rafId = 0;
     let observer: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       observer = new ResizeObserver(() => {
-        reconcileOverflow();
+        if (rafId !== 0) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          reconcileOverflow();
+        });
       });
       observer.observe(el);
     }
@@ -642,7 +690,9 @@ export function ActionPortal({
     let cancelled = false;
     if (typeof document !== 'undefined' && document.fonts?.ready) {
       void document.fonts.ready.then(() => {
-        if (!cancelled) reconcileOverflow();
+        if (cancelled) return;
+        syncBadgeFloorWidths(el);
+        reconcileOverflow();
       });
     }
 
@@ -667,10 +717,11 @@ export function ActionPortal({
 
     return () => {
       cancelled = true;
+      if (rafId !== 0) cancelAnimationFrame(rafId);
       observer?.disconnect();
       el.removeEventListener('wheel', handleWheel);
     };
-  }, [reconcileOverflow]);
+  }, [syncBadgeFloorWidths, reconcileOverflow]);
 
   const clearCopyFeedbackTimers = () => {
     for (const timer of copyTimersRef.current.values()) {
@@ -852,6 +903,7 @@ export function ActionPortal({
           type="button"
           {...stylex.props(
             styles.crumbBtn,
+            styles.focusRing,
             !isTrashView && segments.length === 0 && styles.crumbActive,
             dragOverIndex === -1 && styles.crumbDragOver
           )}
@@ -885,6 +937,7 @@ export function ActionPortal({
                   type="button"
                   {...stylex.props(
                     styles.crumbBtn,
+                    styles.focusRing,
                     isLast && styles.crumbActive,
                     dragOverIndex === idx && styles.crumbDragOver
                   )}

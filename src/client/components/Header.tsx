@@ -11,6 +11,8 @@ interface HeaderProps {
   theme: ThemeChoice;
   onThemeChange: (theme: ThemeChoice) => void;
   onToggleMobileMenu?: () => void;
+  isMobileMenuOpen?: boolean;
+  mobileMenuControlsId?: string;
 }
 
 const styles = stylex.create({
@@ -28,6 +30,7 @@ const styles = stylex.create({
     boxSizing: 'border-box',
     gap: spacing.space4,
     zIndex: 10,
+    contain: 'layout style paint',
   },
   leftGroup: {
     display: 'flex',
@@ -48,6 +51,10 @@ const styles = stylex.create({
     borderRadius: radius.compact,
     ':hover': {
       backgroundColor: colors.rowHover,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${colors.focusRing}`,
+      outlineOffset: '2px',
     },
     '@media (max-width: 768px)': {
       display: 'inline-flex',
@@ -108,10 +115,15 @@ const styles = stylex.create({
     cursor: 'pointer',
     color: colors.secondaryText,
     padding: spacing.space1,
+    borderRadius: radius.compact,
     fontSize: '12px',
     lineHeight: '1',
     ':hover': {
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${colors.focusRing}`,
+      outlineOffset: '2px',
     },
     '@media (pointer: coarse)': {
       minWidth: '36px',
@@ -163,6 +175,10 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${colors.focusRing}`,
+      outlineOffset: '2px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -230,6 +246,8 @@ export function Header({
   theme,
   onThemeChange,
   onToggleMobileMenu,
+  isMobileMenuOpen = false,
+  mobileMenuControlsId = 'mobile-sidebar-dialog',
 }: HeaderProps) {
   return (
     <header {...stylex.props(styles.header)}>
@@ -240,6 +258,8 @@ export function Header({
             {...stylex.props(styles.mobileMenuBtn)}
             onClick={onToggleMobileMenu}
             aria-label="Toggle navigation drawer"
+            aria-expanded={isMobileMenuOpen}
+            aria-controls={mobileMenuControlsId}
           >
             <IconMenu {...stylex.props(styles.iconSvg)} />
           </button>
@@ -274,6 +294,7 @@ export function Header({
             {...stylex.props(styles.themeBtn, theme === 'auto' && styles.themeBtnActive)}
             onClick={() => onThemeChange('auto')}
             aria-label="Follow system theme"
+            aria-pressed={theme === 'auto'}
           >
             <IconMonitor {...stylex.props(styles.iconSvg)} />
             Auto
@@ -284,6 +305,7 @@ export function Header({
             {...stylex.props(styles.themeBtn, theme === 'light' && styles.themeBtnActive)}
             onClick={() => onThemeChange('light')}
             aria-label="Light mode"
+            aria-pressed={theme === 'light'}
           >
             <IconSun {...stylex.props(styles.iconSvg)} />
             Light
@@ -294,6 +316,7 @@ export function Header({
             {...stylex.props(styles.themeBtn, theme === 'dark' && styles.themeBtnActive)}
             onClick={() => onThemeChange('dark')}
             aria-label="Dark mode"
+            aria-pressed={theme === 'dark'}
           >
             <IconMoon {...stylex.props(styles.iconSvg)} />
             Dark

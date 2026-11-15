@@ -1,4 +1,16 @@
-import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  Suspense,
+  lazy,
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { flushSync } from 'react-dom';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
 import { colors, darkColors } from './tokens.stylex.js';
@@ -17,15 +29,39 @@ import {
   type ClientFolder,
 } from './components/FileTable.js';
 import { DitherDivider } from './components/DitherDivider.js';
-import { UploadDrawer, type StagedItem } from './components/UploadDrawer.js';
-import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
-import { NewFolderModal } from './components/NewFolderModal.js';
-import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
-import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js';
-import { RenameModal, type RenameTarget } from './components/RenameModal.js';
-import { MovePoolModal } from './components/MovePoolModal.js';
-import { MoveFilesModal } from './components/MoveFilesModal.js';
-import { ShareModal, type ShareExecuteResult, type ShareTargetItem } from './components/ShareModal.js';
+import type { StagedItem } from './components/UploadDrawer.js';
+import type { RenameTarget } from './components/RenameModal.js';
+import type { ShareExecuteResult, ShareTargetItem } from './components/ShareModal.js';
+
+const UploadDrawer = lazy(() =>
+  import('./components/UploadDrawer.js').then((m) => ({ default: m.UploadDrawer }))
+);
+const ExternalChangesDrawer = lazy(() =>
+  import('./components/ExternalChangesDrawer.js').then((m) => ({ default: m.ExternalChangesDrawer }))
+);
+const NewFolderModal = lazy(() =>
+  import('./components/NewFolderModal.js').then((m) => ({ default: m.NewFolderModal }))
+);
+const ConfirmPurgeModal = lazy(() =>
+  import('./components/ConfirmPurgeModal.js').then((m) => ({ default: m.ConfirmPurgeModal }))
+);
+const ConfirmDriveActionModal = lazy(() =>
+  import('./components/ConfirmDriveActionModal.js').then((m) => ({
+    default: m.ConfirmDriveActionModal,
+  }))
+);
+const RenameModal = lazy(() =>
+  import('./components/RenameModal.js').then((m) => ({ default: m.RenameModal }))
+);
+const MovePoolModal = lazy(() =>
+  import('./components/MovePoolModal.js').then((m) => ({ default: m.MovePoolModal }))
+);
+const MoveFilesModal = lazy(() =>
+  import('./components/MoveFilesModal.js').then((m) => ({ default: m.MoveFilesModal }))
+);
+const ShareModal = lazy(() =>
+  import('./components/ShareModal.js').then((m) => ({ default: m.ShareModal }))
+);
 import { ToastRegion, pushToast } from './components/ToastRegion.js';
 import { copyTextToClipboard, SHARE_POOL_RESERVE_ID } from './utils/format.js';
 import { useBeforeUnload, useMediaQuery } from './utils/useBeforeUnload.js';
@@ -76,10 +112,49 @@ const styles = stylex.create({
     overflow: 'hidden',
     position: 'relative',
   },
+  fileTableStage: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    position: 'relative',
+  },
+  fileTablePane: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+  },
+  fileTablePaneHidden: {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    contentVisibility: 'hidden',
+    display: {
+      default: 'flex',
+      '@supports not (content-visibility: hidden)': 'none',
+    },
+  },
 });
+
+function runWithViewTransition(update: () => void) {
+  if (
+    typeof document !== 'undefined' &&
+    'startViewTransition' in document &&
+    typeof document.startViewTransition === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: no-preference)').matches
+  ) {
+    document.startViewTransition(update);
+  } else {
+    update();
+  }
+}
 
 const lastDiscrepancyScanByPool = new Map<number, number>();
 const DISCREPANCY_COOLDOWN_MS = 60_000;
+const EMPTY_SELECTED_IDS = new Set<string>();
 
 export function App() {
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => {
@@ -102,13 +177,17 @@ export function App() {
   });
 
   const handleThemeChange = useCallback((newTheme: ThemeChoice) => {
-    setThemeChoice(newTheme);
     try {
       localStorage.setItem('tsubasa-theme-choice', newTheme);
     } catch {}
+    runWithViewTransition(() => {
+      flushSync(() => {
+        setThemeChoice(newTheme);
+      });
+    });
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let active: 'light' | 'dark' = 'dark';
     if (themeChoice === 'auto') {
       const mql = window.matchMedia('(prefers-color-scheme: dark)');
@@ -277,9 +356,19 @@ export function App() {
     });
   }, []);
 
+  const [hasVisitedFiles, setHasVisitedFiles] = useState<boolean>(() => currentNav === 'files');
+  const [hasVisitedTrash, setHasVisitedTrash] = useState<boolean>(() => currentNav === 'trash');
+
+  useEffect(() => {
+    if (currentNav === 'files') setHasVisitedFiles(true);
+    if (currentNav === 'trash') setHasVisitedTrash(true);
+  }, [currentNav]);
+
   const handleSelectNav = useCallback((nav: 'files' | 'trash') => {
-    startTransition(() => {
-      setCurrentNav(nav);
+    runWithViewTransition(() => {
+      flushSync(() => {
+        setCurrentNav(nav);
+      });
     });
   }, []);
 
@@ -384,9 +473,15 @@ export function App() {
   useBeforeUnload(hasInFlightAppProcess);
 
   const isMobileViewport = useMediaQuery('(max-width: 768px)');
+  const prevMobileViewportRef = useRef(isMobileViewport);
   useEffect(() => {
-    if (!isMobileViewport) {
-      setIsMobileOpen(false);
+    if (prevMobileViewportRef.current !== isMobileViewport) {
+      prevMobileViewportRef.current = isMobileViewport;
+      if (!isMobileViewport) {
+        setIsMobileOpen(false);
+      }
+      setIsExternalChangesOpen(false);
+      setExternalChangesAccountId(undefined);
     }
   }, [isMobileViewport]);
 
@@ -2359,14 +2454,11 @@ export function App() {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       const activeEl = document.activeElement as HTMLElement | null;
-      const el = target ?? activeEl;
-      if (
-        el &&
-        (el.closest(
-          'input, textarea, select, button, a, [contenteditable], [contenteditable="true"], dialog[open], [role="dialog"]'
-        ) !== null ||
-          el.isContentEditable)
-      ) {
+      const interactiveSelector =
+        'input, textarea, select, button, a, [contenteditable], [contenteditable="true"], dialog[open], [role="dialog"], [popover]:popover-open';
+      const isInteractiveEl = (node: HTMLElement | null) =>
+        Boolean(node && (node.closest(interactiveSelector) !== null || node.isContentEditable));
+      if (isInteractiveEl(target) || isInteractiveEl(activeEl)) {
         return;
       }
       if (document.querySelector('dialog[open], [role="dialog"]')) {
@@ -3384,6 +3476,7 @@ export function App() {
         isImporting={isImporting}
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
+        isDimmed={isExternalChangesOpen}
         onCloseMobile={handleCloseMobile}
         onDropItemsToRoot={isSharePoolActive ? undefined : handleDropItemsToRoot}
         onDropItemsToTrash={handleTrashItems}
@@ -3399,6 +3492,7 @@ export function App() {
           theme={themeChoice}
           onThemeChange={handleThemeChange}
           onToggleMobileMenu={handleToggleMobileMenu}
+          isMobileMenuOpen={isMobileOpen}
         />
 
         <ActionPortal
@@ -3437,156 +3531,229 @@ export function App() {
           onCopyShareBatchLinks={handleCopyBatchLinks}
         />
 
-        <FileTable
-          files={currentNav === 'trash' ? displayedTrashedFiles : displayedFiles}
-          folders={currentNav === 'trash' ? [] : displayedFolders}
-          isLoading={isTableLoading}
-          currentPath={currentPath}
-          searchQuery={deferredSearchQuery}
-          selectedIds={selectedIds}
-          onSelect={handleSelect}
-          onSelectMultiple={handleSelectMultiple}
-          onClearSelection={handleClearSelection}
-          onNavigate={handleNavigatePath}
-          onDownload={handleDownload}
-          onTrash={handleTrash}
-          onDeleteFolder={handleDeleteFolder}
-          isTrashView={currentNav === 'trash'}
-          onRestore={handleRestoreFile}
-          onPermanentDelete={handlePermanentDelete}
-          onDropFiles={isSharePoolActive ? undefined : handleDropFilesToTable}
-          onStageDroppedUpload={isSharePoolActive ? undefined : handleStageDroppedUpload}
-          onMoveItems={isSharePoolActive ? undefined : handleMoveItems}
-          clipboard={isSharePoolActive ? null : clipboard}
-          accounts={accountItems}
-          onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
-          transferringFileId={transferringFileId}
-          onShareItem={isSharePoolActive ? undefined : handleShareItem}
-          isSharePoolActive={isSharePoolActive}
-          shareLinksByBatch={isShareLinksReady ? shareLinksByBatch : undefined}
-          onCopyShareLinks={isShareLinksReady ? handleCopyBatchLinks : undefined}
-        />
+        <div {...stylex.props(styles.fileTableStage)}>
+          {hasVisitedFiles && (
+            <div
+              {...stylex.props(
+                styles.fileTablePane,
+                currentNav !== 'files' && styles.fileTablePaneHidden
+              )}
+              inert={currentNav !== 'files'}
+            >
+              <FileTable
+                files={displayedFiles}
+                folders={displayedFolders}
+                isLoading={isTableLoading && currentNav === 'files'}
+                currentPath={currentPath}
+                searchQuery={deferredSearchQuery}
+                selectedIds={currentNav === 'files' ? selectedIds : EMPTY_SELECTED_IDS}
+                onSelect={handleSelect}
+                onSelectMultiple={handleSelectMultiple}
+                onClearSelection={handleClearSelection}
+                onNavigate={handleNavigatePath}
+                onDownload={handleDownload}
+                onTrash={handleTrash}
+                onDeleteFolder={handleDeleteFolder}
+                isTrashView={false}
+                onRestore={handleRestoreFile}
+                onPermanentDelete={handlePermanentDelete}
+                onDropFiles={isSharePoolActive ? undefined : handleDropFilesToTable}
+                onStageDroppedUpload={isSharePoolActive ? undefined : handleStageDroppedUpload}
+                onMoveItems={isSharePoolActive ? undefined : handleMoveItems}
+                clipboard={isSharePoolActive ? null : clipboard}
+                accounts={accountItems}
+                onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
+                transferringFileId={transferringFileId}
+                onShareItem={isSharePoolActive ? undefined : handleShareItem}
+                isSharePoolActive={isSharePoolActive}
+                shareLinksByBatch={isShareLinksReady ? shareLinksByBatch : undefined}
+                onCopyShareLinks={isShareLinksReady ? handleCopyBatchLinks : undefined}
+              />
+            </div>
+          )}
+
+          {hasVisitedTrash && (
+            <div
+              {...stylex.props(
+                styles.fileTablePane,
+                currentNav !== 'trash' && styles.fileTablePaneHidden
+              )}
+              inert={currentNav !== 'trash'}
+            >
+              <FileTable
+                files={displayedTrashedFiles}
+                folders={[]}
+                isLoading={isTableLoading && currentNav === 'trash'}
+                currentPath={currentPath}
+                searchQuery={deferredSearchQuery}
+                selectedIds={currentNav === 'trash' ? selectedIds : EMPTY_SELECTED_IDS}
+                onSelect={handleSelect}
+                onSelectMultiple={handleSelectMultiple}
+                onClearSelection={handleClearSelection}
+                onNavigate={handleNavigatePath}
+                onDownload={handleDownload}
+                onTrash={handleTrash}
+                onDeleteFolder={handleDeleteFolder}
+                isTrashView={true}
+                onRestore={handleRestoreFile}
+                onPermanentDelete={handlePermanentDelete}
+                onDropFiles={undefined}
+                onStageDroppedUpload={undefined}
+                onMoveItems={undefined}
+                clipboard={null}
+                accounts={accountItems}
+                onTransferFile={undefined}
+                transferringFileId={transferringFileId}
+                onShareItem={undefined}
+                isSharePoolActive={isSharePoolActive}
+                shareLinksByBatch={undefined}
+                onCopyShareLinks={undefined}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
-      <UploadDrawer
-        isOpen={isUploadDrawerOpen}
-        onClose={() => {
-          setIsUploadDrawerOpen(false);
-          setStagedFiles([]);
-          setStagedEmptyFolders([]);
-        }}
-        stagedFiles={stagedFiles}
-        stagedEmptyFolders={stagedEmptyFolders}
-        currentPath={currentPath}
-        accounts={accountItems}
-        poolId={activePoolId}
-        onUploadComplete={async () => {
-          await Promise.all([loadClusterData(), loadFiles(currentPath)]);
-          pushToast({ variant: 'success', message: 'Upload finished. Cluster updated.' });
-        }}
-        onClearFiles={() => {
-          setStagedFiles([]);
-          setStagedEmptyFolders([]);
-        }}
-      />
+      <Suspense fallback={null}>
+        {isUploadDrawerOpen && (
+          <UploadDrawer
+            isOpen={isUploadDrawerOpen}
+            onClose={() => {
+              setIsUploadDrawerOpen(false);
+              setStagedFiles([]);
+              setStagedEmptyFolders([]);
+            }}
+            stagedFiles={stagedFiles}
+            stagedEmptyFolders={stagedEmptyFolders}
+            currentPath={currentPath}
+            accounts={accountItems}
+            poolId={activePoolId}
+            onUploadComplete={async () => {
+              await Promise.all([loadClusterData(), loadFiles(currentPath)]);
+              pushToast({ variant: 'success', message: 'Upload finished. Cluster updated.' });
+            }}
+            onClearFiles={() => {
+              setStagedFiles([]);
+              setStagedEmptyFolders([]);
+            }}
+          />
+        )}
 
-      {isExternalChangesOpen && (
-        <ExternalChangesDrawer
-          isOpen={isExternalChangesOpen}
-          onClose={() => {
-            setIsExternalChangesOpen(false);
-            setExternalChangesAccountId(undefined);
-          }}
-          accounts={externalChangesAccounts}
-          initialAccountId={externalChangesAccountId}
-          onResolved={async (summary) => {
-            if (summary) {
-              setPendingDiscrepancies((prev) => ({
-                ...prev,
-                [summary.accountId]: summary.remainingCount > 0,
-              }));
-            }
-            await Promise.all([
-              loadClusterData(),
-              summary?.refreshFiles !== false ? loadFiles(currentPath) : Promise.resolve(),
-            ]);
-            pushToast({ variant: 'success', message: 'Discrepancies updated.' });
-          }}
-        />
-      )}
+        {isExternalChangesOpen && (
+          <ExternalChangesDrawer
+            isOpen={isExternalChangesOpen}
+            onClose={() => {
+              setIsExternalChangesOpen(false);
+              setExternalChangesAccountId(undefined);
+            }}
+            accounts={externalChangesAccounts}
+            initialAccountId={externalChangesAccountId}
+            isMobileSidebarOpen={isMobileViewport && isMobileOpen}
+            onResolved={async (summary) => {
+              if (summary) {
+                setPendingDiscrepancies((prev) => ({
+                  ...prev,
+                  [summary.accountId]: summary.remainingCount > 0,
+                }));
+              }
+              await Promise.all([
+                loadClusterData(),
+                summary?.refreshFiles !== false ? loadFiles(currentPath) : Promise.resolve(),
+              ]);
+              pushToast({ variant: 'success', message: 'Discrepancies updated.' });
+            }}
+          />
+        )}
 
-      <NewFolderModal
-        isOpen={isNewFolderOpen}
-        onClose={() => setIsNewFolderOpen(false)}
-        currentPath={currentPath}
-        onCreateFolder={handleCreateFolder}
-      />
+        {isNewFolderOpen && (
+          <NewFolderModal
+            isOpen={isNewFolderOpen}
+            onClose={() => setIsNewFolderOpen(false)}
+            currentPath={currentPath}
+            onCreateFolder={handleCreateFolder}
+          />
+        )}
 
-      <RenameModal
-        isOpen={renameModalItem !== null}
-        onClose={() => setRenameModalItem(null)}
-        item={renameModalItem}
-        onRename={handleRename}
-      />
+        {renameModalItem !== null && (
+          <RenameModal
+            isOpen={renameModalItem !== null}
+            onClose={() => setRenameModalItem(null)}
+            item={renameModalItem}
+            onRename={handleRename}
+          />
+        )}
 
-      <MovePoolModal
-        isOpen={movePoolTargetAccount !== null}
-        onClose={() => setMovePoolTargetAccount(null)}
-        account={movePoolTargetAccount}
-        pools={pools}
-        activePoolId={activePoolId}
-        onConfirm={handleSwitchAccountPool}
-      />
+        {movePoolTargetAccount !== null && (
+          <MovePoolModal
+            isOpen={movePoolTargetAccount !== null}
+            onClose={() => setMovePoolTargetAccount(null)}
+            account={movePoolTargetAccount}
+            pools={pools}
+            activePoolId={activePoolId}
+            onConfirm={handleSwitchAccountPool}
+          />
+        )}
 
-      <MoveFilesModal
-        isOpen={moveFilesModalGroup !== null}
-        onClose={() => setMoveFilesModalGroup(null)}
-        sourceAccount={accountItems.find((a) => a.id === moveFilesModalGroup?.accountId) ?? null}
-        files={modalFiles}
-        accounts={accountItems}
-        onConfirm={handleTransferBatch}
-      />
+        {moveFilesModalGroup !== null && (
+          <MoveFilesModal
+            isOpen={moveFilesModalGroup !== null}
+            onClose={() => setMoveFilesModalGroup(null)}
+            sourceAccount={accountItems.find((a) => a.id === moveFilesModalGroup?.accountId) ?? null}
+            files={modalFiles}
+            accounts={accountItems}
+            onConfirm={handleTransferBatch}
+          />
+        )}
 
-      <ConfirmPurgeModal
-        isOpen={confirmEmptyTrash && currentNav === 'trash'}
-        onClose={() => setConfirmEmptyTrash(false)}
-        onConfirm={handleEmptyTrashExecute}
-        itemCount={trashedFiles.length}
-        totalBytes={trashedTotalBytes}
-      />
+        {confirmEmptyTrash && currentNav === 'trash' && (
+          <ConfirmPurgeModal
+            isOpen={confirmEmptyTrash && currentNav === 'trash'}
+            onClose={() => setConfirmEmptyTrash(false)}
+            onConfirm={handleEmptyTrashExecute}
+            itemCount={trashedFiles.length}
+            totalBytes={trashedTotalBytes}
+          />
+        )}
 
-      <ShareModal
-        isOpen={shareModalState !== null && shareModalState.items.length > 0}
-        onClose={() => setShareModalState(null)}
-        items={shareModalState?.items ?? []}
-        sourcePoolId={shareModalState?.sourcePoolId ?? activePoolId}
-        onComplete={handleShareComplete}
-      />
+        {Boolean(shareModalState && shareModalState.items.length > 0) && (
+          <ShareModal
+            isOpen={shareModalState !== null && shareModalState.items.length > 0}
+            onClose={() => setShareModalState(null)}
+            items={shareModalState?.items ?? []}
+            sourcePoolId={shareModalState?.sourcePoolId ?? activePoolId}
+            onComplete={handleShareComplete}
+          />
+        )}
 
-      <ConfirmPurgeModal
-        isOpen={isClearSharePoolOpen}
-        onClose={() => setIsClearSharePoolOpen(false)}
-        onConfirm={handleClearSharePoolConfirm}
-        itemCount={Math.max(activePool?.fileCount ?? 0, files.length + folders.length)}
-        totalBytes={activePool?.totalBytes ?? files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)}
-        mode="share_pool"
-      />
+        {isClearSharePoolOpen && (
+          <ConfirmPurgeModal
+            isOpen={isClearSharePoolOpen}
+            onClose={() => setIsClearSharePoolOpen(false)}
+            onConfirm={handleClearSharePoolConfirm}
+            itemCount={Math.max(activePool?.fileCount ?? 0, files.length + folders.length)}
+            totalBytes={activePool?.totalBytes ?? files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)}
+            mode="share_pool"
+          />
+        )}
 
-      <ConfirmDriveActionModal
-        isOpen={driveActionModal.isOpen}
-        onClose={() => {
-          if (!driveActionModal.isLoading) {
-            setDriveActionModal((prev) => ({ ...prev, isOpen: false }));
-          }
-        }}
-        onConfirm={handleExecuteDriveAction}
-        action={driveActionModal.action}
-        account={driveActionModal.account}
-        filesCount={driveFilesCount}
-        totalBytes={driveTotalBytes}
-        isLoading={driveActionModal.isLoading}
-        errorMessage={driveActionModal.errorMessage}
-      />
+        {driveActionModal.isOpen && (
+          <ConfirmDriveActionModal
+            isOpen={driveActionModal.isOpen}
+            onClose={() => {
+              if (!driveActionModal.isLoading) {
+                setDriveActionModal((prev) => ({ ...prev, isOpen: false }));
+              }
+            }}
+            onConfirm={handleExecuteDriveAction}
+            action={driveActionModal.action}
+            account={driveActionModal.account}
+            filesCount={driveFilesCount}
+            totalBytes={driveTotalBytes}
+            isLoading={driveActionModal.isLoading}
+            errorMessage={driveActionModal.errorMessage}
+          />
+        )}
+      </Suspense>
 
       <ToastRegion />
     </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors, layout, spacing, radius, typography } from '../tokens.stylex.js';
 import {
@@ -22,6 +22,7 @@ import {
 } from './Icons.js';
 import type { TabOwnerKind } from '../utils/useTabLock.js';
 import { DitherDivider } from './DitherDivider.js';
+import { ModalDialog } from './ModalDialog.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export type EffectiveTheme = 'light' | 'dark';
@@ -918,30 +919,8 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-  },
-  modal: {
+  surface: {
     width: '440px',
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
   },
   header: {
     height: '48px',
@@ -1022,6 +1001,7 @@ interface TabBlockedModalProps {
 export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
   const effectiveTheme = useResolvedTheme();
   const isElectronOwner = ownerKind === 'electron';
+  const titleId = useId();
 
   return (
     <div
@@ -1255,40 +1235,39 @@ export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
         </div>
       </div>
 
-      <div {...stylex.props(styles.backdrop)}>
-        <div
-          {...stylex.props(styles.modal)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="tsubasa-tab-blocked-title"
-        >
-          <div {...stylex.props(styles.header)}>
-            <span {...stylex.props(styles.iconWrap)} aria-hidden="true">
-              <IconAlertTriangle size={16} />
-            </span>
-            <h2 id="tsubasa-tab-blocked-title" {...stylex.props(styles.title)}>
-              Tsubasa~ Cloud is already open
-            </h2>
-          </div>
+      <ModalDialog
+        isOpen={true}
+        onClose={() => {}}
+        isBusy={true}
+        ariaLabelledBy={titleId}
+        surfaceStyle={styles.surface}
+      >
+        <div {...stylex.props(styles.header)}>
+          <span {...stylex.props(styles.iconWrap)} aria-hidden="true">
+            <IconAlertTriangle size={16} />
+          </span>
+          <h2 id={titleId} {...stylex.props(styles.title)}>
+            Tsubasa~ Cloud is already open
+          </h2>
+        </div>
 
-          <div {...stylex.props(styles.body)}>
-            <div {...stylex.props(styles.noticeBox)}>
-              <p {...stylex.props(styles.leadText)}>
-                {isElectronOwner
-                  ? 'The Tsubasa~ Cloud desktop app is already running.'
-                  : 'Another Tsubasa~ Cloud tab is already open.'}
-              </p>
-              <p {...stylex.props(styles.bodyText)}>
-                This tab is blocked so it cannot conflict with active uploads, syncs, or database writes.
-              </p>
-            </div>
-
-            <p {...stylex.props(styles.instructionText)}>
-              Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.
+        <div {...stylex.props(styles.body)}>
+          <div {...stylex.props(styles.noticeBox)}>
+            <p {...stylex.props(styles.leadText)}>
+              {isElectronOwner
+                ? 'The Tsubasa~ Cloud desktop app is already running.'
+                : 'Another Tsubasa~ Cloud tab is already open.'}
+            </p>
+            <p {...stylex.props(styles.bodyText)}>
+              This tab is blocked so it cannot conflict with active uploads, syncs, or database writes.
             </p>
           </div>
+
+          <p {...stylex.props(styles.instructionText)}>
+            Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.
+          </p>
         </div>
-      </div>
+      </ModalDialog>
     </div>
   );
 }
