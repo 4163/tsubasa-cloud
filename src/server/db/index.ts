@@ -27,6 +27,23 @@ sqlite.pragma('journal_size_limit = 67108864');
 export const db = drizzle(sqlite, { schema });
 export type DatabaseInstance = typeof db;
 
+let globalPoolRevisionEpoch = 0;
+const poolRevisions = new Map<number, number>();
+
+export function getPoolRevision(poolId: number): number {
+  return globalPoolRevisionEpoch + (poolRevisions.get(poolId) ?? 0);
+}
+
+export function bumpPoolRevision(poolId?: number): number {
+  if (poolId === undefined) {
+    globalPoolRevisionEpoch += 1;
+    return globalPoolRevisionEpoch;
+  }
+  const next = (poolRevisions.get(poolId) ?? 0) + 1;
+  poolRevisions.set(poolId, next);
+  return globalPoolRevisionEpoch + next;
+}
+
 export function buildDirectoryPrefixBounds(dirPath: string): { lower: string; upper: string } {
   const cleanDir = dirPath.replace(/\/+$/, '');
   if (!cleanDir) {
@@ -55,6 +72,7 @@ function prepareRenameStatements() {
          )`
     ),
     updatePendingDriveSyncAccount: sqlite.prepare('UPDATE pending_drive_sync SET account_id = ? WHERE account_id = ?'),
+    updateDriveOutboxAccount: sqlite.prepare('UPDATE drive_outbox SET account_id = ? WHERE account_id = ?'),
     deleteConflictingPendingDriveSync: sqlite.prepare(
       `DELETE FROM pending_drive_sync
        WHERE account_id = ?
@@ -101,6 +119,7 @@ export function renameAccountInDb(oldId: string, newId: string): void {
         stmts.updateTransferLogsAccount.run(targetId, oldId);
         stmts.updateShareLinksAccount.run(targetId, oldId);
         stmts.updatePendingDriveSyncAccount.run(targetId, oldId);
+        stmts.updateDriveOutboxAccount.run(targetId, oldId);
         stmts.deleteAccountById.run(oldId);
       } else {
         stmts.deleteConflictingPendingDriveSync.run(oldId, newId);
@@ -109,6 +128,7 @@ export function renameAccountInDb(oldId: string, newId: string): void {
         stmts.updateTransferLogsAccount.run(newId, oldId);
         stmts.updateShareLinksAccount.run(newId, oldId);
         stmts.updatePendingDriveSyncAccount.run(newId, oldId);
+        stmts.updateDriveOutboxAccount.run(newId, oldId);
       }
     } else {
       stmts.deleteConflictingPendingDriveSync.run(oldId, newId);
@@ -116,6 +136,7 @@ export function renameAccountInDb(oldId: string, newId: string): void {
       stmts.updateTransferLogsAccount.run(newId, oldId);
       stmts.updateShareLinksAccount.run(newId, oldId);
       stmts.updatePendingDriveSyncAccount.run(newId, oldId);
+      stmts.updateDriveOutboxAccount.run(newId, oldId);
     }
   }).immediate();
 }

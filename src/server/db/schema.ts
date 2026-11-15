@@ -109,6 +109,25 @@ export const pendingDriveSync = sqliteTable('pending_drive_sync', {
   index('pending_drive_sync_retry_idx').on(table.accountId, table.nextRetryAt),
 ]);
 
+export const driveOutbox = sqliteTable('drive_outbox', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  poolId: integer('pool_id'),
+  opType: text('op_type').notNull(),
+  driveFileId: text('drive_file_id'),
+  payloadJson: text('payload_json').notNull(),
+  status: text('status', { enum: ['pending', 'processing', 'failed', 'dead'] }).notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  nextRetryAt: integer('next_retry_at').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  index('drive_outbox_status_retry_idx').on(table.status, table.nextRetryAt, table.createdAt),
+  index('drive_outbox_account_status_idx').on(table.accountId, table.status),
+  index('drive_outbox_account_drive_op_idx').on(table.accountId, table.driveFileId, table.opType, table.status),
+]);
+
 export type Pool = typeof pools.$inferSelect;
 export type NewPool = typeof pools.$inferInsert;
 
@@ -126,5 +145,8 @@ export type NewTransferLog = typeof transferLogs.$inferInsert;
 
 export type PendingDriveSync = typeof pendingDriveSync.$inferSelect;
 export type NewPendingDriveSync = typeof pendingDriveSync.$inferInsert;
+
+export type DriveOutboxRecord = typeof driveOutbox.$inferSelect;
+export type NewDriveOutboxRecord = typeof driveOutbox.$inferInsert;
 
 
