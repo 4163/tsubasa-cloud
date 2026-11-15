@@ -5,6 +5,11 @@ import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js
 import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { useDialogLock } from '../utils/useBeforeUnload.js';
+import {
+  getDiscrepancyReportCache,
+  setDiscrepancyReportCache,
+  invalidateDiscrepancyReportCache,
+} from '../utils/queryCache.js';
 
 export interface ExternalDiscrepancyItem {
   driveFileId: string;
@@ -679,6 +684,8 @@ export function ExternalChangesDrawer({
   const [confirmingEject, setConfirmingEject] = useState(false);
 
   const activeScanRef = useRef<string | null>(null);
+  const scanSeqRef = useRef(0);
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   const currentAccount = accounts.find((a) => a.id === selectedAccount);
   const isBreached = currentAccount
@@ -697,37 +704,68 @@ export function ExternalChangesDrawer({
 
   const scanAccount = useCallback(async (accId: string, forceRefresh = false): Promise<DiscrepancyReport | null> => {
     if (!accId) return null;
+
+    scanAbortRef.current?.abort();
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    const scanSeq = ++scanSeqRef.current;
     activeScanRef.current = accId;
+
+    const cached = !forceRefresh ? getDiscrepancyReportCache(accId) : null;
+    if (cached) {
+      setReport(cached);
+    } else if (!forceRefresh) {
+      setReport(null);
+    } else {
+      setReport((prev) => (prev?.accountId === accId ? prev : null));
+    }
+
     setIsScanning(true);
-    setReport(null);
     setStatusNotice(null);
     setConfirmingEject(false);
 
+    const isCurrentScan = () =>
+      scanSeq === scanSeqRef.current &&
+      activeScanRef.current === accId &&
+      !controller.signal.aborted;
+
     try {
-      const res = await client.api.sync['external-changes'][':accountId'].$get({
-        param: { accountId: accId },
-        query: forceRefresh ? { refresh: '1' } : {},
-      });
-      if (activeScanRef.current !== accId) return null;
+      const res = await client.api.sync['external-changes'][':accountId'].$get(
+        {
+          param: { accountId: accId },
+          query: forceRefresh ? { refresh: '1' } : {},
+        },
+        { init: { signal: controller.signal } }
+      );
+      if (!isCurrentScan()) return null;
 
       if (res.ok) {
         const data = (await res.json()) as DiscrepancyReport;
-        if (activeScanRef.current === accId) {
+        if (isCurrentScan()) {
+          setDiscrepancyReportCache(accId, data);
           setReport(data);
           return data;
         }
       } else {
         const errData = await res.json().catch(() => ({}));
-        if (activeScanRef.current === accId) {
+        if (isCurrentScan()) {
           setStatusNotice(('error' in errData ? errData.error : null) || `Scan failed (${res.status})`);
         }
       }
     } catch (err) {
-      if (activeScanRef.current === accId) {
+      const isAbortError =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && err.name === 'AbortError');
+      if (isAbortError) return null;
+      if (isCurrentScan()) {
         setStatusNotice(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      if (activeScanRef.current === accId) {
+      if (scanSeq === scanSeqRef.current && activeScanRef.current === accId) {
+        if (scanAbortRef.current === controller) {
+          scanAbortRef.current = null;
+        }
         setIsScanning(false);
       }
     }
@@ -738,10 +776,19 @@ export function ExternalChangesDrawer({
     if (isOpen && selectedAccount) {
       setShowIndividualFiles(false);
       setConfirmingEject(false);
-      scanAccount(selectedAccount);
+      void scanAccount(selectedAccount);
+    } else {
+      scanAbortRef.current?.abort();
+      scanAbortRef.current = null;
+      activeScanRef.current = null;
+      scanSeqRef.current += 1;
+      setIsScanning(false);
     }
     return () => {
+      scanAbortRef.current?.abort();
+      scanAbortRef.current = null;
       activeScanRef.current = null;
+      scanSeqRef.current += 1;
     };
   }, [isOpen, selectedAccount, scanAccount]);
 
@@ -769,6 +816,7 @@ export function ExternalChangesDrawer({
               overCeiling: report.overCeiling.filter((i) => i.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -818,6 +866,7 @@ export function ExternalChangesDrawer({
               modified: [],
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         setConfirmingEject(false);
         await onResolved({
@@ -859,6 +908,7 @@ export function ExternalChangesDrawer({
               modified: report.modified.filter((i) => i.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -894,6 +944,7 @@ export function ExternalChangesDrawer({
               missingRemote: report.missingRemote.filter((i) => i.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -923,6 +974,7 @@ export function ExternalChangesDrawer({
         const data = await res.json();
         const count = ('results' in data && Array.isArray(data.results)) ? data.results.length : 0;
         setStatusNotice(`Rebalance complete. ${count} files migrated.`);
+        invalidateDiscrepancyReportCache(selectedAccount);
         const scannedReport = await scanAccount(selectedAccount, true);
         await onResolved({
           accountId: selectedAccount,
@@ -963,6 +1015,7 @@ export function ExternalChangesDrawer({
               conflicts: report.conflicts.filter((c) => c.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -1006,6 +1059,7 @@ export function ExternalChangesDrawer({
               conflicts: report.conflicts.filter((c) => !resolvedIds.has(c.driveFileId)),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -1087,7 +1141,7 @@ export function ExternalChangesDrawer({
               {...stylex.props(styles.select)}
               value={selectedAccount}
               onChange={(e) => setSelectedAccount(e.target.value)}
-              disabled={accounts.length === 0 || isScanning || isLocked}
+              disabled={accounts.length === 0 || isLocked}
             >
               {accounts.length === 0 ? (
                 <option value="" disabled>
@@ -1581,7 +1635,7 @@ export function ExternalChangesDrawer({
           )}
 
           {/* Scanning indicator */}
-          {isScanning && (
+          {isScanning && !report && (
             <div {...stylex.props(styles.scanningNotice)}>
               <div {...stylex.props(styles.scanningNoticeText)}>
                 Scanning Drive for external changes...
@@ -1603,7 +1657,7 @@ export function ExternalChangesDrawer({
           )}
 
           {/* Empty state for the selected account */}
-          {!isScanning && report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
+          {report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
             <div {...stylex.props(styles.emptyNotice)}>
               <IconCheck size={28} color={colors.success} />
               <div {...stylex.props(styles.emptyNoticeTitle)}>
