@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { db, buildDirectoryPrefixBounds } from '../db/index.js';
 import { accounts, files } from '../db/schema.js';
-import { eq, and, gte, lt, sql, not } from 'drizzle-orm';
+import { eq, and, gte, lt, sql, not, inArray } from 'drizzle-orm';
 import {
   calculateHeadroom,
   getAccountTransferStats,
@@ -52,6 +52,25 @@ export interface BatchPlacementPlan {
 export interface PlacementItem {
   virtualPath: string;
   sizeBytes: number;
+}
+
+export type UploadConflictAction = 'skip' | 'replace' | 'keep_both';
+
+export interface UploadPlacementRequestItem extends PlacementItem {
+  conflictAction?: UploadConflictAction;
+}
+
+export interface ExistingPoolFileSummary {
+  id: string;
+  virtualPath: string;
+  name: string;
+  sizeBytes: number;
+  accountId: string;
+  updatedAt: number;
+}
+
+export interface UploadBatchPlacementPlan extends BatchPlacementPlan {
+  conflicts: Record<string, ExistingPoolFileSummary>;
 }
 
 /**
@@ -549,6 +568,138 @@ export async function planBatchPlacement(
 }
 
 /**
+ * Looks up active (non-trashed) pool files matching the given virtual paths.
+ */
+export async function findExistingActiveFilesByPaths(
+  poolId: number,
+  virtualPaths: string[]
+): Promise<Map<string, ExistingPoolFileSummary>> {
+  const result = new Map<string, ExistingPoolFileSummary>();
+  if (virtualPaths.length === 0) {
+    return result;
+  }
+
+  const uniquePaths = Array.from(new Set(virtualPaths.map((p) => normalizeVirtualPath(p))));
+  const CHUNK_SIZE = 400;
+
+  for (let i = 0; i < uniquePaths.length; i += CHUNK_SIZE) {
+    const chunk = uniquePaths.slice(i, i + CHUNK_SIZE);
+    const rows = await db
+      .select({
+        id: files.id,
+        virtualPath: files.virtualPath,
+        name: files.name,
+        sizeBytes: files.sizeBytes,
+        accountId: files.accountId,
+        updatedAt: files.updatedAt,
+      })
+      .from(files)
+      .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false), inArray(files.virtualPath, chunk)));
+
+    for (const row of rows) {
+      const updatedMs =
+        row.updatedAt instanceof Date ? row.updatedAt.getTime() : Number(row.updatedAt) * 1000;
+      result.set(row.virtualPath, {
+        id: row.id,
+        virtualPath: row.virtualPath,
+        name: row.name,
+        sizeBytes: row.sizeBytes,
+        accountId: row.accountId,
+        updatedAt: Number.isFinite(updatedMs) ? updatedMs : 0,
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Detects path collisions against active pool files and plans placement
+ * for non-skipped items, crediting freed bytes on accounts being overwritten.
+ */
+export async function planUploadBatchWithConflicts(
+  items: UploadPlacementRequestItem[],
+  nowMs = Date.now(),
+  poolId = 1
+): Promise<UploadBatchPlacementPlan> {
+  const existingByPath = await findExistingActiveFilesByPaths(
+    poolId,
+    items.map((item) => item.virtualPath)
+  );
+
+  const conflicts: Record<string, ExistingPoolFileSummary> = {};
+  const itemsToPlace: PlacementItem[] = [];
+  const freedBytesByAccount = new Map<string, number>();
+
+  for (const item of items) {
+    const normPath = normalizeVirtualPath(item.virtualPath);
+    const existing = existingByPath.get(normPath);
+
+    if (existing) {
+      conflicts[normPath] = existing;
+      if (item.conflictAction === 'replace') {
+        freedBytesByAccount.set(
+          existing.accountId,
+          (freedBytesByAccount.get(existing.accountId) ?? 0) + existing.sizeBytes
+        );
+        itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
+      } else if (item.conflictAction === 'keep_both') {
+        itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
+      }
+      // Conflicts with action 'skip' or unset default to skip and are excluded from allocation.
+      continue;
+    }
+
+    itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
+  }
+
+  if (itemsToPlace.length === 0) {
+    return {
+      totalFiles: 0,
+      totalBytes: 0,
+      decisions: [],
+      accountAllocations: {},
+      conflicts,
+    };
+  }
+
+  const candidates = await getEligibleAccounts(poolId, nowMs);
+  if (freedBytesByAccount.size > 0) {
+    const accountQuotaRows = await db
+      .select({
+        id: accounts.id,
+        quotaLimitBytes: accounts.quotaLimitBytes,
+        quotaUsedBytes: accounts.quotaUsedBytes,
+      })
+      .from(accounts)
+      .where(
+        and(eq(accounts.poolId, poolId), inArray(accounts.id, Array.from(freedBytesByAccount.keys())))
+      );
+    const quotaById = new Map(accountQuotaRows.map((r) => [r.id, r]));
+
+    for (const cand of candidates) {
+      const freed = freedBytesByAccount.get(cand.id) ?? 0;
+      if (freed <= 0) continue;
+      const quota = quotaById.get(cand.id);
+      if (quota) {
+        cand.headroomBytes = calculateHeadroom(
+          quota.quotaLimitBytes,
+          Math.max(0, quota.quotaUsedBytes - freed)
+        );
+      } else {
+        cand.headroomBytes += freed;
+      }
+    }
+  }
+
+  const plan = await simulateBatchPlacement(itemsToPlace, candidates, poolId);
+  return {
+    ...plan,
+    conflicts,
+  };
+}
+
+/**
  * Validates whether a specific target account can accept a file of sizeBytes.
  * Enforces the strict 750 MB reserve ceiling and 24-hour rolling transfer window.
  */
@@ -556,7 +707,8 @@ export async function validateTargetPlacement(
   accountId: string,
   sizeBytes: number,
   nowMs = Date.now(),
-  expectedPoolId?: number
+  expectedPoolId?: number,
+  freedBytesOnAccount = 0
 ): Promise<CandidateAccount> {
   const account = await db.query.accounts.findFirst({
     where: eq(accounts.id, accountId),
@@ -582,7 +734,8 @@ export async function validateTargetPlacement(
     );
   }
 
-  const headroom = calculateHeadroom(account.quotaLimitBytes, account.quotaUsedBytes);
+  const effectiveUsedBytes = Math.max(0, account.quotaUsedBytes - Math.max(0, freedBytesOnAccount));
+  const headroom = calculateHeadroom(account.quotaLimitBytes, effectiveUsedBytes);
   if (headroom < sizeBytes) {
     throw new InsufficientStorageError(
       `Drive "${account.displayName || accountId}" has insufficient headroom (${(headroom / (1024 * 1024 * 1024)).toFixed(2)} GB available, needs ${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB to preserve 750 MB reserve ceiling)`

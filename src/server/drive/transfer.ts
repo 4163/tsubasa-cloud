@@ -22,6 +22,10 @@ import {
   invalidatePooledStorageOverview,
 } from '../storage/index.js';
 
+export type UploadConflictMode = 'reject' | 'replace' | 'keep_both';
+
+export class UploadConflictError extends Error {}
+
 export interface UploadOptions {
   virtualPath: string;
   sizeBytes: number;
@@ -29,6 +33,7 @@ export interface UploadOptions {
   hash?: string;
   targetAccountId?: string;
   poolId?: number;
+  conflictMode?: UploadConflictMode;
 }
 
 export interface ResumableSessionInfo {
@@ -179,6 +184,33 @@ export async function deleteDriveFileIgnoreNotFound(
 
 const SMALL_UPLOAD_MULTIPART_BYTES = 5 * 1024 * 1024;
 const VALID_RANGE_HEADER_RE = /^bytes=(?:\d+-\d*|\d*-\d+)(?:\s*,\s*(?:\d+-\d*|\d*-\d+))*$/i;
+const inFlightUploadPaths = new Set<string>();
+
+function allocateKeepBothPath(poolId: number, basePath: string): string {
+  const checkActiveStmt = sqlite.prepare(
+    'SELECT 1 FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0 LIMIT 1'
+  );
+
+  const isPathTaken = (candidatePath: string): boolean =>
+    inFlightUploadPaths.has(`${poolId}:${candidatePath}`) || Boolean(checkActiveStmt.get(poolId, candidatePath));
+
+  if (!isPathTaken(basePath)) {
+    return basePath;
+  }
+
+  const dir = path.posix.dirname(basePath);
+  const baseName = path.posix.basename(basePath);
+  const ext = path.posix.extname(baseName);
+  const stem = ext ? baseName.slice(0, -ext.length) : baseName;
+
+  for (let n = 1; ; n++) {
+    const candidateName = `${stem} (${n})${ext}`;
+    const candidatePath = dir === '/' || dir === '.' ? `/${candidateName}` : `${dir}/${candidateName}`;
+    if (!isPathTaken(candidatePath)) {
+      return candidatePath;
+    }
+  }
+}
 
 interface PreparedUploadTarget {
   fileId: string;
@@ -197,64 +229,128 @@ interface PreparedUploadTarget {
   };
 }
 
-async function prepareUploadTarget(options: UploadOptions): Promise<PreparedUploadTarget> {
-  const { sizeBytes, mimeType = 'application/octet-stream', hash } = options;
-  const virtualPath = normalizeVirtualPath(options.virtualPath);
+async function prepareUploadTarget(
+  options: UploadOptions,
+  reserveInFlight = false
+): Promise<PreparedUploadTarget> {
+  const { sizeBytes, mimeType = 'application/octet-stream', hash, conflictMode = 'reject' } = options;
+  const initialVirtualPath = normalizeVirtualPath(options.virtualPath);
 
   if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
     throw new FileExceedsCeilingError(sizeBytes);
   }
 
-  let accountId: string;
-  let poolId: number;
+  let poolId = options.poolId ?? 1;
   if (options.targetAccountId) {
-    await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), options.poolId);
-    accountId = options.targetAccountId;
-    const accRow = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
-    poolId = accRow?.poolId ?? options.poolId ?? 1;
-  } else {
-    const targetPoolId = options.poolId ?? 1;
-    const decision = await selectPlacementForFile(
-      { virtualPath, sizeBytes },
-      undefined,
-      Date.now(),
-      undefined,
-      targetPoolId
-    );
-    accountId = decision.accountId;
-    poolId = targetPoolId;
+    const accRow = await db.query.accounts.findFirst({ where: eq(accounts.id, options.targetAccountId) });
+    if (accRow) {
+      poolId = accRow.poolId;
+    }
   }
 
-  const rootFolderId = await getAccountRootFolderId(accountId);
-  const drive = getDriveClient(accountId);
-  const folderDir = path.posix.dirname(virtualPath);
-  const remoteParentFolderId = await ensureRemoteFolderHierarchy(drive, rootFolderId, folderDir);
+  const existingActive = sqlite
+    .prepare(
+      'SELECT id, account_id, drive_file_id, size_bytes FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0'
+    )
+    .get(poolId, initialVirtualPath) as
+    | { id: string; account_id: string; drive_file_id: string; size_bytes: number }
+    | undefined;
 
-  const accessToken = await getAccessToken(accountId);
-  const fileName = path.posix.basename(virtualPath);
-  const fileId = randomUUID();
+  let virtualPath = initialVirtualPath;
+  if (existingActive) {
+    if (conflictMode === 'reject') {
+      throw new UploadConflictError(
+        `A file named "${path.posix.basename(initialVirtualPath)}" already exists at ${initialVirtualPath}`
+      );
+    }
+    if (conflictMode === 'keep_both') {
+      virtualPath = allocateKeepBothPath(poolId, initialVirtualPath);
+    }
+  } else if (conflictMode === 'keep_both' && inFlightUploadPaths.has(`${poolId}:${initialVirtualPath}`)) {
+    virtualPath = allocateKeepBothPath(poolId, initialVirtualPath);
+  }
 
-  return {
-    fileId,
-    accountId,
-    poolId,
-    virtualPath,
-    fileName,
-    sizeBytes,
-    mimeType,
-    remoteParentFolderId,
-    accessToken,
-    metadata: {
-      name: fileName,
-      parents: [remoteParentFolderId],
-      appProperties: {
-        tsubasa_managed: 'true',
-        tsubasa_virtual_path: virtualPath,
-        tsubasa_virtual_id: fileId,
-        tsubasa_checksum: hash || '',
+  const inFlightKey = `${poolId}:${virtualPath}`;
+  if (reserveInFlight) {
+    inFlightUploadPaths.add(inFlightKey);
+  }
+
+  try {
+    let accountId: string;
+    if (options.targetAccountId) {
+      const freedBytes =
+        conflictMode === 'replace' && existingActive && existingActive.account_id === options.targetAccountId
+          ? existingActive.size_bytes
+          : 0;
+      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), options.poolId, freedBytes);
+      accountId = options.targetAccountId;
+    } else if (conflictMode === 'replace' && existingActive) {
+      try {
+        await validateTargetPlacement(
+          existingActive.account_id,
+          sizeBytes,
+          Date.now(),
+          poolId,
+          existingActive.size_bytes
+        );
+        accountId = existingActive.account_id;
+      } catch {
+        const decision = await selectPlacementForFile(
+          { virtualPath, sizeBytes },
+          undefined,
+          Date.now(),
+          undefined,
+          poolId
+        );
+        accountId = decision.accountId;
+      }
+    } else {
+      const decision = await selectPlacementForFile(
+        { virtualPath, sizeBytes },
+        undefined,
+        Date.now(),
+        undefined,
+        poolId
+      );
+      accountId = decision.accountId;
+    }
+
+    const rootFolderId = await getAccountRootFolderId(accountId);
+    const drive = getDriveClient(accountId);
+    const folderDir = path.posix.dirname(virtualPath);
+    const remoteParentFolderId = await ensureRemoteFolderHierarchy(drive, rootFolderId, folderDir);
+
+    const accessToken = await getAccessToken(accountId);
+    const fileName = path.posix.basename(virtualPath);
+    const fileId = randomUUID();
+
+    return {
+      fileId,
+      accountId,
+      poolId,
+      virtualPath,
+      fileName,
+      sizeBytes,
+      mimeType,
+      remoteParentFolderId,
+      accessToken,
+      metadata: {
+        name: fileName,
+        parents: [remoteParentFolderId],
+        appProperties: {
+          tsubasa_managed: 'true',
+          tsubasa_virtual_path: virtualPath,
+          tsubasa_virtual_id: fileId,
+          tsubasa_checksum: hash || '',
+        },
       },
-    },
-  };
+    };
+  } catch (err) {
+    if (reserveInFlight) {
+      inFlightUploadPaths.delete(inFlightKey);
+    }
+    throw err;
+  }
 }
 
 async function createResumableSession(
@@ -327,176 +423,193 @@ export async function executeStreamingUpload(
   bodyStream: ReadableStream | null,
   signal?: AbortSignal
 ): Promise<FileRecord> {
-  const target = await prepareUploadTarget(options);
+  const target = await prepareUploadTarget(options, true);
+  const inFlightKey = `${target.poolId}:${target.virtualPath}`;
 
-  let actualBytes = 0;
-  const countingStream = bodyStream
-    ? bodyStream.pipeThrough(
-        new TransformStream<Uint8Array, Uint8Array>({
-          transform(chunk, controller) {
-            actualBytes += chunk.byteLength;
-            if (actualBytes > MAX_SINGLE_FILE_BYTES) {
-              controller.error(new FileExceedsCeilingError(actualBytes));
-              return;
-            }
-            controller.enqueue(chunk);
+  try {
+    let actualBytes = 0;
+    const countingStream = bodyStream
+      ? bodyStream.pipeThrough(
+          new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, controller) {
+              actualBytes += chunk.byteLength;
+              if (actualBytes > MAX_SINGLE_FILE_BYTES) {
+                controller.error(new FileExceedsCeilingError(actualBytes));
+                return;
+              }
+              controller.enqueue(chunk);
+            },
+          })
+        )
+      : null;
+
+    let uploadRes: Response;
+    if (target.sizeBytes <= SMALL_UPLOAD_MULTIPART_BYTES) {
+      const payloadBuffer = await readStreamToBuffer(countingStream);
+      const boundary = `tsubasa_${randomUUID().replace(/-/g, '')}`;
+      const metadataPart =
+        `--${boundary}\r\n` +
+        `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+        `${JSON.stringify(target.metadata)}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Type: ${target.mimeType}\r\n\r\n`;
+      const closingPart = `\r\n--${boundary}--`;
+      const bodyBuffer = Buffer.concat([
+        Buffer.from(metadataPart, 'utf8'),
+        payloadBuffer,
+        Buffer.from(closingPart, 'utf8'),
+      ]);
+
+      uploadRes = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,md5Checksum',
+        {
+          method: 'POST',
+          signal,
+          headers: {
+            Authorization: `Bearer ${target.accessToken}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`,
+            'Content-Length': String(bodyBuffer.byteLength),
           },
-        })
-      )
-    : null;
-
-  let uploadRes: Response;
-  if (target.sizeBytes <= SMALL_UPLOAD_MULTIPART_BYTES) {
-    const payloadBuffer = await readStreamToBuffer(countingStream);
-    const boundary = `tsubasa_${randomUUID().replace(/-/g, '')}`;
-    const metadataPart =
-      `--${boundary}\r\n` +
-      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-      `${JSON.stringify(target.metadata)}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Type: ${target.mimeType}\r\n\r\n`;
-    const closingPart = `\r\n--${boundary}--`;
-    const bodyBuffer = Buffer.concat([
-      Buffer.from(metadataPart, 'utf8'),
-      payloadBuffer,
-      Buffer.from(closingPart, 'utf8'),
-    ]);
-
-    uploadRes = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,md5Checksum',
-      {
-        method: 'POST',
+          body: bodyBuffer,
+        }
+      );
+    } else {
+      const uploadLocation = await createResumableSession(target, signal);
+      const requestInit: RequestInit & { duplex?: string } = {
+        method: 'PUT',
         signal,
         headers: {
-          Authorization: `Bearer ${target.accessToken}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
-          'Content-Length': String(bodyBuffer.byteLength),
+          'Content-Length': String(target.sizeBytes),
+          'Content-Type': target.mimeType,
         },
-        body: bodyBuffer,
-      }
-    );
-  } else {
-    const uploadLocation = await createResumableSession(target, signal);
-    const requestInit: RequestInit & { duplex?: string } = {
-      method: 'PUT',
-      signal,
-      headers: {
-        'Content-Length': String(target.sizeBytes),
-        'Content-Type': target.mimeType,
-      },
-      duplex: 'half',
-      body: countingStream ?? Buffer.alloc(0),
-    };
+        duplex: 'half',
+        body: countingStream ?? Buffer.alloc(0),
+      };
 
-    uploadRes = await fetch(uploadLocation, requestInit);
-  }
-
-  if (uploadRes.status === 308) {
-    const errText = await uploadRes.text().catch(() => '');
-    throw new Error(`Google Drive resumable upload incomplete (308): ${errText}`);
-  }
-
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text();
-    throw new Error(`Google Drive stream upload failed: ${uploadRes.status} ${errText}`);
-  }
-
-  const driveData = (await uploadRes.json()) as {
-    id: string;
-    name: string;
-    size?: string;
-    md5Checksum?: string;
-  };
-
-  const finalBytes = bodyStream ? actualBytes : 0;
-  const resolvedHash = options.hash || driveData.md5Checksum || null;
-  const parentDir = path.posix.dirname(target.virtualPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(target.poolId, parentDir);
-
-  ensureLocalParentFolders(target.virtualPath, target.poolId);
-
-  sqlite.transaction(() => {
-    const oldRow = sqlite
-      .prepare('SELECT id, account_id, drive_file_id, size_bytes FROM files WHERE pool_id = ? AND virtual_path = ?')
-      .get(target.poolId, target.virtualPath) as
-      | { id: string; account_id: string; drive_file_id: string; size_bytes: number }
-      | undefined;
-
-    if (oldRow && oldRow.drive_file_id !== driveData.id) {
-      enqueueDriveOutbox([
-        {
-          accountId: oldRow.account_id,
-          poolId: target.poolId,
-          opType: 'file_delete',
-          driveFileId: oldRow.drive_file_id,
-          payload: { fileId: oldRow.id, driveFileId: oldRow.drive_file_id },
-        },
-      ]);
+      uploadRes = await fetch(uploadLocation, requestInit);
     }
 
-    sqlite
-      .prepare(
-        `INSERT INTO files (
-          id, pool_id, virtual_path, name, size_bytes, mime_type, hash,
-          account_id, drive_file_id, folder_id, is_trashed, trashed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, unixepoch(), unixepoch())
-        ON CONFLICT(pool_id, virtual_path) DO UPDATE SET
-          name = excluded.name,
-          size_bytes = excluded.size_bytes,
-          mime_type = excluded.mime_type,
-          hash = excluded.hash,
-          account_id = excluded.account_id,
-          drive_file_id = excluded.drive_file_id,
-          folder_id = excluded.folder_id,
-          is_trashed = 0,
-          trashed_at = NULL,
-          updated_at = unixepoch()`
-      )
-      .run(
-        target.fileId,
-        target.poolId,
-        target.virtualPath,
-        target.fileName,
-        finalBytes,
-        target.mimeType,
-        resolvedHash,
-        target.accountId,
-        driveData.id,
-        folderId
-      );
+    if (uploadRes.status === 308) {
+      const errText = await uploadRes.text().catch(() => '');
+      throw new Error(`Google Drive resumable upload incomplete (308): ${errText}`);
+    }
 
-    if (oldRow) {
-      if (oldRow.account_id === target.accountId) {
-        const netDelta = finalBytes - oldRow.size_bytes;
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      throw new Error(`Google Drive stream upload failed: ${uploadRes.status} ${errText}`);
+    }
+
+    const driveData = (await uploadRes.json()) as {
+      id: string;
+      name: string;
+      size?: string;
+      md5Checksum?: string;
+    };
+
+    const finalBytes = bodyStream ? actualBytes : 0;
+    const resolvedHash = options.hash || driveData.md5Checksum || null;
+    const parentDir = path.posix.dirname(target.virtualPath);
+    const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(target.poolId, parentDir);
+
+    ensureLocalParentFolders(target.virtualPath, target.poolId);
+
+    sqlite.transaction(() => {
+      const collidingTrashed = sqlite
+        .prepare('SELECT id FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
+        .get(target.poolId, target.virtualPath) as { id: string } | undefined;
+
+      if (collidingTrashed) {
         sqlite
-          .prepare('UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes + ?), updated_at = unixepoch() WHERE id = ?')
-          .run(netDelta, target.accountId);
+          .prepare('UPDATE files SET virtual_path = ?, updated_at = unixepoch() WHERE id = ?')
+          .run(`${target.virtualPath}.trashed-${Date.now()}-${collidingTrashed.id.slice(0, 6)}`, collidingTrashed.id);
+      }
+
+      const oldActiveRow = sqlite
+        .prepare(
+          'SELECT id, account_id, drive_file_id, size_bytes FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0'
+        )
+        .get(target.poolId, target.virtualPath) as
+        | { id: string; account_id: string; drive_file_id: string; size_bytes: number }
+        | undefined;
+
+      if (oldActiveRow && oldActiveRow.drive_file_id !== driveData.id) {
+        enqueueDriveOutbox([
+          {
+            accountId: oldActiveRow.account_id,
+            poolId: target.poolId,
+            opType: 'file_delete',
+            driveFileId: oldActiveRow.drive_file_id,
+            payload: { fileId: oldActiveRow.id, driveFileId: oldActiveRow.drive_file_id },
+          },
+        ]);
+      }
+
+      sqlite
+        .prepare(
+          `INSERT INTO files (
+            id, pool_id, virtual_path, name, size_bytes, mime_type, hash,
+            account_id, drive_file_id, folder_id, is_trashed, trashed_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, unixepoch(), unixepoch())
+          ON CONFLICT(pool_id, virtual_path) DO UPDATE SET
+            name = excluded.name,
+            size_bytes = excluded.size_bytes,
+            mime_type = excluded.mime_type,
+            hash = excluded.hash,
+            account_id = excluded.account_id,
+            drive_file_id = excluded.drive_file_id,
+            folder_id = excluded.folder_id,
+            is_trashed = 0,
+            trashed_at = NULL,
+            updated_at = unixepoch()`
+        )
+        .run(
+          target.fileId,
+          target.poolId,
+          target.virtualPath,
+          target.fileName,
+          finalBytes,
+          target.mimeType,
+          resolvedHash,
+          target.accountId,
+          driveData.id,
+          folderId
+        );
+
+      if (oldActiveRow) {
+        if (oldActiveRow.account_id === target.accountId) {
+          const netDelta = finalBytes - oldActiveRow.size_bytes;
+          sqlite
+            .prepare('UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes + ?), updated_at = unixepoch() WHERE id = ?')
+            .run(netDelta, target.accountId);
+        } else {
+          sqlite
+            .prepare('UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?')
+            .run(oldActiveRow.size_bytes, oldActiveRow.account_id);
+          sqlite
+            .prepare('UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?')
+            .run(finalBytes, target.accountId);
+        }
       } else {
-        sqlite
-          .prepare('UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?')
-          .run(oldRow.size_bytes, oldRow.account_id);
         sqlite
           .prepare('UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?')
           .run(finalBytes, target.accountId);
       }
-    } else {
-      sqlite
-        .prepare('UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?')
-        .run(finalBytes, target.accountId);
+    }).immediate();
+
+    await recordTransfer(target.accountId, 'upload', finalBytes);
+    invalidatePooledStorageOverview(target.poolId);
+    bumpPoolRevision(target.poolId);
+
+    const saved = await db.query.files.findFirst({
+      where: and(eq(files.poolId, target.poolId), eq(files.virtualPath, target.virtualPath)),
+    });
+    if (!saved) {
+      throw new Error(`Uploaded file missing from SQLite index: ${target.virtualPath}`);
     }
-  }).immediate();
-
-  await recordTransfer(target.accountId, 'upload', finalBytes);
-  invalidatePooledStorageOverview(target.poolId);
-  bumpPoolRevision(target.poolId);
-
-  const saved = await db.query.files.findFirst({
-    where: and(eq(files.poolId, target.poolId), eq(files.virtualPath, target.virtualPath)),
-  });
-  if (!saved) {
-    throw new Error(`Uploaded file missing from SQLite index: ${target.virtualPath}`);
+    return saved;
+  } finally {
+    inFlightUploadPaths.delete(inFlightKey);
   }
-  return saved;
 }
 
 export async function getStreamingDownload(

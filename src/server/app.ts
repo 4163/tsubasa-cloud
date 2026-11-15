@@ -14,6 +14,8 @@ import {
   syncAllAccounts,
   initiateResumableUpload,
   executeStreamingUpload,
+  UploadConflictError,
+  type UploadConflictMode,
   getStreamingDownload,
   trashFile,
   restoreFile,
@@ -57,7 +59,9 @@ import {
   getPooledStorageOverview,
   getAccountTransferStats,
   selectPlacementForFile,
-  planBatchPlacement,
+  planUploadBatchWithConflicts,
+  type UploadConflictAction,
+  type UploadPlacementRequestItem,
   MAX_SINGLE_FILE_BYTES,
   FileExceedsCeilingError,
   InsufficientStorageError,
@@ -672,22 +676,43 @@ const routes = app
       (
         value,
         c
-      ): { items: Array<{ virtualPath: string; sizeBytes: number }>; poolId?: number } | Response => {
+      ): { items: UploadPlacementRequestItem[]; poolId?: number } | Response => {
         const body = value as { items?: unknown; poolId?: unknown };
         if (!Array.isArray(body?.items)) {
           return c.json({ error: 'Invalid payload: items (array) required' }, 400);
         }
-        for (const item of body.items) {
-          if (typeof item?.virtualPath !== 'string' || typeof item?.sizeBytes !== 'number') {
+        const validatedItems: UploadPlacementRequestItem[] = [];
+        for (const rawItem of body.items) {
+          const item = rawItem as Record<string, unknown> | null;
+          if (!item || typeof item.virtualPath !== 'string' || typeof item.sizeBytes !== 'number') {
             return c.json({ error: 'Each item requires virtualPath (string) and sizeBytes (number)' }, 400);
           }
+          let conflictAction: UploadConflictAction | undefined;
+          if (item.conflictAction !== undefined) {
+            if (
+              item.conflictAction !== 'skip' &&
+              item.conflictAction !== 'replace' &&
+              item.conflictAction !== 'keep_both'
+            ) {
+              return c.json(
+                { error: 'Invalid conflictAction: must be skip, replace, or keep_both' },
+                400
+              );
+            }
+            conflictAction = item.conflictAction;
+          }
+          validatedItems.push({
+            virtualPath: item.virtualPath,
+            sizeBytes: item.sizeBytes,
+            conflictAction,
+          });
         }
         const parsedPool = parseOptionalPoolId(body?.poolId);
         if (!parsedPool.ok) {
           return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
         }
         return {
-          items: body.items as Array<{ virtualPath: string; sizeBytes: number }>,
+          items: validatedItems,
           poolId: parsedPool.poolId,
         };
       }
@@ -695,7 +720,7 @@ const routes = app
     async (c) => {
       const { items, poolId = 1 } = c.req.valid('json');
       try {
-        const plan = await planBatchPlacement(items, undefined, poolId);
+        const plan = await planUploadBatchWithConflicts(items, undefined, poolId);
         return c.json(plan);
       } catch (err) {
         if (err instanceof FileExceedsCeilingError) {
@@ -1315,6 +1340,7 @@ const routes = app
             hash?: string;
             targetAccountId?: string;
             poolId?: number;
+            conflictMode?: UploadConflictMode;
           }
         | Response => {
         const body = value as Record<string, unknown>;
@@ -1325,6 +1351,20 @@ const routes = app
         if (!parsedPool.ok) {
           return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
         }
+        let conflictMode: UploadConflictMode | undefined;
+        if (body?.conflictMode !== undefined) {
+          if (
+            body.conflictMode !== 'reject' &&
+            body.conflictMode !== 'replace' &&
+            body.conflictMode !== 'keep_both'
+          ) {
+            return c.json(
+              { error: 'Invalid conflictMode: must be reject, replace, or keep_both' },
+              400
+            );
+          }
+          conflictMode = body.conflictMode;
+        }
         return {
           virtualPath: body.virtualPath,
           sizeBytes: body.sizeBytes,
@@ -1332,6 +1372,7 @@ const routes = app
           hash: typeof body.hash === 'string' ? body.hash : undefined,
           targetAccountId: typeof body.targetAccountId === 'string' ? body.targetAccountId : undefined,
           poolId: parsedPool.poolId,
+          conflictMode,
         };
       }
     ),
@@ -1344,6 +1385,9 @@ const routes = app
         const session = await initiateResumableUpload(payload);
         return c.json(session);
       } catch (err) {
+        if (err instanceof UploadConflictError) {
+          return c.json({ error: err.message, code: 'ITEM_EXISTS' }, 409);
+        }
         if (err instanceof FileExceedsCeilingError) {
           return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
         }
@@ -1360,10 +1404,19 @@ const routes = app
     const mimeType = c.req.query('mimeType') || c.req.header('content-type') || 'application/octet-stream';
     const hash = c.req.query('hash') || c.req.header('x-file-hash');
     const targetAccountId = c.req.query('accountId') || c.req.header('x-account-id');
+    const rawConflictMode = c.req.query('conflictMode') || c.req.header('x-conflict-mode');
     const poolIdHeader = c.req.query('poolId') || c.req.header('x-pool-id');
     const poolId = parsePoolIdWithDefault(poolIdHeader, 1);
     if (poolId === null) {
       return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
+    }
+
+    let conflictMode: UploadConflictMode = 'reject';
+    if (rawConflictMode !== undefined && rawConflictMode !== '') {
+      if (rawConflictMode !== 'reject' && rawConflictMode !== 'replace' && rawConflictMode !== 'keep_both') {
+        return c.json({ error: 'Invalid conflictMode: must be reject, replace, or keep_both' }, 400);
+      }
+      conflictMode = rawConflictMode;
     }
 
     if (isSharePoolId(poolId)) {
@@ -1402,12 +1455,16 @@ const routes = app
           hash: hash || undefined,
           targetAccountId: targetAccountId || undefined,
           poolId,
+          conflictMode,
         },
         c.req.raw.body ?? null,
         c.req.raw.signal
       );
       return c.json(record);
     } catch (err) {
+      if (err instanceof UploadConflictError) {
+        return c.json({ error: err.message, code: 'ITEM_EXISTS' }, 409);
+      }
       if (err instanceof FileExceedsCeilingError) {
         return c.json({ error: err.message, code: 'EXCEEDS_CEILING' }, 400);
       }
