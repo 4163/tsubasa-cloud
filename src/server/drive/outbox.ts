@@ -254,6 +254,8 @@ let activeDrainPromise: Promise<void> | null = null;
 let drainRequestedDuringRun = false;
 
 const accountDrainWaiters = new Map<string, Array<() => void>>();
+const activeAccountDrains = new Map<string, Promise<void>>();
+const accountDrainRescanRequested = new Set<string>();
 const backgroundJobs = new Map<string, TrackedBackgroundJob>();
 
 function isDriveNotFoundError(err: unknown): boolean {
@@ -311,6 +313,7 @@ export function scheduleOutboxDrain(delayMs = 0): void {
   if (activeDrainPromise) {
     if (safeDelay === 0) {
       drainRequestedDuringRun = true;
+      return;
     }
     if (drainTimer && drainTimerAt <= targetAt) {
       return;
@@ -330,7 +333,9 @@ export function scheduleOutboxDrain(delayMs = 0): void {
   drainTimer = setTimeout(() => {
     drainTimer = null;
     drainTimerAt = Infinity;
-    void runDrainCycle();
+    void runDrainCycle().catch((err) => {
+      console.error('Drive outbox drain cycle failed:', err);
+    });
   }, safeDelay);
   drainTimer.unref?.();
 }
@@ -374,38 +379,56 @@ async function runDrainCycle(): Promise<void> {
 }
 
 async function drainAccountQueue(accountId: string): Promise<void> {
-  const stmts = getStmts();
-
-  while (true) {
-    const row = stmts.selectNextReadyForAccount.get(accountId, Date.now()) as OutboxRow | undefined;
-    if (!row) {
-      break;
-    }
-
-    stmts.markProcessing.run(row.id);
-
-    try {
-      await executeOutboxItem(row);
-      stmts.deleteById.run(row.id);
-    } catch (err) {
-      const nextAttempts = row.attempts + 1;
-      const errMsg = err instanceof Error ? err.message : String(err);
-
-      if (nextAttempts >= MAX_OUTBOX_ATTEMPTS) {
-        stmts.markDead.run(nextAttempts, errMsg, row.id);
-      } else {
-        const backoffMs = Math.min(
-          300_000,
-          2_000 * (2 ** (nextAttempts - 1)) * (0.8 + Math.random() * 0.4)
-        );
-        const nextRetryAt = Math.round(Date.now() + backoffMs);
-        stmts.markFailed.run(nextAttempts, nextRetryAt, errMsg, row.id);
-        scheduleOutboxDrain(Math.max(0, nextRetryAt - Date.now()));
-      }
-    }
+  const existing = activeAccountDrains.get(accountId);
+  if (existing) {
+    accountDrainRescanRequested.add(accountId);
+    return existing;
   }
 
-  notifyAccountDrainWaitersIfIdle(accountId);
+  const runPromise = (async () => {
+    const stmts = getStmts();
+
+    do {
+      accountDrainRescanRequested.delete(accountId);
+
+      while (true) {
+        const row = stmts.selectNextReadyForAccount.get(accountId, Date.now()) as OutboxRow | undefined;
+        if (!row) {
+          break;
+        }
+
+        stmts.markProcessing.run(row.id);
+
+        try {
+          await executeOutboxItem(row);
+          stmts.deleteById.run(row.id);
+        } catch (err) {
+          const nextAttempts = row.attempts + 1;
+          const errMsg = err instanceof Error ? err.message : String(err);
+
+          if (nextAttempts >= MAX_OUTBOX_ATTEMPTS) {
+            stmts.markDead.run(nextAttempts, errMsg, row.id);
+          } else {
+            const backoffMs = Math.min(
+              300_000,
+              2_000 * (2 ** (nextAttempts - 1)) * (0.8 + Math.random() * 0.4)
+            );
+            const nextRetryAt = Math.round(Date.now() + backoffMs);
+            stmts.markFailed.run(nextAttempts, nextRetryAt, errMsg, row.id);
+            scheduleOutboxDrain(Math.max(0, nextRetryAt - Date.now()));
+          }
+        }
+      }
+    } while (accountDrainRescanRequested.has(accountId));
+
+    notifyAccountDrainWaitersIfIdle(accountId);
+  })().finally(() => {
+    activeAccountDrains.delete(accountId);
+    accountDrainRescanRequested.delete(accountId);
+  });
+
+  activeAccountDrains.set(accountId, runPromise);
+  return runPromise;
 }
 
 async function deleteDriveFileIgnoreNotFound(
@@ -735,7 +758,7 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
   }
 }
 
-export async function drainOutboxForAccount(accountId: string, timeoutMs = 15_000): Promise<void> {
+export async function drainOutboxForAccount(accountId: string, timeoutMs = 60_000): Promise<void> {
   const stmts = getStmts();
   const initialRow = stmts.countActiveForAccount.get(accountId) as { cnt: number } | undefined;
   if ((initialRow?.cnt ?? 0) === 0) {
@@ -743,7 +766,9 @@ export async function drainOutboxForAccount(accountId: string, timeoutMs = 15_00
   }
 
   stmts.flushFailedForAccount.run(accountId);
-  scheduleOutboxDrain(0);
+  void drainAccountQueue(accountId).catch((err) => {
+    console.error(`Drive outbox drain failed for account ${accountId}:`, err);
+  });
 
   await new Promise<void>((resolve, reject) => {
     const checkRow = stmts.countActiveForAccount.get(accountId) as { cnt: number } | undefined;
@@ -872,7 +897,8 @@ export function retryOutboxEntries(accountId?: string): { retriedCount: number }
   const stmts = getStmts();
   const info = accountId ? stmts.retryByAccount.run(accountId) : stmts.retryAll.run();
   const retriedCount = Number(info.changes ?? 0);
-  if (retriedCount > 0) {
+  const readyRows = stmts.selectReadyAccounts.all(Date.now()) as Array<{ account_id: string }>;
+  if (retriedCount > 0 || readyRows.length > 0) {
     scheduleOutboxDrain(0);
   }
   return { retriedCount };
