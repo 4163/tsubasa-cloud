@@ -354,7 +354,7 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
       quotaUsedBytes: accounts.quotaUsedBytes,
       syncState: accounts.syncState,
       isDisabled: accounts.isDisabled,
-      hasFiles: sql<number>`EXISTS (SELECT 1 FROM ${files} WHERE ${files.accountId} = ${accounts.id})`,
+      hasFiles: sql<number>`EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`,
     })
     .from(accounts)
     .where(eq(accounts.poolId, poolId))
@@ -507,7 +507,7 @@ export async function getEmptyAccountsAcrossAllPools(
     })
     .from(accounts)
     .innerJoin(pools, eq(accounts.poolId, pools.id))
-    .where(sql`NOT EXISTS (SELECT 1 FROM ${files} WHERE ${files.accountId} = ${accounts.id})`)
+    .where(sql`NOT EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`)
     .orderBy(asc(pools.isSharePool), asc(pools.id), asc(accounts.email));
 
   const transferStatsByAccount = await getTransferStatsByAccountMap(
