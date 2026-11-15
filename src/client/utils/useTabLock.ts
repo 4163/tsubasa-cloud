@@ -9,6 +9,12 @@ export interface TabLockState {
   ownerKind: TabOwnerKind;
 }
 
+export interface AuthCompletedPayload {
+  account?: string;
+  poolId?: number;
+  conflicts?: number;
+}
+
 const LOCK_NAME = 'tsubasa-active-tab-lock';
 const CHANNEL_NAME = 'tsubasa-instance-channel';
 const STORAGE_LEASE_KEY = 'tsubasa-active-instance-lock';
@@ -37,6 +43,8 @@ interface TabLockSingleton {
   state: TabLockState;
   started: boolean;
   listeners: Set<(next: TabLockState) => void>;
+  authListeners: Set<(payload: AuthCompletedPayload) => void>;
+  teardown?: () => void;
 }
 
 function createInstanceId(): string {
@@ -130,6 +138,7 @@ function getSingleton(): TabLockSingleton {
       state: { status: 'checking', ownerKind: 'browser' },
       started: false,
       listeners: new Set(),
+      authListeners: new Set(),
     };
     host[SINGLETON_KEY] = singleton;
   }
@@ -207,6 +216,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
   let serverHeartbeatTimer: number | null = null;
   let probeTimer: number | null = null;
   let serverClaimAttempted = false;
+  let heartbeatInFlight = false;
   let isUnloading = false;
 
   const closeChannel = () => {
@@ -254,12 +264,25 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
       const channel = new BroadcastChannel(CHANNEL_NAME);
       channel.onmessage = (event: MessageEvent<InstanceMessage>) => {
         const msg = event.data;
-        if (!msg || msg.type !== 'PING') return;
-        channel.postMessage({
-          type: 'PONG',
-          instanceId,
-          ownerKind: 'browser',
-        } satisfies InstanceMessage);
+        if (!msg) return;
+        if (msg.type === 'PING') {
+          channel.postMessage({
+            type: 'PONG',
+            instanceId,
+            ownerKind: 'browser',
+          } satisfies InstanceMessage);
+          return;
+        }
+        if (msg.type === 'AUTH_COMPLETED') {
+          const payload: AuthCompletedPayload = {
+            account: msg.account,
+            poolId: msg.poolId,
+            conflicts: msg.conflicts,
+          };
+          for (const listener of singleton.authListeners) {
+            listener(payload);
+          }
+        }
       };
       activeChannel = channel;
     } catch {
@@ -267,25 +290,32 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
     }
   };
 
+  const sendServerHeartbeat = async () => {
+    if (isUnloading || heartbeatInFlight || singleton.state.status !== 'active') return;
+    heartbeatInFlight = true;
+    try {
+      const res = await client.api.instance.heartbeat.$post({
+        json: {
+          instanceId,
+          ownerKind: 'browser',
+        },
+      });
+      if (res.status === 409) {
+        const data = (await res.json().catch(() => null)) as { ownerKind?: unknown } | null;
+        clearSessionInstanceId(instanceId);
+        transitionToBlocked(parseOwnerKind(data?.ownerKind));
+      }
+    } catch {
+      // Keep the active UI mounted on transient server restarts; next heartbeat retries.
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
+
   const startServerHeartbeat = () => {
     if (serverHeartbeatTimer !== null) return;
-    serverHeartbeatTimer = window.setInterval(async () => {
-      if (isUnloading) return;
-      try {
-        const res = await client.api.instance.heartbeat.$post({
-          json: {
-            instanceId,
-            ownerKind: 'browser',
-          },
-        });
-        if (res.status === 409) {
-          const data = (await res.json().catch(() => null)) as { ownerKind?: unknown } | null;
-          clearSessionInstanceId(instanceId);
-          transitionToBlocked(parseOwnerKind(data?.ownerKind));
-        }
-      } catch {
-        // Keep the active UI mounted on transient server restarts; next heartbeat retries.
-      }
+    serverHeartbeatTimer = window.setInterval(() => {
+      void sendServerHeartbeat();
     }, LEASE_HEARTBEAT_MS);
   };
 
@@ -332,6 +362,84 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
     publishState(singleton, { status: 'active', ownerKind: 'browser' });
   };
 
+  const acquireLockAndLease = () => {
+    const hasWebLocks =
+      typeof navigator !== 'undefined' &&
+      typeof navigator.locks?.request === 'function';
+
+    if (hasWebLocks) {
+      void navigator.locks
+        .request(LOCK_NAME, { ifAvailable: true }, (lock) => {
+          if (!lock) {
+            transitionToBlocked('browser');
+            return;
+          }
+          const lockPromise = new Promise<void>((resolve) => {
+            releaseLock = resolve;
+          });
+          openActiveChannel();
+          publishState(singleton, { status: 'active', ownerKind: 'browser' });
+          void activateWithServerLease();
+          return lockPromise;
+        })
+        .catch(() => {
+          transitionToBlocked('browser');
+        });
+      return;
+    }
+
+    const existingLease = readStoredLease();
+    const hasFreshLease =
+      existingLease !== null &&
+      existingLease.instanceId !== instanceId &&
+      Date.now() - existingLease.updatedAt < LEASE_TTL_MS;
+
+    const activateFallback = () => {
+      writeStoredLease(instanceId);
+      heartbeatTimer = window.setInterval(() => {
+        writeStoredLease(instanceId);
+      }, LEASE_HEARTBEAT_MS);
+      openActiveChannel();
+      publishState(singleton, { status: 'active', ownerKind: 'browser' });
+      void activateWithServerLease();
+    };
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        const probeChannel = new BroadcastChannel(CHANNEL_NAME);
+        activeChannel = probeChannel;
+
+        probeChannel.onmessage = (event: MessageEvent<InstanceMessage>) => {
+          const msg = event.data;
+          if (!msg || msg.type !== 'PONG') return;
+          transitionToBlocked(parseOwnerKind(msg.ownerKind));
+        };
+
+        probeChannel.postMessage({ type: 'PING', instanceId } satisfies InstanceMessage);
+
+        probeTimer = window.setTimeout(() => {
+          probeTimer = null;
+          if (hasFreshLease) {
+            transitionToBlocked(existingLease.ownerKind);
+            return;
+          }
+          closeChannel();
+          activateFallback();
+        }, PROBE_TIMEOUT_MS);
+      } catch {
+        if (hasFreshLease) {
+          transitionToBlocked(existingLease.ownerKind);
+        } else {
+          activateFallback();
+        }
+      }
+    } else if (hasFreshLease) {
+      transitionToBlocked(existingLease.ownerKind);
+    } else {
+      activateFallback();
+    }
+  };
+
   // Release the tab and server leases only when the page actually unloads, never on StrictMode cleanup.
   const handlePageHide = () => {
     isUnloading = true;
@@ -343,79 +451,52 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
     }
   };
 
-  window.addEventListener('pagehide', handlePageHide);
-
-  const hasWebLocks =
-    typeof navigator !== 'undefined' &&
-    typeof navigator.locks?.request === 'function';
-
-  if (hasWebLocks) {
-    void navigator.locks
-      .request(LOCK_NAME, { ifAvailable: true }, (lock) => {
-        if (!lock) {
-          transitionToBlocked('browser');
-          return;
-        }
-        const lockPromise = new Promise<void>((resolve) => {
-          releaseLock = resolve;
-        });
-        void activateWithServerLease();
-        return lockPromise;
-      })
-      .catch(() => {
-        transitionToBlocked('browser');
-      });
-    return;
-  }
-
-  const existingLease = readStoredLease();
-  const hasFreshLease =
-    existingLease !== null &&
-    existingLease.instanceId !== instanceId &&
-    Date.now() - existingLease.updatedAt < LEASE_TTL_MS;
-
-  const activateFallback = () => {
-    writeStoredLease(instanceId);
-    heartbeatTimer = window.setInterval(() => {
-      writeStoredLease(instanceId);
-    }, LEASE_HEARTBEAT_MS);
-    void activateWithServerLease();
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible' && !isUnloading && singleton.state.status === 'active') {
+      void sendServerHeartbeat();
+    }
   };
 
-  if (typeof BroadcastChannel !== 'undefined') {
-    try {
-      const probeChannel = new BroadcastChannel(CHANNEL_NAME);
-      activeChannel = probeChannel;
-
-      probeChannel.onmessage = (event: MessageEvent<InstanceMessage>) => {
-        const msg = event.data;
-        if (!msg || msg.type !== 'PONG') return;
-        transitionToBlocked(parseOwnerKind(msg.ownerKind));
-      };
-
-      probeChannel.postMessage({ type: 'PING', instanceId } satisfies InstanceMessage);
-
-      probeTimer = window.setTimeout(() => {
-        probeTimer = null;
-        if (hasFreshLease) {
-          transitionToBlocked(existingLease.ownerKind);
-          return;
-        }
-        closeChannel();
-        activateFallback();
-      }, PROBE_TIMEOUT_MS);
-    } catch {
-      if (hasFreshLease) {
-        transitionToBlocked(existingLease.ownerKind);
-      } else {
-        activateFallback();
-      }
+  const handlePageShow = (event: PageTransitionEvent) => {
+    if (!event.persisted) return;
+    isUnloading = false;
+    heartbeatInFlight = false;
+    if (singleton.state.status !== 'blocked' && (releaseLock !== null || serverHeartbeatTimer !== null)) {
+      void sendServerHeartbeat();
+      return;
     }
-  } else if (hasFreshLease) {
-    transitionToBlocked(existingLease.ownerKind);
-  } else {
-    activateFallback();
-  }
+    acquireLockAndLease();
+  };
+
+  window.addEventListener('pagehide', handlePageHide);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('pageshow', handlePageShow);
+
+  singleton.teardown = () => {
+    window.removeEventListener('pagehide', handlePageHide);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.removeEventListener('pageshow', handlePageShow);
+    clearTimers();
+    releaseSameBrowserLock();
+    if (serverClaimAttempted) {
+      serverClaimAttempted = false;
+      sendServerRelease(instanceId);
+    }
+    singleton.started = false;
+    singleton.teardown = undefined;
+  };
+
+  acquireLockAndLease();
+}
+
+export function subscribeAuthCompleted(
+  listener: (payload: AuthCompletedPayload) => void
+): () => void {
+  const singleton = getSingleton();
+  singleton.authListeners.add(listener);
+  return () => {
+    singleton.authListeners.delete(listener);
+  };
 }
 
 /**
