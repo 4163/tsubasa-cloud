@@ -251,6 +251,10 @@ export function NewFolderModal({
     if (isSubmitting) return;
 
     const finalName = folderName.trim() || 'New folder';
+    if (finalName.includes('/') || finalName.includes('\\')) {
+      setError('Folder name cannot contain slashes');
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);

@@ -41,6 +41,8 @@ import {
   renameItem,
   trashFolder,
   ensureLocalFolderPath,
+  ItemConflictError,
+  ItemNotFoundError,
   normalizeVirtualPath,
   AccountPoolLockedError,
   switchAccountPool,
@@ -1104,11 +1106,36 @@ const routes = app
       if (isSharePoolId(poolId)) {
         return c.json(sharePoolReadOnlyError('Creating folders directly in Share Pool is disabled'), 403);
       }
+      const trimmedName = name.trim();
+      if (!trimmedName || trimmedName.includes('/') || trimmedName.includes('\\')) {
+        return c.json({ error: 'Invalid folder name: cannot be empty or contain slashes' }, 400);
+      }
       const normalizedPath = normalizeVirtualPath(virtualPath);
+      if (normalizedPath === '/') {
+        return c.json({ error: 'Invalid folder path' }, 400);
+      }
       try {
+        const existing = await db.query.folders.findFirst({
+          where: and(
+            eq(folders.poolId, poolId),
+            eq(folders.virtualPath, normalizedPath)
+          ),
+        });
+        if (existing) {
+          return c.json(
+            {
+              error: `A folder named "${trimmedName}" already exists in this directory`,
+              code: 'FOLDER_EXISTS',
+            },
+            409
+          );
+        }
         ensureLocalFolderPath(normalizedPath, poolId);
         bumpPoolRevision(poolId);
-        return c.json({ id: formatFolderId(poolId, normalizedPath), poolId, virtualPath: normalizedPath, name }, 201);
+        return c.json(
+          { id: formatFolderId(poolId, normalizedPath), poolId, virtualPath: normalizedPath, name: trimmedName },
+          201
+        );
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
@@ -1263,6 +1290,12 @@ const routes = app
         const result = await renameItem(kind, id, name, poolId);
         return c.json(result);
       } catch (err) {
+        if (err instanceof ItemConflictError) {
+          return c.json({ error: err.message, code: 'ITEM_EXISTS' }, 409);
+        }
+        if (err instanceof ItemNotFoundError) {
+          return c.json({ error: err.message, code: 'NOT_FOUND' }, 404);
+        }
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
     }

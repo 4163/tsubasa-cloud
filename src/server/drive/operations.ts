@@ -52,6 +52,9 @@ interface DescendantFolderRow {
 
 type SqliteStmt = ReturnType<typeof sqlite.prepare<any[], any>>;
 
+export class ItemConflictError extends Error {}
+export class ItemNotFoundError extends Error {}
+
 let cachedStmts: {
   selectPoolAccountsWithRoot: SqliteStmt;
   selectPoolAccountsForCopy: SqliteStmt;
@@ -65,9 +68,6 @@ let cachedStmts: {
   updateFolderRename: SqliteStmt;
   updateDescendantFilePath: SqliteStmt;
   renameSingleFile: SqliteStmt;
-  hasFilesInFolder: SqliteStmt;
-  hasSubfoldersInFolder: SqliteStmt;
-  deleteFolderById: SqliteStmt;
   trashFilesInFolder: SqliteStmt;
   deleteFoldersInTree: SqliteStmt;
   deleteShareLinksForFolder: SqliteStmt;
@@ -122,13 +122,6 @@ function getStmts() {
     renameSingleFile: sqlite.prepare(
       'UPDATE files SET name = ?, virtual_path = ?, folder_id = ?, updated_at = unixepoch() WHERE id = ?'
     ),
-    hasFilesInFolder: sqlite.prepare(
-      'SELECT 1 FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?) LIMIT 1'
-    ),
-    hasSubfoldersInFolder: sqlite.prepare(
-      'SELECT 1 FROM folders WHERE pool_id = ? AND virtual_path >= ? AND virtual_path < ? AND id != ? LIMIT 1'
-    ),
-    deleteFolderById: sqlite.prepare('DELETE FROM folders WHERE id = ?'),
     trashFilesInFolder: sqlite.prepare(
       'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
     ),
@@ -1058,7 +1051,7 @@ export async function renameItem(
     });
 
     if (!file) {
-      throw new Error(`File not found: ${idOrPath}`);
+      throw new ItemNotFoundError(`File not found: ${idOrPath}`);
     }
 
     const parentDir = path.posix.dirname(file.virtualPath);
@@ -1077,7 +1070,7 @@ export async function renameItem(
     });
 
     if (existing && existing.id !== file.id) {
-      throw new Error(`A file named "${newName}" already exists in this folder`);
+      throw new ItemConflictError(`A file named "${newName}" already exists in this folder`);
     }
 
     const validParentId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
@@ -1116,7 +1109,7 @@ export async function renameItem(
   });
 
   if (!folder) {
-    throw new Error(`Folder not found: ${idOrPath}`);
+    throw new ItemNotFoundError(`Folder not found: ${idOrPath}`);
   }
 
   const oldFolderPath = folder.virtualPath;
@@ -1134,28 +1127,8 @@ export async function renameItem(
     ),
   });
 
-  let emptyExistingIdToDelete: string | null = null;
   if (existing && existing.id !== folder.id) {
-    const newFolderBounds = buildDirectoryPrefixBounds(newFolderPath);
-    const targetFolderId = formatFolderId(poolId, newFolderPath);
-    const hasFiles = stmts.hasFilesInFolder.get(
-      poolId,
-      newFolderBounds.lower,
-      newFolderBounds.upper,
-      targetFolderId
-    );
-    const hasSubfolders = stmts.hasSubfoldersInFolder.get(
-      poolId,
-      newFolderBounds.lower,
-      newFolderBounds.upper,
-      targetFolderId
-    );
-
-    if (!hasFiles && !hasSubfolders) {
-      emptyExistingIdToDelete = existing.id;
-    } else {
-      throw new Error(`A folder named "${newName}" already exists in this directory`);
-    }
+    throw new ItemConflictError(`A folder named "${newName}" already exists in this directory`);
   }
 
   const oldFolderBounds = buildDirectoryPrefixBounds(oldFolderPath);
@@ -1174,10 +1147,6 @@ export async function renameItem(
 
   sqlite.transaction(() => {
     sqlite.pragma('defer_foreign_keys = ON');
-
-    if (emptyExistingIdToDelete) {
-      stmts.deleteFolderById.run(emptyExistingIdToDelete);
-    }
 
     const parentId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
     const newFolderId = formatFolderId(poolId, newFolderPath);

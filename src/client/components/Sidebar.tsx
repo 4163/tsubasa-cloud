@@ -80,7 +80,6 @@ interface SidebarProps {
   onOpenMovePool?: (account: AccountItem) => void;
   currentNav: 'files' | 'trash';
   onSelectNav: (nav: 'files' | 'trash') => void;
-  onAuthorizeAccount: (id: string) => void;
   onOpenExternalChanges?: (id: string) => void;
   onImportOAuth?: (file: File) => void;
   onRefreshStorage?: () => void;
@@ -1065,7 +1064,6 @@ export function Sidebar({
   onOpenMovePool,
   currentNav,
   onSelectNav,
-  onAuthorizeAccount,
   onOpenExternalChanges,
   onImportOAuth,
   onRefreshStorage,
@@ -1194,7 +1192,11 @@ export function Sidebar({
             setAuthUrls((prev) => ({ ...prev, [accountId]: data.url }));
           }
         }
-      } catch {}
+      } catch (err) {
+        if (import.meta.env.DEV) {
+          console.error('[tsubasa] fetch auth URL failed:', err);
+        }
+      }
     }
 
     if (url) {
@@ -1203,7 +1205,6 @@ export function Sidebar({
       setTimeout(() => {
         setCopiedId((prev) => (prev === accountId ? null : prev));
       }, 3000);
-      onAuthorizeAccount?.(accountId);
     }
   };
 
