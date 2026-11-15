@@ -507,6 +507,7 @@ export function App() {
   // Drawers and modals state
   const [stagedFiles, setStagedFiles] = useState<Array<File | StagedItem>>([]);
   const [stagedEmptyFolders, setStagedEmptyFolders] = useState<string[]>([]);
+  const [uploadTargetPath, setUploadTargetPath] = useState<string | undefined>(undefined);
   const [isUploadDrawerOpen, setIsUploadDrawerOpen] = useState<boolean>(false);
 
   const [isExternalChangesOpen, setIsExternalChangesOpen] = useState<boolean>(false);
@@ -1356,6 +1357,7 @@ export function App() {
       if (list.length > 0) {
         setStagedFiles(list);
         setStagedEmptyFolders([]);
+        setUploadTargetPath(undefined);
         setIsUploadDrawerOpen(true);
       }
     },
@@ -1363,11 +1365,12 @@ export function App() {
   );
 
   const handleStageDroppedUpload = useCallback(
-    (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }) => {
+    (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[]; basePath?: string }) => {
       if (isSharePoolActive) return;
       if (dropped.files.length > 0 || dropped.emptyFolders.length > 0) {
         setStagedFiles(dropped.files);
         setStagedEmptyFolders(dropped.emptyFolders);
+        setUploadTargetPath(dropped.basePath);
         setIsUploadDrawerOpen(true);
       }
     },
@@ -1381,6 +1384,7 @@ export function App() {
       if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
         setStagedFiles(extracted.files);
         setStagedEmptyFolders(extracted.emptyFolders);
+        setUploadTargetPath(extracted.basePath);
         setIsUploadDrawerOpen(true);
       }
     },
@@ -1407,6 +1411,7 @@ export function App() {
         if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
           setStagedFiles(extracted.files);
           setStagedEmptyFolders(extracted.emptyFolders);
+          setUploadTargetPath(extracted.basePath);
           setIsUploadDrawerOpen(true);
         }
       }
@@ -3085,6 +3090,7 @@ export function App() {
     if (droppedFiles.length > 0) {
       setStagedFiles(droppedFiles);
       setStagedEmptyFolders([]);
+      setUploadTargetPath(undefined);
       setIsUploadDrawerOpen(true);
     }
   }, []);
@@ -3272,10 +3278,11 @@ export function App() {
               setIsUploadDrawerOpen(false);
               setStagedFiles([]);
               setStagedEmptyFolders([]);
+              setUploadTargetPath(undefined);
             }}
             stagedFiles={stagedFiles}
             stagedEmptyFolders={stagedEmptyFolders}
-            currentPath={currentPath}
+            currentPath={uploadTargetPath ?? currentPath}
             accounts={accountItems}
             poolId={activePoolId}
             onUploadComplete={async () => {
@@ -3284,6 +3291,7 @@ export function App() {
             onClearFiles={() => {
               setStagedFiles([]);
               setStagedEmptyFolders([]);
+              setUploadTargetPath(undefined);
             }}
           />
         )}

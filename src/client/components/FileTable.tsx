@@ -59,7 +59,11 @@ interface FileTableProps {
   onRestore?: (file: ClientFileRecord) => void;
   onPermanentDelete?: (file: ClientFileRecord) => void;
   onDropFiles?: (files: File[]) => void;
-  onStageDroppedUpload?: (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }) => void;
+  onStageDroppedUpload?: (dropped: {
+    files: Array<{ file: File; virtualPath: string }>;
+    emptyFolders: string[];
+    basePath?: string;
+  }) => void;
   onMoveItems?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => Promise<void> | void;
   clipboard?: { mode: 'cut' | 'copy'; items: Array<{ kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }> } | null;
   accounts?: AccountItem[];
@@ -791,8 +795,9 @@ function isExternalFileDrag(e: React.DragEvent | DragEvent): boolean {
 export async function extractDataTransferEntries(
   dataTransfer: DataTransfer,
   basePath: string
-): Promise<{ files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }> {
-  const cleanBase = basePath === '/' ? '' : basePath;
+): Promise<{ files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[]; basePath: string }> {
+  const cleanBase = basePath === '/' ? '' : basePath.replace(/\/+$/, '');
+  const normalizedBase = cleanBase === '' ? '/' : cleanBase.startsWith('/') ? cleanBase : `/${cleanBase}`;
   const resultFiles: Array<{ file: File; virtualPath: string }> = [];
   const resultEmptyFolders: string[] = [];
 
@@ -822,7 +827,7 @@ export async function extractDataTransferEntries(
         virtualPath: `${cleanBase}/${rel}`.replace(/\/+/g, '/'),
       });
     }
-    return { files: resultFiles, emptyFolders: resultEmptyFolders };
+    return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
   }
 
   // Fallback if entries failed to extract from items
@@ -834,7 +839,7 @@ export async function extractDataTransferEntries(
         virtualPath: `${cleanBase}/${rel}`.replace(/\/+/g, '/'),
       });
     }
-    return { files: resultFiles, emptyFolders: resultEmptyFolders };
+    return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
   }
 
   async function traverse(entry: any, currentFolder: string) {
@@ -900,7 +905,7 @@ export async function extractDataTransferEntries(
     await traverse(entry, cleanBase);
   }
 
-  return { files: resultFiles, emptyFolders: resultEmptyFolders };
+  return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
 }
 
 const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
