@@ -5,6 +5,7 @@ import { authPool } from './auth.js';
 import { hydrateAccount, isSharePoolId } from './client.js';
 import { runColdReconciliation } from './sync.js';
 import { runIncrementalSync } from './delta.js';
+import { startOutboxWorker } from './outbox.js';
 
 export * from './auth.js';
 export * from './client.js';
@@ -15,6 +16,7 @@ export * from './transfer.js';
 export * from './detector.js';
 export * from './rebalance.js';
 export * from './operations.js';
+export * from './outbox.js';
 
 const SYNC_ACCOUNT_CONCURRENCY = 5;
 const STARTUP_HYDRATION_CONCURRENCY = 4;
@@ -121,6 +123,7 @@ async function runBoundedWorkers<T>(
 export async function hydratePool1Startup(
   concurrency = STARTUP_HYDRATION_CONCURRENCY
 ): Promise<void> {
+  startOutboxWorker();
   authPool.scan();
   authPool.startWatching();
   const allRecords = authPool.getAll();

@@ -2,7 +2,8 @@ import { google, type drive_v3 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import { authPool } from './auth.js';
 import { getCachedVirtualPathByDriveId, setCachedRemoteFolder } from './mirror.js';
-import { db, sqlite } from '../db/index.js';
+import { drainOutboxForAccount } from './outbox.js';
+import { db, sqlite, bumpPoolRevision } from '../db/index.js';
 import { accounts } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 
@@ -888,6 +889,8 @@ export async function switchAccountPool(
       resolvedRootFolderId = null;
     }
 
+    await drainOutboxForAccount(accountId);
+
     const emptyCheck = await checkRemoteRootFolderEmpty(drive, resolvedRootFolderId);
     if (!emptyCheck.empty) {
       throw new AccountPoolLockedError(
@@ -918,6 +921,11 @@ export async function switchAccountPool(
     .set({ poolId: targetPoolId, rootFolderId: resolvedRootFolderId, updatedAt: new Date() })
     .where(eq(accounts.id, accountId));
   sqlite.prepare('DELETE FROM share_links WHERE account_id = ?').run(accountId);
+
+  if (accountRecord.poolId !== targetPoolId) {
+    bumpPoolRevision(accountRecord.poolId);
+  }
+  bumpPoolRevision(targetPoolId);
 
   authPool.setPreferredPool(accountId, targetPoolId);
 

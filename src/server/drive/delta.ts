@@ -14,7 +14,8 @@ import {
   trashFileStmt,
 } from './sync.js';
 import { invalidateDiscrepancyCache } from './detector.js';
-import { db, sqlite } from '../db/index.js';
+import { db, sqlite, bumpPoolRevision } from '../db/index.js';
+import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
 import { accounts } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 
@@ -111,11 +112,16 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
       const batch = res.data.changes || [];
       changesCount += batch.length;
 
+      const pendingOutboxDeleteIds = getPendingOutboxDeleteDriveIds(accountId);
+      const pendingOutboxDriveIds = getPendingOutboxDriveIds(accountId);
       const batchFolderPaths = new Set<string>();
       const batchOperations: Array<() => void> = [];
 
       for (const change of batch) {
         if (!change.fileId) continue;
+        if (pendingOutboxDeleteIds.has(change.fileId) || pendingOutboxDriveIds.has(change.fileId)) {
+          continue;
+        }
 
         if (change.removed) {
           batchOperations.push(() => {
@@ -271,6 +277,7 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
 
     if (updatedCount > 0 || removedCount > 0) {
       invalidateDiscrepancyCache(accountId);
+      bumpPoolRevision(poolId);
     }
 
     report = {

@@ -5,7 +5,8 @@ import {
   runBoundedConcurrency,
   withDriveRetry,
 } from './client.js';
-import { db, sqlite } from '../db/index.js';
+import { db, sqlite, bumpPoolRevision } from '../db/index.js';
+import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
 import { accounts, files } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import path from 'node:path';
@@ -204,16 +205,38 @@ export function insertFolderRecord(folderPath: string, poolId = 1): void {
   insertFolderStmt.run(id, poolId, folderPath, folderName, parentId);
 }
 
-export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string, poolId = 1): void {
-  const folders = extractFolderPaths(virtualPathOrFolderPath);
-  if (virtualPathOrFolderPath.startsWith('/') && !virtualPathOrFolderPath.includes('.') && virtualPathOrFolderPath !== '/') {
-    if (!folders.includes(virtualPathOrFolderPath)) {
-      folders.unshift(virtualPathOrFolderPath);
-    }
+export function ensureLocalParentFolders(fileVirtualPath: string, poolId = 1): void {
+  const folders = extractFolderPaths(fileVirtualPath);
+  for (let i = folders.length - 1; i >= 0; i--) {
+    insertFolderRecord(folders[i], poolId);
+  }
+}
+
+export function ensureLocalFolderPath(folderVirtualPath: string, poolId = 1): void {
+  const withLeadingSlash = folderVirtualPath.startsWith('/') ? folderVirtualPath : `/${folderVirtualPath}`;
+  const normalized = withLeadingSlash.replace(/\/+$/, '') || '/';
+  if (normalized === '/') {
+    return;
+  }
+  const folders = extractFolderPaths(normalized);
+  if (!folders.includes(normalized)) {
+    folders.unshift(normalized);
   }
   for (let i = folders.length - 1; i >= 0; i--) {
     insertFolderRecord(folders[i], poolId);
   }
+}
+
+export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string, poolId = 1): void {
+  if (
+    virtualPathOrFolderPath.startsWith('/') &&
+    !virtualPathOrFolderPath.includes('.') &&
+    virtualPathOrFolderPath !== '/'
+  ) {
+    ensureLocalFolderPath(virtualPathOrFolderPath, poolId);
+    return;
+  }
+  ensureLocalParentFolders(virtualPathOrFolderPath, poolId);
 }
 
 export function upsertFileRecord(f: DiscoveredFile): 'indexed' | 'conflict' {
@@ -393,6 +416,8 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
 
     const pendingRows = getSelectPendingDriveSyncStmt().all(accountId) as Array<{ drive_file_id: string }>;
     const pendingDbDriveIds = new Set(pendingRows.map((r) => r.drive_file_id));
+    const pendingOutboxDeleteIds = getPendingOutboxDeleteDriveIds(accountId);
+    const pendingOutboxDriveIds = getPendingOutboxDriveIds(accountId);
 
     const discoveredDriveIds = new Set(discoveredFiles.map((f) => f.driveFileId));
     let indexedCount = 0;
@@ -408,7 +433,8 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
         if (
           !discoveredDriveIds.has(lf.driveFileId) &&
           !pendingAppPropertyDriveIds.has(lf.driveFileId) &&
-          !pendingDbDriveIds.has(lf.driveFileId)
+          !pendingDbDriveIds.has(lf.driveFileId) &&
+          !pendingOutboxDriveIds.has(lf.driveFileId)
         ) {
           deleteFileStmt.run(lf.driveFileId, accountId);
         }
@@ -429,6 +455,9 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
       }
 
       for (const f of discoveredFiles) {
+        if (pendingOutboxDeleteIds.has(f.driveFileId) || pendingOutboxDriveIds.has(f.driveFileId)) {
+          continue;
+        }
         const status = upsertFileRecord(f);
         if (status === 'conflict') {
           if (!f.isTrashed) {
@@ -444,6 +473,7 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
     });
 
     applySync();
+    bumpPoolRevision(poolId);
 
     await db
       .update(accounts)

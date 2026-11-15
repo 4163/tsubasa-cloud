@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { db, sqlite, buildDirectoryPrefixBounds } from '../db/index.js';
+import { db, sqlite, buildDirectoryPrefixBounds, bumpPoolRevision } from '../db/index.js';
 import { accounts, files, folders, shareLinks } from '../db/schema.js';
-import { eq, and, or, gte, lt, sql } from 'drizzle-orm';
+import { eq, and, or, gte, lt } from 'drizzle-orm';
 import { authPool } from './auth.js';
 import {
   getDriveClient,
@@ -10,23 +10,25 @@ import {
   ensureSharePoolExistsInDb,
   switchAccountPool,
   markAccountQuotaDecreased,
-  refreshAccountLiveQuota,
+  runBoundedConcurrency,
+  withDriveRetry,
 } from './client.js';
-import { copyDriveFileCrossAccount, deleteDriveFileIgnoreNotFound } from './transfer.js';
+import { copyDriveFileCrossAccount } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath, clearRemoteFolderCache } from './mirror.js';
-import { ensureLocalFolderHierarchy, formatFolderId, insertFolderRecord } from './sync.js';
+import { ensureLocalParentFolders, ensureLocalFolderPath, formatFolderId } from './sync.js';
+import { enqueueDriveOutbox } from './outbox.js';
 import {
   getEmptyAccountsAcrossAllPools,
+  invalidatePooledStorageOverview,
   MAX_SINGLE_FILE_BYTES,
   recordTransfer,
   type EmptyShareAccount,
 } from '../storage/quota.js';
 import {
   getEligibleAccounts,
-  planBatchPlacement,
   simulateBatchPlacement,
-  FileExceedsCeilingError,
   InsufficientStorageError,
+  type BatchPlacementPlan,
   type CandidateAccount,
   type PlacementItem,
 } from '../storage/placement.js';
@@ -237,15 +239,21 @@ function loadOccupiedTopSegments(sharePoolId: number | null): Set<string> {
   if (sharePoolId === null) return occupied;
 
   const fileRows = sqlite
-    .prepare('SELECT virtual_path as virtualPath FROM files WHERE pool_id = ?')
+    .prepare('SELECT virtual_path as virtualPath FROM files WHERE pool_id = ? AND folder_id IS NULL')
     .all(sharePoolId) as Array<{ virtualPath: string }>;
   const folderRows = sqlite
-    .prepare('SELECT virtual_path as virtualPath FROM folders WHERE pool_id = ?')
+    .prepare('SELECT virtual_path as virtualPath FROM folders WHERE pool_id = ? AND parent_folder_id IS NULL')
     .all(sharePoolId) as Array<{ virtualPath: string }>;
+  const shareLinkRows = sqlite
+    .prepare('SELECT DISTINCT batch_folder_name as batchFolderName FROM share_links WHERE pool_id = ?')
+    .all(sharePoolId) as Array<{ batchFolderName: string }>;
 
   for (const row of [...fileRows, ...folderRows]) {
     const topSeg = normalizeVirtualPath(row.virtualPath).split('/').filter(Boolean)[0];
     if (topSeg) occupied.add(topSeg);
+  }
+  for (const row of shareLinkRows) {
+    if (row.batchFolderName) occupied.add(row.batchFolderName);
   }
 
   return occupied;
@@ -530,34 +538,6 @@ export async function inspectSharePlan(
   items: ShareTargetInput[]
 ): Promise<ShareInspectPlan> {
   const targets = await resolveShareTargets(sourcePoolId, items);
-
-  const refreshRows = (
-    targets.sharePoolId !== null
-      ? sqlite
-          .prepare(
-            `SELECT id FROM accounts
-             WHERE pool_id = ?
-                OR NOT EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`
-          )
-          .all(targets.sharePoolId)
-      : sqlite
-          .prepare(
-            `SELECT id FROM accounts
-             WHERE NOT EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`
-          )
-          .all()
-  ) as Array<{ id: string }>;
-
-  const authorizedRefreshIds = refreshRows
-    .map((row) => row.id)
-    .filter((id) => Boolean(authPool.getRecord(id)?.authorized));
-
-  if (authorizedRefreshIds.length > 0) {
-    await Promise.all(
-      authorizedRefreshIds.map((id) => refreshAccountLiveQuota(id).catch(() => null))
-    );
-  }
-
   const emptyAccounts = await loadEmptyAccountsWithAuthStatus();
 
   let sharePoolFitsWithoutExpansion = false;
@@ -608,12 +588,15 @@ export async function inspectSharePlan(
   };
 }
 
-export async function validateShareSelection(
-  sourcePoolId: number,
-  items: ShareTargetInput[],
+async function validateShareSelectionAgainstTargets(
+  targets: ShareTargetsResolution,
   selectedAccountIds: string[]
-): Promise<ShareValidationResult> {
-  const targets = await resolveShareTargets(sourcePoolId, items);
+): Promise<{
+  validation: ShareValidationResult;
+  plan?: BatchPlacementPlan;
+  combinedCandidates: CandidateAccount[];
+  uniqueSelectedIds: string[];
+}> {
   const uniqueSelectedIds = Array.from(new Set(selectedAccountIds.filter(Boolean)));
 
   const emptyAccounts = await loadEmptyAccountsWithAuthStatus();
@@ -632,37 +615,53 @@ export async function validateShareSelection(
     if (!emptyAcc) {
       const existingHeadroom = existingCandidates.reduce((s, c) => s + c.headroomBytes, 0);
       return {
-        valid: false,
-        reason: `Account "${accountId}" is not empty or was not found`,
-        totalAvailableHeadroomBytes: existingHeadroom,
-        requiredBytes: targets.totalBytes,
+        validation: {
+          valid: false,
+          reason: `Account "${accountId}" is not empty or was not found`,
+          totalAvailableHeadroomBytes: existingHeadroom,
+          requiredBytes: targets.totalBytes,
+        },
+        combinedCandidates: [],
+        uniqueSelectedIds,
       };
     }
 
     if (emptyAcc.isDisabled) {
       return {
-        valid: false,
-        reason: `Drive "${emptyAcc.email}" is disabled and cannot join the Share Pool`,
-        totalAvailableHeadroomBytes: existingCandidates.reduce((s, c) => s + c.headroomBytes, 0),
-        requiredBytes: targets.totalBytes,
+        validation: {
+          valid: false,
+          reason: `Drive "${emptyAcc.email}" is disabled and cannot join the Share Pool`,
+          totalAvailableHeadroomBytes: existingCandidates.reduce((s, c) => s + c.headroomBytes, 0),
+          requiredBytes: targets.totalBytes,
+        },
+        combinedCandidates: [],
+        uniqueSelectedIds,
       };
     }
 
     if (!emptyAcc.authorized) {
       return {
-        valid: false,
-        reason: `Drive "${emptyAcc.email}" is not authorized`,
-        totalAvailableHeadroomBytes: existingCandidates.reduce((s, c) => s + c.headroomBytes, 0),
-        requiredBytes: targets.totalBytes,
+        validation: {
+          valid: false,
+          reason: `Drive "${emptyAcc.email}" is not authorized`,
+          totalAvailableHeadroomBytes: existingCandidates.reduce((s, c) => s + c.headroomBytes, 0),
+          requiredBytes: targets.totalBytes,
+        },
+        combinedCandidates: [],
+        uniqueSelectedIds,
       };
     }
 
     if (emptyAcc.syncState === 'error') {
       return {
-        valid: false,
-        reason: `Drive "${emptyAcc.email}" is in an error sync state`,
-        totalAvailableHeadroomBytes: existingCandidates.reduce((s, c) => s + c.headroomBytes, 0),
-        requiredBytes: targets.totalBytes,
+        validation: {
+          valid: false,
+          reason: `Drive "${emptyAcc.email}" is in an error sync state`,
+          totalAvailableHeadroomBytes: existingCandidates.reduce((s, c) => s + c.headroomBytes, 0),
+          requiredBytes: targets.totalBytes,
+        },
+        combinedCandidates: [],
+        uniqueSelectedIds,
       };
     }
 
@@ -681,40 +680,56 @@ export async function validateShareSelection(
 
   if (targets.files.length === 0 && targets.folders.length === 0) {
     return {
-      valid: false,
-      reason: 'No valid files or folders found to share',
-      totalAvailableHeadroomBytes,
-      requiredBytes: targets.totalBytes,
+      validation: {
+        valid: false,
+        reason: 'No valid files or folders found to share',
+        totalAvailableHeadroomBytes,
+        requiredBytes: targets.totalBytes,
+      },
+      combinedCandidates,
+      uniqueSelectedIds,
     };
   }
 
   if (targets.overCeilingFiles.length > 0) {
     return {
-      valid: false,
-      reason: `${targets.overCeilingFiles[0].name} exceeds the 14.25 GB single-account ceiling`,
-      totalAvailableHeadroomBytes,
-      requiredBytes: targets.totalBytes,
+      validation: {
+        valid: false,
+        reason: `${targets.overCeilingFiles[0].name} exceeds the 14.25 GB single-account ceiling`,
+        totalAvailableHeadroomBytes,
+        requiredBytes: targets.totalBytes,
+      },
+      combinedCandidates,
+      uniqueSelectedIds,
     };
   }
 
   if (targets.files.length === 0 && targets.folders.length > 0) {
     if (combinedCandidates.length === 0) {
       return {
-        valid: false,
-        reason: 'Select at least one empty drive to host the shared folder',
-        totalAvailableHeadroomBytes,
-        requiredBytes: 0,
+        validation: {
+          valid: false,
+          reason: 'Select at least one empty drive to host the shared folder',
+          totalAvailableHeadroomBytes,
+          requiredBytes: 0,
+        },
+        combinedCandidates,
+        uniqueSelectedIds,
       };
     }
 
     const best = [...combinedCandidates].sort((a, b) => b.headroomBytes - a.headroomBytes)[0];
     return {
-      valid: true,
-      totalAvailableHeadroomBytes,
-      requiredBytes: 0,
-      accountAllocations: {
-        [best.id]: { filesCount: 0, bytesAllocated: 0 },
+      validation: {
+        valid: true,
+        totalAvailableHeadroomBytes,
+        requiredBytes: 0,
+        accountAllocations: {
+          [best.id]: { filesCount: 0, bytesAllocated: 0 },
+        },
       },
+      combinedCandidates,
+      uniqueSelectedIds,
     };
   }
 
@@ -725,26 +740,38 @@ export async function validateShareSelection(
       targets.sharePoolId ?? undefined
     );
     return {
-      valid: true,
-      totalAvailableHeadroomBytes,
-      requiredBytes: targets.totalBytes,
-      accountAllocations: plan.accountAllocations,
+      validation: {
+        valid: true,
+        totalAvailableHeadroomBytes,
+        requiredBytes: targets.totalBytes,
+        accountAllocations: plan.accountAllocations,
+      },
+      plan,
+      combinedCandidates,
+      uniqueSelectedIds,
     };
   } catch (err) {
     return {
-      valid: false,
-      reason: err instanceof Error ? err.message : String(err),
-      totalAvailableHeadroomBytes,
-      requiredBytes: targets.totalBytes,
+      validation: {
+        valid: false,
+        reason: err instanceof Error ? err.message : String(err),
+        totalAvailableHeadroomBytes,
+        requiredBytes: targets.totalBytes,
+      },
+      combinedCandidates,
+      uniqueSelectedIds,
     };
   }
 }
 
-function ensureLocalFolderTreeExact(folderPath: string, poolId: number): void {
-  const normalized = normalizeVirtualPath(folderPath);
-  if (normalized === '/') return;
-  ensureLocalFolderHierarchy(normalized, poolId);
-  insertFolderRecord(normalized, poolId);
+export async function validateShareSelection(
+  sourcePoolId: number,
+  items: ShareTargetInput[],
+  selectedAccountIds: string[]
+): Promise<ShareValidationResult> {
+  const targets = await resolveShareTargets(sourcePoolId, items);
+  const { validation } = await validateShareSelectionAgainstTargets(targets, selectedAccountIds);
+  return validation;
 }
 
 async function ensureShareBatchPermissionsAndLinks(params: {
@@ -755,124 +782,147 @@ async function ensureShareBatchPermissionsAndLinks(params: {
   const { batchFolderName, participatingAccountIds, allocations } = params;
   const batchVirtualPath = `/${batchFolderName}`;
 
-  const links: ShareAccountLinkResult[] = [];
+  const links: ShareAccountLinkResult[] = new Array(participatingAccountIds.length);
 
-  for (const accountId of participatingAccountIds) {
-    const drive = getDriveClient(accountId);
-    const accountRootFolderId = await getAccountRootFolderId(accountId);
-    const batchFolderId = await ensureRemoteFolderHierarchy(drive, accountRootFolderId, batchVirtualPath);
-    const accountRecord = await db.query.accounts.findFirst({
-      where: eq(accounts.id, accountId),
-    });
-    const accountEmail = accountRecord?.email ?? accountId;
-    const accountDisplayName = accountRecord?.displayName ?? accountEmail;
-
-    const permListRes = await drive.permissions.list({
-      fileId: batchFolderId,
-      fields: 'permissions(id, type, role)',
-      supportsAllDrives: false,
-    });
-
-    const hasAnyoneReader = (permListRes.data.permissions || []).some(
-      (p) => p.type === 'anyone' && p.role === 'reader'
-    );
-
-    if (!hasAnyoneReader) {
-      await drive.permissions.create({
-        fileId: batchFolderId,
-        requestBody: {
-          role: 'reader',
-          type: 'anyone',
-        },
-        supportsAllDrives: false,
+  await runBoundedConcurrency(
+    participatingAccountIds.map((accountId, index) => ({ accountId, index })),
+    4,
+    async ({ accountId, index }) => {
+      const drive = getDriveClient(accountId);
+      const accountRootFolderId = await getAccountRootFolderId(accountId);
+      const batchFolderId = await ensureRemoteFolderHierarchy(drive, accountRootFolderId, batchVirtualPath);
+      const accountRecord = await db.query.accounts.findFirst({
+        where: eq(accounts.id, accountId),
       });
+      const accountEmail = accountRecord?.email ?? accountId;
+      const accountDisplayName = accountRecord?.displayName ?? accountEmail;
+
+      const permListRes = await withDriveRetry(() =>
+        drive.permissions.list({
+          fileId: batchFolderId,
+          fields: 'permissions(id, type, role)',
+          supportsAllDrives: false,
+        })
+      );
+
+      const hasAnyoneReader = (permListRes.data.permissions || []).some(
+        (p) => p.type === 'anyone' && p.role === 'reader'
+      );
+
+      if (!hasAnyoneReader) {
+        await withDriveRetry(() =>
+          drive.permissions.create({
+            fileId: batchFolderId,
+            requestBody: {
+              role: 'reader',
+              type: 'anyone',
+            },
+            supportsAllDrives: false,
+          })
+        );
+      }
+
+      const folderRes = await withDriveRetry(() =>
+        drive.files.get({
+          fileId: batchFolderId,
+          fields: 'id, name, webViewLink',
+          supportsAllDrives: false,
+        })
+      );
+      const webViewLink = folderRes.data.webViewLink || null;
+
+      const alloc = allocations[accountId] ?? { filesCount: 0, bytesAllocated: 0 };
+      links[index] = {
+        accountId,
+        accountEmail,
+        accountDisplayName,
+        rootFolderId: batchFolderId,
+        webViewLink,
+        filesCount: alloc.filesCount,
+        bytesAllocated: alloc.bytesAllocated,
+      };
     }
-
-    const folderRes = await drive.files.get({
-      fileId: batchFolderId,
-      fields: 'id, name, webViewLink',
-      supportsAllDrives: false,
-    });
-    const webViewLink = folderRes.data.webViewLink || null;
-
-    const alloc = allocations[accountId] ?? { filesCount: 0, bytesAllocated: 0 };
-    links.push({
-      accountId,
-      accountEmail,
-      accountDisplayName,
-      rootFolderId: batchFolderId,
-      webViewLink,
-      filesCount: alloc.filesCount,
-      bytesAllocated: alloc.bytesAllocated,
-    });
-  }
+  );
 
   return links;
 }
 
 export async function executeShare(params: ExecuteShareParams): Promise<ExecuteShareResult> {
-  const validation = await validateShareSelection(
-    params.sourcePoolId,
-    params.items,
-    params.selectedAccountIds
-  );
+  const sharePoolId = ensureSharePoolExistsInDb();
+  const batchFolderName = generateShareBatchFolderName(sharePoolId);
+  const targets = await resolveShareTargets(params.sourcePoolId, params.items, batchFolderName);
+
+  const { validation, plan, combinedCandidates, uniqueSelectedIds } =
+    await validateShareSelectionAgainstTargets(targets, params.selectedAccountIds);
 
   if (!validation.valid) {
     throw new ShareValidationError(validation.reason || 'Selected drives cannot fit the share payload');
   }
 
-  const sharePoolId = ensureSharePoolExistsInDb();
-  const batchFolderName = generateShareBatchFolderName(sharePoolId);
-
-  const uniqueSelectedIds = Array.from(new Set(params.selectedAccountIds.filter(Boolean)));
-  for (const accountId of uniqueSelectedIds) {
-    const accountRecord = await db.query.accounts.findFirst({
-      where: eq(accounts.id, accountId),
-    });
-    if (!accountRecord || accountRecord.poolId !== sharePoolId) {
-      await switchAccountPool(accountId, sharePoolId);
+  const accountsToSwitch: string[] = [];
+  if (uniqueSelectedIds.length > 0) {
+    const checkPoolStmt = sqlite.prepare('SELECT pool_id as poolId FROM accounts WHERE id = ?');
+    for (const accountId of uniqueSelectedIds) {
+      const row = checkPoolStmt.get(accountId) as { poolId: number | null } | undefined;
+      if (!row || row.poolId !== sharePoolId) {
+        accountsToSwitch.push(accountId);
+      }
     }
   }
 
-  const targets = await resolveShareTargets(params.sourcePoolId, params.items, batchFolderName);
-  if (targets.files.length === 0 && targets.folders.length === 0) {
-    throw new ShareValidationError('No valid files or folders found to share');
-  }
-  if (targets.overCeilingFiles.length > 0) {
-    throw new FileExceedsCeilingError(targets.overCeilingFiles[0].sizeBytes);
-  }
+  await runBoundedConcurrency(accountsToSwitch, 4, async (accountId) => {
+    await switchAccountPool(accountId, sharePoolId);
+  });
 
   const participatingAccountIds = new Set<string>();
   const accountAllocations: Record<string, { filesCount: number; bytesAllocated: number }> = {};
 
+  interface CopiedShareFile {
+    newFileId: string;
+    virtualPath: string;
+    destFileName: string;
+    parentDir: string;
+    sizeBytes: number;
+    mimeType: string;
+    hash: string | null;
+    accountId: string;
+    newDriveFileId: string;
+  }
+
+  const copiedFiles: CopiedShareFile[] = [];
+  const bytesByAccount = new Map<string, number>();
+
   if (targets.files.length === 0 && targets.folders.length > 0) {
-    const candidates = await getEligibleAccounts(sharePoolId);
-    if (candidates.length === 0) {
+    if (combinedCandidates.length === 0) {
       throw new InsufficientStorageError('No active accounts available in Share Pool');
     }
 
-    const bestAccount = [...candidates].sort((a, b) => b.headroomBytes - a.headroomBytes)[0];
+    const bestAccount = [...combinedCandidates].sort((a, b) => b.headroomBytes - a.headroomBytes)[0];
     const drive = getDriveClient(bestAccount.id);
     const rootFolderId = await getAccountRootFolderId(bestAccount.id);
 
-    for (const folder of targets.folders) {
+    await runBoundedConcurrency(targets.folders, 4, async (folder) => {
       await ensureRemoteFolderHierarchy(drive, rootFolderId, folder.targetVirtualPath);
-      ensureLocalFolderTreeExact(folder.targetVirtualPath, sharePoolId);
-    }
+    });
 
     participatingAccountIds.add(bestAccount.id);
     accountAllocations[bestAccount.id] = { filesCount: 0, bytesAllocated: 0 };
-  } else {
+  } else if (plan) {
     const fileByTargetPath = new Map(targets.files.map((f) => [f.targetVirtualPath, f]));
-    const plan = await planBatchPlacement(toPlacementItems(targets.files), Date.now(), sharePoolId);
-
     Object.assign(accountAllocations, plan.accountAllocations);
 
-    const accountCache = new Map<string, { email: string; rootFolderId: string }>();
-    const getTargetAccountInfo = async (accountId: string) => {
-      const cached = accountCache.get(accountId);
-      if (cached) return cached;
+    const uniqueDirPairs = new Map<string, { accountId: string; parentDir: string }>();
+    for (const decision of plan.decisions) {
+      participatingAccountIds.add(decision.accountId);
+      const parentDir = path.posix.dirname(decision.virtualPath);
+      const dirKey = `${decision.accountId}\0${parentDir}`;
+      if (!uniqueDirPairs.has(dirKey)) {
+        uniqueDirPairs.set(dirKey, { accountId: decision.accountId, parentDir });
+      }
+    }
 
+    const accountInfoMap = new Map<string, { email: string; rootFolderId: string }>();
+    await runBoundedConcurrency(Array.from(participatingAccountIds), 4, async (accountId) => {
       const acc = await db.query.accounts.findFirst({
         where: eq(accounts.id, accountId),
       });
@@ -880,103 +930,97 @@ export async function executeShare(params: ExecuteShareParams): Promise<ExecuteS
         throw new Error(`Target account ${accountId} not registered`);
       }
       const rootFolderId = await getAccountRootFolderId(accountId);
-      const info = { email: acc.email, rootFolderId };
-      accountCache.set(accountId, info);
-      return info;
-    };
+      accountInfoMap.set(accountId, { email: acc.email, rootFolderId });
+    });
 
-    const createdLocalFolderPaths = new Set<string>();
-
-    for (const decision of plan.decisions) {
-      const sourceFile = fileByTargetPath.get(decision.virtualPath);
-      if (!sourceFile) {
-        throw new Error(`Missing source file mapping for ${decision.virtualPath}`);
-      }
-
-      participatingAccountIds.add(decision.accountId);
-      const targetInfo = await getTargetAccountInfo(decision.accountId);
-      const driveTarget = getDriveClient(decision.accountId);
-      const parentDir = path.posix.dirname(decision.virtualPath);
-      const targetRemoteFolderId = await ensureRemoteFolderHierarchy(
+    const remoteFolderIdByDirKey = new Map<string, string>();
+    await runBoundedConcurrency(Array.from(uniqueDirPairs.entries()), 4, async ([dirKey, pair]) => {
+      const targetInfo = accountInfoMap.get(pair.accountId)!;
+      const driveTarget = getDriveClient(pair.accountId);
+      const folderId = await ensureRemoteFolderHierarchy(
         driveTarget,
         targetInfo.rootFolderId,
-        parentDir
+        pair.parentDir
       );
+      remoteFolderIdByDirKey.set(dirKey, folderId);
+    });
 
-      const newFileId = randomUUID();
-      const destFileName = path.posix.basename(decision.virtualPath);
-      const appProperties = {
-        tsubasa_managed: 'true',
-        tsubasa_virtual_path: decision.virtualPath,
-        tsubasa_virtual_id: newFileId,
-        tsubasa_checksum: sourceFile.hash || '',
-      };
+    const createdParentDirs = new Set<string>();
+    const resultsSlot = new Array<CopiedShareFile>(plan.decisions.length);
 
-      const newDriveFileId = await copyDriveFileCrossAccount({
-        sourceAccountId: sourceFile.accountId,
-        sourceDriveFileId: sourceFile.driveFileId,
-        targetAccountId: decision.accountId,
-        targetAccountEmail: targetInfo.email,
-        targetRemoteFolderId,
-        destFileName,
-        appProperties,
-      });
+    await runBoundedConcurrency(
+      plan.decisions.map((decision, index) => ({ decision, index })),
+      6,
+      async ({ decision, index }) => {
+        const sourceFile = fileByTargetPath.get(decision.virtualPath);
+        if (!sourceFile) {
+          throw new Error(`Missing source file mapping for ${decision.virtualPath}`);
+        }
 
-      ensureLocalFolderHierarchy(decision.virtualPath, sharePoolId);
-      if (parentDir !== '/' && parentDir !== '.') {
-        createdLocalFolderPaths.add(parentDir);
+        const targetInfo = accountInfoMap.get(decision.accountId)!;
+        const parentDir = path.posix.dirname(decision.virtualPath);
+        const targetRemoteFolderId = remoteFolderIdByDirKey.get(`${decision.accountId}\0${parentDir}`)!;
+
+        const newFileId = randomUUID();
+        const destFileName = path.posix.basename(decision.virtualPath);
+        const appProperties = {
+          tsubasa_managed: 'true',
+          tsubasa_virtual_path: decision.virtualPath,
+          tsubasa_virtual_id: newFileId,
+          tsubasa_checksum: sourceFile.hash || '',
+        };
+
+        const newDriveFileId = await copyDriveFileCrossAccount({
+          sourceAccountId: sourceFile.accountId,
+          sourceDriveFileId: sourceFile.driveFileId,
+          targetAccountId: decision.accountId,
+          targetAccountEmail: targetInfo.email,
+          targetRemoteFolderId,
+          destFileName,
+          appProperties,
+        });
+
+        if (parentDir !== '/' && parentDir !== '.') {
+          createdParentDirs.add(parentDir);
+        }
+
+        resultsSlot[index] = {
+          newFileId,
+          virtualPath: decision.virtualPath,
+          destFileName,
+          parentDir,
+          sizeBytes: decision.sizeBytes,
+          mimeType: sourceFile.mimeType,
+          hash: sourceFile.hash,
+          accountId: decision.accountId,
+          newDriveFileId,
+        };
       }
+    );
 
-      const folderId =
-        parentDir === '/' || parentDir === '.' ? null : formatFolderId(sharePoolId, parentDir);
-
-      await db.insert(files).values({
-        id: newFileId,
-        poolId: sharePoolId,
-        virtualPath: decision.virtualPath,
-        name: destFileName,
-        sizeBytes: decision.sizeBytes,
-        mimeType: sourceFile.mimeType,
-        hash: sourceFile.hash,
-        accountId: decision.accountId,
-        driveFileId: newDriveFileId,
-        folderId,
-        isTrashed: false,
-      });
-
-      await db
-        .update(accounts)
-        .set({
-          quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${decision.sizeBytes}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, decision.accountId));
-
-      await recordTransfer(decision.accountId, 'upload', decision.sizeBytes);
-    }
+    copiedFiles.push(...resultsSlot);
 
     if (targets.folders.length > 0) {
-      const candidates = await getEligibleAccounts(sharePoolId);
-      const participatingList = Array.from(participatingAccountIds);
-      const fallbackAccountId =
-        candidates
-          .filter((c) => participatingAccountIds.has(c.id))
-          .sort((a, b) => b.headroomBytes - a.headroomBytes)[0]?.id ?? participatingList[0];
+      const missingFolders = targets.folders.filter((f) => !createdParentDirs.has(f.targetVirtualPath));
+      if (missingFolders.length > 0) {
+        const participatingList = Array.from(participatingAccountIds);
+        const fallbackAccountId =
+          combinedCandidates
+            .filter((c) => participatingAccountIds.has(c.id))
+            .sort((a, b) => b.headroomBytes - a.headroomBytes)[0]?.id ?? participatingList[0];
 
-      if (fallbackAccountId) {
-        const drive = getDriveClient(fallbackAccountId);
-        const rootFolderId = await getAccountRootFolderId(fallbackAccountId);
-        for (const folder of targets.folders) {
-          if (!createdLocalFolderPaths.has(folder.targetVirtualPath)) {
+        if (fallbackAccountId) {
+          const drive = getDriveClient(fallbackAccountId);
+          const rootFolderId =
+            accountInfoMap.get(fallbackAccountId)?.rootFolderId ??
+            (await getAccountRootFolderId(fallbackAccountId));
+          await runBoundedConcurrency(missingFolders, 4, async (folder) => {
             await ensureRemoteFolderHierarchy(drive, rootFolderId, folder.targetVirtualPath);
-          }
-          ensureLocalFolderTreeExact(folder.targetVirtualPath, sharePoolId);
+          });
         }
       }
     }
   }
-
-  ensureLocalFolderTreeExact(`/${batchFolderName}`, sharePoolId);
 
   const links = await ensureShareBatchPermissionsAndLinks({
     batchFolderName,
@@ -984,30 +1028,81 @@ export async function executeShare(params: ExecuteShareParams): Promise<ExecuteS
     allocations: accountAllocations,
   });
 
-  for (const link of links) {
-    if (!link.webViewLink) continue;
-    await db
-      .insert(shareLinks)
-      .values({
-        id: randomUUID(),
-        poolId: sharePoolId,
+  sqlite.transaction(() => {
+    ensureLocalFolderPath(`/${batchFolderName}`, sharePoolId);
+
+    const insertFileStmt = sqlite.prepare(
+      `INSERT INTO files (id, pool_id, virtual_path, name, size_bytes, mime_type, hash, account_id, drive_file_id, folder_id, is_trashed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    );
+
+    for (const item of copiedFiles) {
+      ensureLocalParentFolders(item.virtualPath, sharePoolId);
+      const folderId =
+        item.parentDir === '/' || item.parentDir === '.' ? null : formatFolderId(sharePoolId, item.parentDir);
+
+      insertFileStmt.run(
+        item.newFileId,
+        sharePoolId,
+        item.virtualPath,
+        item.destFileName,
+        item.sizeBytes,
+        item.mimeType,
+        item.hash,
+        item.accountId,
+        item.newDriveFileId,
+        folderId
+      );
+
+      bytesByAccount.set(item.accountId, (bytesByAccount.get(item.accountId) ?? 0) + item.sizeBytes);
+    }
+
+    const updateQuotaStmt = sqlite.prepare(
+      'UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?'
+    );
+    for (const [accountId, bytes] of bytesByAccount.entries()) {
+      updateQuotaStmt.run(bytes, accountId);
+    }
+
+    for (const folder of targets.folders) {
+      ensureLocalFolderPath(folder.targetVirtualPath, sharePoolId);
+    }
+
+    const upsertLinkStmt = sqlite.prepare(
+      `INSERT INTO share_links (id, pool_id, batch_folder_name, account_id, drive_folder_id, web_view_link, files_count, bytes_allocated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(pool_id, batch_folder_name, account_id) DO UPDATE SET
+         drive_folder_id = excluded.drive_folder_id,
+         web_view_link = excluded.web_view_link,
+         files_count = excluded.files_count,
+         bytes_allocated = excluded.bytes_allocated`
+    );
+
+    for (const link of links) {
+      if (!link.webViewLink) continue;
+      upsertLinkStmt.run(
+        randomUUID(),
+        sharePoolId,
         batchFolderName,
-        accountId: link.accountId,
-        driveFolderId: link.rootFolderId,
-        webViewLink: link.webViewLink,
-        filesCount: link.filesCount,
-        bytesAllocated: link.bytesAllocated,
-      })
-      .onConflictDoUpdate({
-        target: [shareLinks.poolId, shareLinks.batchFolderName, shareLinks.accountId],
-        set: {
-          driveFolderId: link.rootFolderId,
-          webViewLink: link.webViewLink,
-          filesCount: link.filesCount,
-          bytesAllocated: link.bytesAllocated,
-        },
-      });
+        link.accountId,
+        link.rootFolderId,
+        link.webViewLink,
+        link.filesCount,
+        link.bytesAllocated
+      );
+    }
+  }).immediate();
+
+  if (bytesByAccount.size > 0) {
+    await Promise.all(
+      Array.from(bytesByAccount.entries()).map(([accountId, bytes]) =>
+        recordTransfer(accountId, 'upload', bytes)
+      )
+    );
   }
+
+  invalidatePooledStorageOverview(sharePoolId);
+  bumpPoolRevision(sharePoolId);
 
   return {
     sharePoolId,
@@ -1036,44 +1131,14 @@ export async function clearSharePool(sharePoolId: number): Promise<ClearSharePoo
     .from(accounts)
     .where(eq(accounts.poolId, sharePoolId));
 
-  const warnings: string[] = [];
-  const deletedDriveAccountIds = new Set<string>();
-
-  for (const acc of poolAccounts) {
-    const isAuthorized = Boolean(authPool.getRecord(acc.id)?.authorized);
-    if (!isAuthorized || !acc.rootFolderId) continue;
-
-    try {
-      const drive = getDriveClient(acc.id);
-      let pageToken: string | undefined = undefined;
-
-      do {
-        const listRes: any = await drive.files.list({
-          q: `'${acc.rootFolderId}' in parents`,
-          fields: 'nextPageToken, files(id, name)',
-          pageSize: 100,
-          pageToken,
-          spaces: 'drive',
-          supportsAllDrives: false,
-        });
-
-        for (const item of listRes.data.files || []) {
-          if (item.id) {
-            await deleteDriveFileIgnoreNotFound(acc.id, item.id);
-            deletedDriveAccountIds.add(acc.id);
-          }
-        }
-
-        pageToken = listRes.data.nextPageToken || undefined;
-      } while (pageToken);
-    } catch (err) {
-      const msg = `Drive clear warning for ${acc.email}: ${err instanceof Error ? err.message : String(err)}`;
-      console.warn(msg);
-      warnings.push(msg);
-    }
-  }
-
-  clearRemoteFolderCache();
+  const outboxEntries = poolAccounts
+    .filter((acc) => Boolean(authPool.getRecord(acc.id)?.authorized) && Boolean(acc.rootFolderId))
+    .map((acc) => ({
+      accountId: acc.id,
+      poolId: sharePoolId,
+      opType: 'clear_share_account' as const,
+      payload: { sharePoolId, rootFolderId: acc.rootFolderId },
+    }));
 
   const summary = sqlite.transaction(() => {
     const fileStats = sqlite
@@ -1098,27 +1163,41 @@ export async function clearSharePool(sharePoolId: number): Promise<ClearSharePoo
       updateQuotaStmt.run(row.bytes, row.accountId);
     }
 
+    if (outboxEntries.length > 0) {
+      enqueueDriveOutbox(outboxEntries);
+    }
+
     return {
       filesRemoved: Number(fileStats?.cnt ?? 0),
       foldersRemoved: Number(folderStats?.cnt ?? 0),
       bytesReclaimed: Number(fileStats?.totalBytes ?? 0),
       affectedAccountIds: bytesByAccount.map((row) => row.accountId),
     };
-  })();
+  }).immediate();
 
-  for (const accountId of summary.affectedAccountIds) {
-    deletedDriveAccountIds.add(accountId);
+  for (const acc of poolAccounts) {
+    if (acc.rootFolderId) {
+      clearRemoteFolderCache(acc.rootFolderId);
+    }
   }
-  for (const accountId of deletedDriveAccountIds) {
+
+  const affectedAccounts = new Set<string>(summary.affectedAccountIds);
+  for (const entry of outboxEntries) {
+    affectedAccounts.add(entry.accountId);
+  }
+  for (const accountId of affectedAccounts) {
     markAccountQuotaDecreased(accountId);
   }
+
+  invalidatePooledStorageOverview(sharePoolId);
+  bumpPoolRevision(sharePoolId);
 
   return {
     sharePoolId,
     filesRemoved: summary.filesRemoved,
     foldersRemoved: summary.foldersRemoved,
     bytesReclaimed: summary.bytesReclaimed,
-    warnings,
+    warnings: [],
   };
 }
 

@@ -15,7 +15,7 @@ import {
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 import {
-  ensureLocalFolderHierarchy,
+  ensureLocalParentFolders,
   insertFolderRecord,
   formatFolderId,
   extractFolderPaths,
@@ -547,7 +547,7 @@ export async function acceptExternalFile(
           ? randomUUID()
           : candidateId;
 
-      ensureLocalFolderHierarchy(virtualPath, poolId);
+      ensureLocalParentFolders(virtualPath, poolId);
       const parentDir = path.posix.dirname(virtualPath);
       const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
@@ -644,7 +644,7 @@ export async function acceptExternalFile(
         ? randomUUID()
         : candidateId;
 
-    ensureLocalFolderHierarchy(virtualPath, poolId);
+    ensureLocalParentFolders(virtualPath, poolId);
     const parentDir = path.posix.dirname(virtualPath);
     const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
@@ -985,7 +985,7 @@ export async function resolvePathConflict(
 
     sqlite.transaction(() => {
       sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?').run(remoteId, accountId);
-      ensureLocalFolderHierarchy(newVirtualPath, poolId);
+      ensureLocalParentFolders(newVirtualPath, poolId);
       sqlite
         .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
         .run(`${newVirtualPath}.trashed-${Date.now()}`, poolId, newVirtualPath);
@@ -1077,7 +1077,7 @@ export async function resolvePathConflict(
     sqlite
       .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
       .run(`${baseVirtualPath}.trashed-${Date.now()}`, poolId, baseVirtualPath);
-    ensureLocalFolderHierarchy(baseVirtualPath, poolId);
+    ensureLocalParentFolders(baseVirtualPath, poolId);
 
     upsertFileStmt.run(
       fileId,
