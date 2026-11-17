@@ -369,42 +369,42 @@
 ### Slice E: Client boot, tab lock, query cache, hashing, and StyleX tokens
 **Files owned:** `src/client/main.tsx`, `src/client/api.ts`, `src/client/global.css`, `src/client/tokens.stylex.ts`, `src/client/vite-env.d.ts`, `src/client/utils/fileHash.ts`, `src/client/utils/format.ts`, `src/client/utils/queryCache.ts`, `src/client/utils/useBeforeUnload.ts`, `src/client/utils/useTabLock.ts`, `src/client/utils/virtualPath.ts` (plus creating `src/client/utils/theme.ts`; coordinate theme/helper adoption in `App.tsx` with Slice F).
 
-- [ ] **E-1 `[Blocking]` Defer `useTabLock` `'active'` state until `/api/instance/claim` settles**
+- [x] **E-1 `[Blocking]` Defer `useTabLock` `'active'` state until `/api/instance/claim` settles**
   - **Locations.** `src/client/utils/useTabLock.ts:185-202, 322-405, 475-487`.
   - **Failure mode.** Both Web Locks and fallback paths publish `status: 'active'` synchronously before `/api/instance/claim` finishes, mounting `<App />` and firing API requests even when Electron or another tab owns the lease; non-409 HTTP errors from `claim.$post` are ignored.
   - **Preserved UX.** `<CheckingShell />` stays up during lease check; `<TabBlockedModal>` shows on 409; offline fallback keeps working on network failure.
   - **Steps.** Remove premature `publishState(..., { status: 'active', ... })` at lines 381 and 403, guard `isUnloading`, and handle non-409 `!res.ok` errors in `activateWithServerLease`. Document intentional `sendBeacon` / `keepalive` usage at line 185 (or use `client.api.instance.release.$url()`). Remove unused `singleton.teardown`.
 
-- [ ] **E-2 `[Warning]` Decouple `AbortSignal` per subscriber in `queryCache.ts` `dedupeInFlight`**
+- [x] **E-2 `[Warning]` Decouple `AbortSignal` per subscriber in `queryCache.ts` `dedupeInFlight`**
   - **Locations.** `src/client/utils/queryCache.ts:237-278`.
   - **Failure mode.** Joining callers share the initiator's `AbortSignal`-bound fetch; aborting caller 1 aborts caller 2 and leaves `loadFiles` stuck if caller 2 handles `isAbortError`.
   - **Preserved UX.** Identical single-request deduplication and caller-specific cancellation.
   - **Steps.** Use an internal `AbortController` inside `dedupeInFlight` keyed by `key`, track active subscriber count/listeners, reject only the aborted caller immediately, and abort the underlying `fetch` only when all subscribers abort.
 
-- [ ] **E-3 `[Warning]` Prevent main-thread freeze and check post-digest abort in `fileHash.ts`**
+- [x] **E-3 `[Warning]` Prevent main-thread freeze and check post-digest abort in `fileHash.ts`**
   - **Locations.** `src/client/utils/fileHash.ts:294-321`.
   - **Failure mode.** Files `> 32 MB` run pure-JS MD5/SHA-256 chunks synchronously without yielding when frames exceed 50 ms; `<= 32 MB` `crypto.subtle.digest` misses a post-`await` `signal?.aborted` check.
   - **Preserved UX.** Identical digest outputs, `AbortError` contract, and conflict match semantics.
   - **Steps.** Check `if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');` after `crypto.subtle.digest`; yield via `yieldToMain()` whenever chunk loop elapsed time exceeds 50 ms.
 
-- [ ] **E-4 `[Nit]` Guard `formatBytes` non-finite inputs and remove dead `useDialogLock`**
+- [x] **E-4 `[Nit]` Guard `formatBytes` non-finite inputs and remove dead `useDialogLock`**
   - **Locations.** `src/client/utils/format.ts:1-7`, `src/client/utils/useBeforeUnload.ts:19-39`.
   - **Steps.** Return `'0 B'` for `!Number.isFinite(bytes) || bytes === 0` and clamp `sizes` index; remove dead `useDialogLock` export.
 
-- [ ] **E-5 `[Warning]` Extract shared `src/client/utils/theme.ts` from `main.tsx` (and `App.tsx`)**
+- [x] **E-5 `[Warning]` Extract shared `src/client/utils/theme.ts` from `main.tsx` (and `App.tsx`)**
   - **Locations.** `src/client/main.tsx:15-38`, `src/client/App.tsx:368-430`.
   - **Steps.** Move `readInitialTheme`, `readThemeChoice`, and `applyDocumentTheme` into `src/client/utils/theme.ts` and call from `main.tsx` (and `App.tsx` in Slice F).
 
-- [ ] **E-6 `[Warning]` Align `tokens.stylex.ts` contrast comments, add missing tokens, and clean unused token**
+- [x] **E-6 `[Warning]` Align `tokens.stylex.ts` contrast comments, add missing tokens, and clean unused token**
   - **Locations.** `src/client/tokens.stylex.ts:8, 32, 50-51, 60-61, 79, 109, 156`.
   - **Preserved UX.** Do not alter any color values or rendered pixels.
   - **Steps.** Update comments in `tokens.stylex.ts` to accurately describe 7:1 AAA primary text vs intentional >= 5.5:1 hover/`surfaceElevated`/`surfaceAlt` badge pairings; add tokens needed by Slice G/H (`drawerWidth`, `accentGoldMarqueeBg`, `accentGoldDropBg`, `drawerHeaderHeight` / `lineHeightBody` / `fontWeightTitle` mappings) without changing resolved CSS values; remove unused `layout.sidebarCollapsedWidth`.
 
-- [ ] **E-7 `[Warning]` Replace repeated scrollbar hex literals in `global.css`**
+- [x] **E-7 `[Warning]` Replace repeated scrollbar hex literals in `global.css`**
   - **Locations.** `src/client/global.css:83-110`.
   - **Steps.** Define `--scrollbar-thumb` and `--scrollbar-thumb-hover` CSS variables in `global.css` with exact current light/dark hex values.
 
-- [ ] **E-8 `[Nit]` Clean unused types in `api.ts` and type `webkitdirectory` + drop markers cleanly**
+- [x] **E-8 `[Nit]` Clean unused types in `api.ts` and type `webkitdirectory` + drop markers cleanly**
   - **Locations.** `src/client/api.ts:6, 9, 11, 13-14`, `src/client/vite-env.d.ts`, `src/client/utils/virtualPath.ts`.
   - **Steps.** Remove unused `FilesResponse`, `FoldersResponse`, `Folder`, `PoolsResponse`, `PoolRecord` from `api.ts`; augment `React.InputHTMLAttributes<HTMLInputElement>` for `webkitdirectory`/`directory` in `vite-env.d.ts`; export `markDropHandled` / `isDropHandled` (`WeakSet<Event>`) in `virtualPath.ts`.
 

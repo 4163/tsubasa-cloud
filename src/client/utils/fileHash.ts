@@ -1,4 +1,11 @@
+import { yieldToMain } from './queryCache.js';
+
 const HASH_CHUNK_BYTES = 2 * 1024 * 1024;
+const HASH_YIELD_BUDGET_MS = 50;
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 export type ContentHashAlgorithm = 'md5' | 'sha256';
 export type FileContentVerification = 'identical' | 'different' | 'unverified';
@@ -292,11 +299,17 @@ export async function computeFileDigest(
   signal?: AbortSignal
 ): Promise<string> {
   if (algo === 'sha256' && file.size <= 32 * 1024 * 1024 && typeof crypto !== 'undefined' && crypto.subtle) {
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
     const buf = await file.arrayBuffer();
     if (signal?.aborted) {
       throw new DOMException('Aborted', 'AbortError');
     }
     const digest = await crypto.subtle.digest('SHA-256', buf);
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
     const bytes = new Uint8Array(digest);
     let hex = '';
     for (let i = 0; i < bytes.length; i++) {
@@ -306,6 +319,7 @@ export async function computeFileDigest(
   }
 
   const hasher = algo === 'md5' ? createMd5Hasher() : createSha256Hasher();
+  let lastYieldAt = nowMs();
   for (let offset = 0; offset < file.size; offset += HASH_CHUNK_BYTES) {
     if (signal?.aborted) {
       throw new DOMException('Aborted', 'AbortError');
@@ -316,6 +330,13 @@ export async function computeFileDigest(
       throw new DOMException('Aborted', 'AbortError');
     }
     hasher.update(new Uint8Array(chunkBuf));
+    if (end < file.size && nowMs() - lastYieldAt >= HASH_YIELD_BUDGET_MS) {
+      await yieldToMain();
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      lastYieldAt = nowMs();
+    }
   }
   return hasher.digestHex();
 }

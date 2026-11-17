@@ -7,6 +7,21 @@ export interface DragMoveItem {
 }
 
 const INTERNAL_DRAG_MIME = 'application/x-tsubasa-items';
+const handledDropEvents = new WeakSet<Event>();
+
+function unwrapNativeEvent(event: Event | React.SyntheticEvent): Event {
+  return 'nativeEvent' in event ? event.nativeEvent : event;
+}
+
+/** Marks a drop event as handled so parent drop zones skip duplicate processing. */
+export function markDropHandled(event: Event | React.SyntheticEvent): void {
+  handledDropEvents.add(unwrapNativeEvent(event));
+}
+
+/** Returns true if a drop event was already handled by a nested drop zone. */
+export function isDropHandled(event: Event | React.SyntheticEvent): boolean {
+  return handledDropEvents.has(unwrapNativeEvent(event));
+}
 
 let activeInternalDragPayload: DragMoveItem[] | null = null;
 

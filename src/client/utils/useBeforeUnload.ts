@@ -16,28 +16,6 @@ export function useBeforeUnload(active: boolean): void {
   }, [active]);
 }
 
-export function useDialogLock(isOpen: boolean, isBusy: boolean, onClose: () => void): void {
-  useBeforeUnload(isOpen && isBusy);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (!isBusy) {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [isOpen, isBusy, onClose]);
-}
-
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState<boolean>(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {

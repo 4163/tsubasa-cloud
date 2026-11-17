@@ -77,9 +77,15 @@ const MAX_POOL_CACHE_ENTRIES = 16;
 const MAX_DISCREPANCY_CACHE_ENTRIES = 64;
 const DEFAULT_DISCREPANCY_TTL_MS = 60_000;
 
+interface InFlightEntry<T = unknown> {
+  promise: Promise<T>;
+  controller: AbortController;
+  subscribers: number;
+}
+
 const poolCache = new Map<number, PoolCacheEntry>();
 const discrepancyCache = new Map<string, { report: DiscrepancyReport; updatedAt: number }>();
-const inFlightReads = new Map<string, Promise<unknown>>();
+const inFlightReads = new Map<string, InFlightEntry>();
 
 function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -232,47 +238,86 @@ export function invalidateDiscrepancyReportCache(accountId?: string): void {
 
 /**
  * Deduplicate concurrent identical reads by sharing a single in-flight promise.
- * If an AbortSignal aborts the initiator, evict the entry immediately so future callers never join a canceled promise.
+ * Each subscriber gets an independent abort wrapper; the underlying request only
+ * aborts when every active subscriber has aborted.
  */
 export function dedupeInFlight<T>(
   key: string,
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   signal?: AbortSignal
 ): Promise<T> {
   if (signal?.aborted) {
     return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
 
-  const existing = inFlightReads.get(key);
-  if (existing) {
-    return existing as Promise<T>;
-  }
-
-  let promise: Promise<T>;
-  try {
-    promise = fn();
-  } catch (err) {
-    return Promise.reject(err);
-  }
-
-  let cleanupAbort: (() => void) | null = null;
-  const tracked = promise.finally(() => {
-    cleanupAbort?.();
-    if (inFlightReads.get(key) === tracked) {
-      inFlightReads.delete(key);
+  let entry = inFlightReads.get(key) as InFlightEntry<T> | undefined;
+  if (!entry) {
+    const controller = new AbortController();
+    let rawPromise: Promise<T>;
+    try {
+      rawPromise = fn(controller.signal);
+    } catch (err) {
+      return Promise.reject(err);
     }
-  });
 
-  if (signal) {
-    const onAbort = () => {
-      if (inFlightReads.get(key) === tracked) {
+    const created: InFlightEntry<T> = {
+      promise: rawPromise,
+      controller,
+      subscribers: 0,
+    };
+    inFlightReads.set(key, created);
+    entry = created;
+
+    const cleanupEntry = () => {
+      if (inFlightReads.get(key) === created) {
         inFlightReads.delete(key);
       }
     };
-    signal.addEventListener('abort', onAbort, { once: true });
-    cleanupAbort = () => signal.removeEventListener('abort', onAbort);
+    rawPromise.then(cleanupEntry, cleanupEntry);
   }
 
-  inFlightReads.set(key, tracked);
-  return tracked;
+  entry.subscribers += 1;
+  const activeEntry = entry;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const onAbort = signal
+      ? () => {
+          if (settled) return;
+          settled = true;
+          activeEntry.subscribers -= 1;
+          if (activeEntry.subscribers <= 0 && inFlightReads.get(key) === activeEntry) {
+            inFlightReads.delete(key);
+            activeEntry.controller.abort();
+          }
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }
+      : null;
+
+    if (signal && onAbort) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const removeAbortListener = () => {
+      if (signal && onAbort) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    activeEntry.promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        removeAbortListener();
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        removeAbortListener();
+        reject(err);
+      }
+    );
+  });
 }

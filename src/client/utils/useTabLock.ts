@@ -44,7 +44,6 @@ interface TabLockSingleton {
   started: boolean;
   listeners: Set<(next: TabLockState) => void>;
   authListeners: Set<(payload: AuthCompletedPayload) => void>;
-  teardown?: () => void;
 }
 
 function createInstanceId(): string {
@@ -183,15 +182,17 @@ function clearSessionInstanceId(instanceId: string): void {
 }
 
 function sendServerRelease(instanceId: string): void {
+  // Use sendBeacon or keepalive fetch because standard RPC requests can be cancelled during pagehide teardown.
+  const releaseUrl = String(client.api.instance.release.$url());
   const payload = JSON.stringify({ instanceId });
   if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
     const sent = navigator.sendBeacon(
-      '/api/instance/release',
+      releaseUrl,
       new Blob([payload], { type: 'application/json' })
     );
     if (sent) return;
   }
-  void fetch('/api/instance/release', {
+  void fetch(releaseUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: payload,
@@ -347,6 +348,12 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
         transitionToBlocked(parseOwnerKind(data?.ownerKind));
         return;
       }
+
+      if (!res.ok) {
+        const status = (res as Response).status;
+        console.warn(`Instance claim returned HTTP ${status}; falling back to local lock.`);
+        serverClaimAttempted = false;
+      }
     } catch {
       // Server temporarily unreachable; fall back to local lock and let heartbeat sync when back.
     }
@@ -374,11 +381,13 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
             transitionToBlocked('browser');
             return;
           }
+          if (isUnloading) {
+            return;
+          }
           const lockPromise = new Promise<void>((resolve) => {
             releaseLock = resolve;
           });
           openActiveChannel();
-          publishState(singleton, { status: 'active', ownerKind: 'browser' });
           void activateWithServerLease();
           return lockPromise;
         })
@@ -395,12 +404,12 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
       Date.now() - existingLease.updatedAt < LEASE_TTL_MS;
 
     const activateFallback = () => {
+      if (isUnloading) return;
       writeStoredLease(instanceId);
       heartbeatTimer = window.setInterval(() => {
         writeStoredLease(instanceId);
       }, LEASE_HEARTBEAT_MS);
       openActiveChannel();
-      publishState(singleton, { status: 'active', ownerKind: 'browser' });
       void activateWithServerLease();
     };
 
@@ -471,20 +480,6 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
   window.addEventListener('pagehide', handlePageHide);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('pageshow', handlePageShow);
-
-  singleton.teardown = () => {
-    window.removeEventListener('pagehide', handlePageHide);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-    window.removeEventListener('pageshow', handlePageShow);
-    clearTimers();
-    releaseSameBrowserLock();
-    if (serverClaimAttempted) {
-      serverClaimAttempted = false;
-      sendServerRelease(instanceId);
-    }
-    singleton.started = false;
-    singleton.teardown = undefined;
-  };
 
   acquireLockAndLease();
 }

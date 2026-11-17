@@ -5,7 +5,9 @@ import * as stylex from '@stylexjs/stylex';
  * Fuses Hanekawa's cool monochrome slate, QuiviT sage-mint surfaces, and gold highlights
  * with Dropbox desktop spatial partitioning and MEGA mobile density.
  *
- * All text contrasts audited and compliant with WCAG AAA (7:1+ for normal body text).
+ * Primary and secondary text pairings on surface/canvas meet 7:1+ WCAG AAA.
+ * Intentional hover states, surfaceElevated, surfaceAlt badge pairings, and
+ * brandAccentHover/dangerHover sit at >= 5.5:1; disabledText is reserved for disabled controls.
  */
 export const colors = stylex.defineVars({
   // Surfaces & canvas
@@ -17,7 +19,7 @@ export const colors = stylex.defineVars({
   surfaceElevated: '#ffffff',
   surfaceAlt: '#e4ede7',
 
-  // Text hierarchy (WCAG AAA audited)
+  // Text hierarchy (7:1+ on surface/canvas; disabledText reserved for disabled controls)
   primaryText: '#111d18',
   headingText: '#111d18',
   secondaryText: '#2d453b',
@@ -35,6 +37,8 @@ export const colors = stylex.defineVars({
   accentGold: '#deb76c',
   accentGoldHover: '#e8c682',
   accentGoldText: '#111d18',
+  accentGoldMarqueeBg: 'rgba(222, 183, 108, 0.14)',
+  accentGoldDropBg: 'rgba(222, 183, 108, 0.10)',
   selectionBg: '#dcebe2',
   selectionBorder: '#deb76c',
   rowHover: '#e4ede7',
@@ -47,7 +51,7 @@ export const colors = stylex.defineVars({
   progressTrack: '#b8cbc0',
   poolGold: '#d98e04',
 
-  // Status semantics (Strict WCAG AAA contrast against surface #f7faf5)
+  // Status semantics (7:1+ on surface #f7faf5; hover states >= 5.5:1)
   success: '#116329',
   successSurface: '#e6f4ea',
   warning: '#6b3e00',
@@ -90,6 +94,8 @@ export const darkColors = stylex.createTheme(colors, {
   accentGold: '#d4a13c',
   accentGoldHover: '#e6b856',
   accentGoldText: '#111d18',
+  accentGoldMarqueeBg: 'rgba(222, 183, 108, 0.14)',
+  accentGoldDropBg: 'rgba(222, 183, 108, 0.10)',
   selectionBg: '#1b3b32',
   selectionBorder: '#d4a13c',
   rowHover: '#162d26',
@@ -151,9 +157,9 @@ export const radius = stylex.defineVars({
 export const layout = stylex.defineVars({
   headerHeight: '56px',
   drawerHeaderHeight: '48px',
+  drawerWidth: '460px',
   actionsPortalHeight: '48px',
   sidebarWidth: '280px',
-  sidebarCollapsedWidth: '64px',
   searchMaxWidth: '520px',
   searchHeight: '36px',
   tableRowHeight: '36px',

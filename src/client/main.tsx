@@ -2,6 +2,12 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors } from './tokens.stylex.js';
+import {
+  type EffectiveTheme,
+  THEME_STORAGE_KEY,
+  readInitialTheme,
+  applyDocumentTheme,
+} from './utils/theme.js';
 import { useTabLock } from './utils/useTabLock.js';
 import './global.css';
 
@@ -10,40 +16,13 @@ const TabBlockedModal = React.lazy(() =>
   import('./components/TabBlockedModal.js').then((m) => ({ default: m.TabBlockedModal }))
 );
 
-type EffectiveTheme = 'light' | 'dark';
-
-function readInitialTheme(): EffectiveTheme {
-  if (typeof window === 'undefined') return 'dark';
-  try {
-    const saved = window.localStorage.getItem('tsubasa-theme-choice');
-    if (saved === 'light' || saved === 'dark') {
-      return saved;
-    }
-  } catch {
-    // Ignore storage access errors in restricted browser contexts.
-  }
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
-function applyDocumentTheme(theme: EffectiveTheme): void {
-  if (typeof document === 'undefined') return;
-  document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.style.backgroundColor = theme === 'dark' ? '#0b1412' : '#eef2ec';
-  document.documentElement.style.color = theme === 'dark' ? '#e5f2eb' : '#111d18';
-  if (theme === 'dark') {
-    document.documentElement.classList.add('dark');
-  } else {
-    document.documentElement.classList.remove('dark');
-  }
-}
-
 function useResolvedTheme(): EffectiveTheme {
   const [effectiveTheme, setEffectiveTheme] = useState<EffectiveTheme>(readInitialTheme);
 
   useEffect(() => {
     let saved: string | null = null;
     try {
-      saved = window.localStorage.getItem('tsubasa-theme-choice');
+      saved = window.localStorage.getItem(THEME_STORAGE_KEY);
     } catch {
       saved = null;
     }
