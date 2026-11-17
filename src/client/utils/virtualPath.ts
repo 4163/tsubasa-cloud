@@ -31,10 +31,28 @@ export function getParentDir(path: string): string {
   return `/${parts.slice(0, -1).join('/')}`;
 }
 
+/** Validates an item or folder name, returning an error string or null if valid. */
+export function getItemNameError(trimmedName: string, label = 'Name'): string | null {
+  if (!trimmedName) {
+    return `${label} cannot be empty`;
+  }
+  if (trimmedName === '.' || trimmedName === '..') {
+    return `${label} cannot be "." or ".."`;
+  }
+  if (trimmedName.includes('/') || trimmedName.includes('\\')) {
+    return `${label} cannot contain slashes`;
+  }
+  if (/[\x00-\x1f\x7f]/.test(trimmedName)) {
+    return `${label} contains invalid control characters`;
+  }
+  return null;
+}
+
 /** Checks whether the dragged items can be dropped onto targetVirtualPath. */
 export function canDropInternalItemsToPath(
   targetVirtualPath: string,
   payload: ReadonlyArray<Pick<DragMoveItem, 'kind' | 'virtualPath'>> | null = activeInternalDragPayload,
+  allowSameParent = false,
 ): boolean {
   if (!payload || payload.length === 0) return false;
   const target = normalizeVirtualPath(targetVirtualPath);
@@ -47,6 +65,8 @@ export function canDropInternalItemsToPath(
       }
     }
   }
+
+  if (allowSameParent) return true;
 
   return payload.some(
     (item) => !item.virtualPath || getParentDir(normalizeVirtualPath(item.virtualPath)) !== target,
@@ -80,9 +100,10 @@ export function rejectInvalidInternalDragOver(
   e: React.DragEvent,
   targetVirtualPath: string,
   onClearDragOver?: () => void,
+  allowSameParent = false,
 ): boolean {
   if (!e.dataTransfer?.types?.includes(INTERNAL_DRAG_MIME)) return false;
-  if (canDropInternalItemsToPath(targetVirtualPath)) return false;
+  if (canDropInternalItemsToPath(targetVirtualPath, activeInternalDragPayload, allowSameParent)) return false;
   e.preventDefault();
   e.stopPropagation();
   if (e.dataTransfer) {
@@ -96,6 +117,7 @@ export function rejectInvalidInternalDragOver(
 export function parseInternalDropItems(
   e: React.DragEvent,
   targetVirtualPath: string,
+  allowSameParent = false,
 ): DragMoveItem[] | null {
   const raw = e.dataTransfer?.getData(INTERNAL_DRAG_MIME);
   if (!raw) return null;
@@ -104,7 +126,7 @@ export function parseInternalDropItems(
     if (
       Array.isArray(parsed) &&
       parsed.length > 0 &&
-      canDropInternalItemsToPath(targetVirtualPath, parsed as DragMoveItem[])
+      canDropInternalItemsToPath(targetVirtualPath, parsed as DragMoveItem[], allowSameParent)
     ) {
       return parsed as DragMoveItem[];
     }

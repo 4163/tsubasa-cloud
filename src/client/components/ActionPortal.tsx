@@ -66,6 +66,7 @@ interface ActionPortalProps {
   clipboard?: ActionPortalClipboard | null;
   onPaste?: () => void;
   onMoveItemsToPath?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => void;
+  onCopyItemsToPath?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => void;
   onDropExternalToPath?: (targetPath: string, dataTransfer: DataTransfer) => void;
   onShareSelected?: () => void;
   isSharePoolActive?: boolean;
@@ -471,6 +472,7 @@ export function ActionPortal({
   clipboard,
   onPaste,
   onMoveItemsToPath,
+  onCopyItemsToPath,
   onDropExternalToPath,
   onShareSelected,
   isSharePoolActive = false,
@@ -886,11 +888,21 @@ export function ActionPortal({
     if (!hasTsubasa && !hasFiles) return;
 
     const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
-    if (rejectInvalidInternalDragOver(e, targetPath, () => setDragOverIndex((prev) => (prev === index ? null : prev)))) return;
+    const isCopyDrag = hasTsubasa && (e.ctrlKey || e.altKey) && Boolean(onCopyItemsToPath);
+    if (
+      rejectInvalidInternalDragOver(
+        e,
+        targetPath,
+        () => setDragOverIndex((prev) => (prev === index ? null : prev)),
+        isCopyDrag
+      )
+    ) {
+      return;
+    }
 
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = hasTsubasa ? 'move' : 'copy';
+    e.dataTransfer.dropEffect = hasTsubasa ? (isCopyDrag ? 'copy' : 'move') : 'copy';
     setDragOverIndex(index);
   }
 
@@ -911,9 +923,14 @@ export function ActionPortal({
     const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
 
     if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
-      const parsed = parseInternalDropItems(e, targetPath);
+      const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItemsToPath);
+      const parsed = parseInternalDropItems(e, targetPath, isCopyDrag);
       if (parsed) {
-        onMoveItemsToPath?.(parsed, targetPath);
+        if (isCopyDrag) {
+          onCopyItemsToPath?.(parsed, targetPath);
+        } else {
+          onMoveItemsToPath?.(parsed, targetPath);
+        }
       }
       return;
     }

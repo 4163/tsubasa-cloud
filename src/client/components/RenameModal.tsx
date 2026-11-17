@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconEdit, IconClose } from './Icons.js';
 import { ModalDialog } from './ModalDialog.js';
+import { getItemNameError } from '../utils/virtualPath.js';
 
 export interface RenameTarget {
   kind: 'file' | 'folder' | 'pool';
@@ -266,12 +267,9 @@ export function RenameModal({
     if (isSubmitting || !item) return;
 
     const trimmed = name.trim();
-    if (!trimmed) {
-      setError('Name cannot be empty');
-      return;
-    }
-    if (trimmed.includes('/') || trimmed.includes('\\')) {
-      setError('Name cannot contain slashes');
+    const validationError = getItemNameError(trimmed, 'Name');
+    if (validationError) {
+      setError(validationError);
       return;
     }
     if (trimmed === item.name) {

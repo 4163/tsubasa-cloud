@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
 import { IconFolderPlus, IconClose } from './Icons';
 import { ModalDialog } from './ModalDialog.js';
+import { getItemNameError } from '../utils/virtualPath.js';
 
 interface NewFolderModalProps {
   isOpen: boolean;
@@ -251,8 +252,9 @@ export function NewFolderModal({
     if (isSubmitting) return;
 
     const finalName = folderName.trim() || 'New folder';
-    if (finalName.includes('/') || finalName.includes('\\')) {
-      setError('Folder name cannot contain slashes');
+    const validationError = getItemNameError(finalName, 'Folder name');
+    if (validationError) {
+      setError(validationError);
       return;
     }
 

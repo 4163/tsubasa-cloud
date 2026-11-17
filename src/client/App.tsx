@@ -13,7 +13,7 @@ import React, {
 import { flushSync } from 'react-dom';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
-import { colors, darkColors } from './tokens.stylex.js';
+import { colors, darkColors, motion, radius, spacing, typography } from './tokens.stylex.js';
 import { filterMovableItemsToPath } from './utils/virtualPath.js';
 import { Header, type ThemeChoice } from './components/Header.js';
 import { Sidebar, type AccountItem, type PoolSummary } from './components/Sidebar.js';
@@ -30,8 +30,10 @@ import {
   type ClientFolder,
 } from './components/FileTable.js';
 import { DitherDivider } from './components/DitherDivider.js';
+import { IconAlertTriangle, IconClose } from './components/Icons.js';
 import type { StagedItem } from './components/UploadDrawer.js';
 import type { RenameTarget } from './components/RenameModal.js';
+import type { MoveConflictItem, MoveConflictResolutionMode } from './components/MoveConflictModal.js';
 import type { ShareExecuteResult, ShareTargetItem } from './components/ShareModal.js';
 
 const UploadDrawer = lazy(() =>
@@ -60,6 +62,9 @@ const MovePoolModal = lazy(() =>
 const MoveFilesModal = lazy(() =>
   import('./components/MoveFilesModal.js').then((m) => ({ default: m.MoveFilesModal }))
 );
+const MoveConflictModal = lazy(() =>
+  import('./components/MoveConflictModal.js').then((m) => ({ default: m.MoveConflictModal }))
+);
 const ShareModal = lazy(() =>
   import('./components/ShareModal.js').then((m) => ({ default: m.ShareModal }))
 );
@@ -67,6 +72,116 @@ function reportDevError(context: string, err: unknown): void {
   if (import.meta.env.DEV) {
     console.error(`[tsubasa] ${context}:`, err);
   }
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (typeof err === 'string' && err.trim().length > 0) return err;
+  if (err instanceof Error && err.message.trim().length > 0) return err.message;
+  if (
+    err &&
+    typeof err === 'object' &&
+    'error' in err &&
+    typeof err.error === 'string' &&
+    err.error.trim().length > 0
+  ) {
+    return err.error;
+  }
+  return fallback;
+}
+
+interface ItemOperationResult {
+  id?: string;
+  kind?: 'file' | 'folder';
+  oldPath?: string;
+  newPath?: string;
+  success?: boolean;
+  skipped?: boolean;
+  error?: string;
+}
+
+function remapPathPrefix(virtualPath: string, oldPrefix: string, newPrefix: string): string | null {
+  if (virtualPath === oldPrefix) return newPrefix;
+  if (virtualPath.startsWith(`${oldPrefix}/`)) {
+    return `${newPrefix}${virtualPath.slice(oldPrefix.length)}`;
+  }
+  return null;
+}
+
+function applyMoveResultsToClipboard(
+  clipboard: ActionPortalClipboard | null,
+  poolId: number,
+  results: ItemOperationResult[]
+): ActionPortalClipboard | null {
+  if (!clipboard) return null;
+  const movedNonSkipped = results.filter((r) => r.success && !r.skipped);
+  const movedIds = new Set(
+    movedNonSkipped.map((r) => r.id).filter((id): id is string => Boolean(id))
+  );
+  const movedFolders = movedNonSkipped.filter(
+    (r): r is ItemOperationResult & { oldPath: string; newPath: string } =>
+      r.kind === 'folder' && Boolean(r.oldPath && r.newPath && r.oldPath !== r.newPath)
+  );
+  const movedFilesById = new Map<string, string>();
+  for (const r of movedNonSkipped) {
+    if (r.kind === 'file' && r.id && r.newPath) {
+      movedFilesById.set(r.id, r.newPath);
+    }
+  }
+
+  const baseItems =
+    clipboard.mode === 'cut'
+      ? clipboard.items.filter((item) => !movedIds.has(item.id))
+      : clipboard.items;
+  if (baseItems.length === 0) return null;
+
+  const nextItems = baseItems.map((item) => {
+    const directFilePath = item.kind === 'file' ? movedFilesById.get(item.id) : undefined;
+    if (directFilePath) {
+      const updatedName = directFilePath.split('/').pop() || item.name;
+      return { ...item, virtualPath: directFilePath, name: updatedName };
+    }
+    for (const folderMove of movedFolders) {
+      const remapped = remapPathPrefix(item.virtualPath, folderMove.oldPath, folderMove.newPath);
+      if (remapped !== null) {
+        return {
+          ...item,
+          virtualPath: remapped,
+          ...(item.kind === 'folder' ? { id: `${poolId}:${remapped}` } : {}),
+        };
+      }
+    }
+    return item;
+  });
+
+  return { ...clipboard, items: nextItems };
+}
+
+function parseItemOperationResults(data: unknown): ItemOperationResult[] {
+  if (Array.isArray(data)) return data as ItemOperationResult[];
+  if (data && typeof data === 'object' && 'results' in data && Array.isArray(data.results)) {
+    return data.results as ItemOperationResult[];
+  }
+  return [];
+}
+
+interface PendingMoveConflict {
+  items: Array<{ kind: 'file' | 'folder'; id: string }>;
+  targetFolderPath: string;
+  poolId: number;
+  conflicts: MoveConflictItem[];
+  cleanCount: number;
+}
+
+interface MoveConflictPayload {
+  code: 'MOVE_CONFLICT';
+  conflicts: MoveConflictItem[];
+  cleanCount?: number;
+}
+
+function isMoveConflictPayload(data: unknown): data is MoveConflictPayload {
+  if (!data || typeof data !== 'object') return false;
+  const candidate = data as Record<string, unknown>;
+  return candidate.code === 'MOVE_CONFLICT' && Array.isArray(candidate.conflicts);
 }
 import { copyTextToClipboard, SHARE_POOL_RESERVE_ID } from './utils/format.js';
 import { useBeforeUnload, useMediaQuery } from './utils/useBeforeUnload.js';
@@ -116,6 +231,90 @@ const styles = stylex.create({
     minWidth: 0,
     overflow: 'hidden',
     position: 'relative',
+  },
+  workspaceErrorRegion: {
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
+    backgroundColor: colors.surface,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
+    flexShrink: 0,
+  },
+  workspaceErrorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space3,
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    backgroundColor: colors.dangerSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.dangerBorder,
+    borderRadius: radius.compact,
+    color: colors.dangerTextOnSurface,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBody,
+    lineHeight: typography.lineHeightBody,
+    boxSizing: 'border-box',
+  },
+  workspaceErrorContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+    flex: 1,
+  },
+  workspaceErrorIcon: {
+    flexShrink: 0,
+  },
+  workspaceErrorText: {
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+  },
+  workspaceErrorDismissBtn: {
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.dangerBorder,
+    backgroundColor: colors.surface,
+    color: colors.primaryText,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: typography.fontWeightSection,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space1,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    cursor: 'pointer',
+    outline: 'none',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+      color: colors.primaryText,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+      minWidth: '44px',
+    },
   },
   fileTableStage: {
     display: 'flex',
@@ -313,9 +512,18 @@ export function App() {
   const currentNavRef = useRef(currentNav);
   currentNavRef.current = currentNav;
   const [clipboard, setClipboard] = useState<ActionPortalClipboard | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const surfaceWorkspaceError = useCallback((context: string, err: unknown, fallback: string) => {
+    const message = extractErrorMessage(err, fallback);
+    setWorkspaceError(message);
+    reportDevError(context, err instanceof Error ? err : message);
+  }, []);
   const [renameModalItem, setRenameModalItem] = useState<RenameTarget | null>(null);
   const [movePoolTargetAccount, setMovePoolTargetAccount] = useState<AccountItem | null>(null);
   const [moveFilesModalGroup, setMoveFilesModalGroup] = useState<SelectedAccountGroup | null>(null);
+  const [pendingMoveConflict, setPendingMoveConflict] = useState<PendingMoveConflict | null>(null);
+  const [isResolvingMoveConflict, setIsResolvingMoveConflict] = useState(false);
+  const [scrollRequest, setScrollRequest] = useState<{ id: string; seq: number } | null>(null);
   const [filteredAccountIds, setFilteredAccountIds] = useState<Set<string>>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -374,6 +582,7 @@ export function App() {
   }, [currentNav]);
 
   const handleSelectNav = useCallback((nav: 'files' | 'trash') => {
+    setWorkspaceError(null);
     runWithViewTransition(() => {
       flushSync(() => {
         setCurrentNav(nav);
@@ -383,6 +592,7 @@ export function App() {
 
   const handleNavigate = useCallback(
     (newPath: string) => {
+      setWorkspaceError(null);
       if (typeof window !== 'undefined') {
         const nextUrl = getPathUrl(newPath);
         if (newPath !== currentPath) {
@@ -982,6 +1192,10 @@ export function App() {
     setFilteredAccountIds(new Set());
     setSelectedIds(new Set());
     setClipboard(null);
+    setWorkspaceError(null);
+    setPendingMoveConflict(null);
+    setIsResolvingMoveConflict(false);
+    setScrollRequest(null);
     setPendingDiscrepancies({});
     trashStaleRef.current = false;
   }, []);
@@ -1037,11 +1251,14 @@ export function App() {
         }
         setActivePoolId(nextPoolId);
         setCurrentPath('/');
+        setWorkspaceError(null);
         setIsUploadDrawerOpen(false);
         setIsExternalChangesOpen(false);
         setShareModalState(null);
         setIsClearSharePoolOpen(false);
         setMoveFilesModalGroup(null);
+        setPendingMoveConflict(null);
+        setIsResolvingMoveConflict(false);
         setRenameModalItem(null);
       });
     },
@@ -1164,9 +1381,6 @@ export function App() {
           next.add(id);
         }
         return next;
-      }
-      if (prev.has(id) && prev.size === 1) {
-        return new Set();
       }
       return new Set([id]);
     });
@@ -1447,8 +1661,12 @@ export function App() {
       const poolId = activePoolIdRef.current;
       const newPath = (targetPath === '/' ? '' : targetPath) + '/' + folderName;
       const prevFolders = foldersRef.current;
+      const prevFiles = filesRef.current;
       if (prevFolders.some((f) => f.virtualPath === newPath)) {
         throw new Error(`A folder named "${folderName}" already exists in this directory`);
+      }
+      if (prevFiles.some((f) => !f.isTrashed && f.virtualPath === newPath)) {
+        throw new Error(`A file named "${folderName}" already exists in this directory`);
       }
 
       const parentFolder = prevFolders.find((f) => f.virtualPath === targetPath) ?? null;
@@ -1469,7 +1687,11 @@ export function App() {
           json: { virtualPath: newPath, name: folderName, poolId },
         });
         if (res.ok) {
+          const created = (await res.json().catch(() => null)) as { id?: string } | null;
+          const createdId = created?.id || `${poolId}:${newPath}`;
           await loadFiles(targetPath, poolId);
+          setSelectedIds(new Set([createdId]));
+          setScrollRequest((prev) => ({ id: createdId, seq: (prev?.seq ?? 0) + 1 }));
           return;
         }
         setFolders(prevFolders);
@@ -1556,6 +1778,7 @@ export function App() {
 
   const handleTrash = useCallback(
     async (file: ClientFileRecord) => {
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       const prevFiles = filesRef.current;
       const prevTrashed = trashedFilesRef.current;
@@ -1576,14 +1799,15 @@ export function App() {
       } else {
         setFiles(prevFiles);
         setTrashedFiles(prevTrashed);
-        reportDevError('handleTrash', result.error || 'Failed to move file to trash');
+        surfaceWorkspaceError('handleTrash', result.error, 'Failed to move file to trash');
       }
     },
-    [markTrashStale, loadFiles, loadTrashFiles, loadClusterData]
+    [markTrashStale, loadFiles, loadTrashFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handleRestoreFile = useCallback(
     async (file: ClientFileRecord) => {
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       const prevTrashed = trashedFilesRef.current;
       const prevFiles = filesRef.current;
@@ -1600,14 +1824,15 @@ export function App() {
       } else {
         setTrashedFiles(prevTrashed);
         setFiles(prevFiles);
-        reportDevError('handleRestoreFile', result.error || 'Restore failed');
+        surfaceWorkspaceError('handleRestoreFile', result.error, 'Restore failed');
       }
     },
-    [loadTrashFiles, loadFiles, loadClusterData]
+    [loadTrashFiles, loadFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handlePermanentDelete = useCallback(
     async (file: ClientFileRecord) => {
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       const prevTrashed = trashedFilesRef.current;
       const prevSelected = selectedIds;
@@ -1627,14 +1852,15 @@ export function App() {
       } else {
         setTrashedFiles(prevTrashed);
         setSelectedIds(prevSelected);
-        reportDevError('handlePermanentDelete', result.error || 'Delete failed');
+        surfaceWorkspaceError('handlePermanentDelete', result.error, 'Delete failed');
       }
     },
-    [selectedIds, loadTrashFiles, loadClusterData]
+    [selectedIds, loadTrashFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handleDeleteFolder = useCallback(
     async (folder: ClientFolder) => {
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       const prevFolders = foldersRef.current;
       const prevFiles = filesRef.current;
@@ -1665,10 +1891,10 @@ export function App() {
         setFolders(prevFolders);
         setFiles(prevFiles);
         setSelectedIds(prevSelected);
-        reportDevError('handleDeleteFolder', result.error || 'Failed to delete folder');
+        surfaceWorkspaceError('handleDeleteFolder', result.error, 'Failed to delete folder');
       }
     },
-    [selectedIds, handleNavigate, loadFiles]
+    [selectedIds, handleNavigate, loadFiles, surfaceWorkspaceError]
   );
 
   const executeDeleteBatch = useCallback(
@@ -1677,6 +1903,7 @@ export function App() {
       selectedFolders: ClientFolder[],
       selectedFilesList: ClientFileRecord[]
     ) => {
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       const prevFiles = filesRef.current;
       const prevFolders = foldersRef.current;
@@ -1704,9 +1931,10 @@ export function App() {
           if (failed.length > 0) {
             setTrashedFiles(prevTrashed);
             setSelectedIds(prevSelected);
-            reportDevError(
+            surfaceWorkspaceError(
               'executeDeleteBatch.permanent',
-              failed[0].error || 'Some files could not be permanently deleted'
+              failed[0].error,
+              'Some files could not be permanently deleted'
             );
           }
           await Promise.all([loadTrashFiles(poolId), loadClusterData(poolId)]);
@@ -1731,9 +1959,10 @@ export function App() {
             setFiles(prevFiles);
             setFolders(prevFolders);
             setSelectedIds(prevSelected);
-            reportDevError(
+            surfaceWorkspaceError(
               'executeDeleteBatch',
-              failedFolder?.error || failedFile?.error || 'Some items could not be deleted'
+              failedFolder?.error || failedFile?.error,
+              'Some items could not be deleted'
             );
           } else if (nextPath !== currentPathRef.current) {
             handleNavigate(nextPath);
@@ -1742,7 +1971,7 @@ export function App() {
         }
       });
     },
-    [selectedIds, markTrashStale, runPendingOp, loadTrashFiles, loadClusterData, handleNavigate, loadFiles]
+    [selectedIds, markTrashStale, runPendingOp, loadTrashFiles, loadClusterData, handleNavigate, loadFiles, surfaceWorkspaceError]
   );
 
   const handleDeleteSelected = useCallback(async () => {
@@ -1756,6 +1985,22 @@ export function App() {
     );
     await executeDeleteBatch(navMode, selectedFolders, selectedFilesList);
   }, [selectedIds, executeDeleteBatch]);
+
+  const refreshAfterMove = useCallback(
+    async (poolId: number) => {
+      if (currentNavRef.current === 'trash') {
+        await Promise.all([
+          loadFiles(currentPathRef.current, poolId),
+          loadTrashFiles(poolId),
+          loadClusterData(poolId),
+        ]);
+      } else {
+        markTrashStale(poolId);
+        await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
+      }
+    },
+    [loadFiles, loadTrashFiles, loadClusterData, markTrashStale]
+  );
 
   const handleMoveItems = useCallback(
     async (itemsToMove: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
@@ -1774,6 +2019,7 @@ export function App() {
         (item) => (item.kind === 'folder' ? folderById.get(item.id) : fileById.get(item.id))?.virtualPath
       );
       if (validItems.length === 0) return;
+      setWorkspaceError(null);
 
       const movedIds = new Set(validItems.map((i) => i.id));
       const destPrefix = normTarget === '/' ? '' : normTarget;
@@ -1793,41 +2039,49 @@ export function App() {
       await runPendingOp(async () => {
         try {
           const res = await client.api.items.move.$post({
-            json: { items: validItems, targetFolderPath: normTarget, poolId },
+            json: { items: validItems, targetFolderPath: normTarget, poolId, conflictMode: 'reject' },
           });
-          const data = await res.json().catch(() => ({}));
+          const data: unknown = await res.json().catch(() => ({}));
+          if (res.status === 409 && isMoveConflictPayload(data)) {
+            setFiles(prevFiles);
+            setFolders(prevFolders);
+            setClipboard(prevClipboard);
+            setSelectedIds(prevSelected);
+            setPendingMoveConflict({
+              items: validItems,
+              targetFolderPath: normTarget,
+              poolId,
+              conflicts: data.conflicts,
+              cleanCount: typeof data.cleanCount === 'number' ? data.cleanCount : 0,
+            });
+            return;
+          }
           if (res.ok) {
-            const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
-            const failed = results.filter((r: any) => !r.success);
+            const results = parseItemOperationResults(data);
+            const failed = results.filter((r) => !r.success);
             if (failed.length > 0) {
               setFiles(prevFiles);
               setFolders(prevFolders);
               setClipboard(prevClipboard);
               setSelectedIds(prevSelected);
-              reportDevError('handleMoveItems', failed[0].error || 'Some items could not be moved');
-            }
-            if (currentNavRef.current === 'trash') {
-              await Promise.all([loadFiles(currentPathRef.current, poolId), loadTrashFiles(poolId), loadClusterData(poolId)]);
+              surfaceWorkspaceError('handleMoveItems', failed[0].error, 'Some items could not be moved');
             } else {
-              markTrashStale(poolId);
-              await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
+              setClipboard(applyMoveResultsToClipboard(prevClipboard, poolId, results));
             }
+            await refreshAfterMove(poolId);
           } else {
             setFiles(prevFiles);
             setFolders(prevFolders);
             setClipboard(prevClipboard);
             setSelectedIds(prevSelected);
-            reportDevError(
-              'handleMoveItems',
-              ('error' in data ? (data.error as string) : null) || 'Failed to move items'
-            );
+            surfaceWorkspaceError('handleMoveItems', data, 'Failed to move items');
           }
         } catch (err) {
           setFiles(prevFiles);
           setFolders(prevFolders);
           setClipboard(prevClipboard);
           setSelectedIds(prevSelected);
-          reportDevError('handleMoveItems', err);
+          surfaceWorkspaceError('handleMoveItems', err, 'Failed to move items');
         }
       });
     },
@@ -1836,11 +2090,51 @@ export function App() {
       clipboard,
       selectedIds,
       runPendingOp,
-      loadFiles,
-      loadTrashFiles,
-      loadClusterData,
-      markTrashStale,
+      refreshAfterMove,
+      surfaceWorkspaceError,
     ]
+  );
+
+  const handleResolveMoveConflict = useCallback(
+    async (mode: MoveConflictResolutionMode) => {
+      if (!pendingMoveConflict || isResolvingMoveConflict) return;
+      const { items, targetFolderPath, poolId } = pendingMoveConflict;
+      setIsResolvingMoveConflict(true);
+      setWorkspaceError(null);
+
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.items.move.$post({
+            json: { items, targetFolderPath, poolId, conflictMode: mode },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            const results = parseItemOperationResults(data);
+            const failed = results.filter((r) => !r.success);
+            setClipboard((prev) => applyMoveResultsToClipboard(prev, poolId, results));
+            setSelectedIds(new Set());
+            if (failed.length > 0) {
+              surfaceWorkspaceError(
+                'handleResolveMoveConflict',
+                failed[0].error,
+                'Some items could not be moved'
+              );
+            }
+            setPendingMoveConflict(null);
+            await refreshAfterMove(poolId);
+          } else {
+            surfaceWorkspaceError('handleResolveMoveConflict', data, 'Failed to move items');
+            setPendingMoveConflict(null);
+          }
+        } catch (err) {
+          surfaceWorkspaceError('handleResolveMoveConflict', err, 'Failed to move items');
+          setPendingMoveConflict(null);
+        } finally {
+          setIsResolvingMoveConflict(false);
+        }
+      });
+    },
+    [pendingMoveConflict, isResolvingMoveConflict, runPendingOp, refreshAfterMove, surfaceWorkspaceError]
   );
 
   const handleTrashItems = useCallback(
@@ -1855,6 +2149,7 @@ export function App() {
     ) => {
       const activeItems = itemsToTrash.filter((item) => !item.isTrashed);
       if (activeItems.length === 0) return;
+      setWorkspaceError(null);
 
       const poolId = activePoolIdRef.current;
       const prevFiles = filesRef.current;
@@ -1922,7 +2217,7 @@ export function App() {
             setFolders(prevFolders);
             setSelectedIds(prevSelected);
             setClipboard(prevClipboard);
-            reportDevError('handleTrashItems', 'Some items could not be moved to trash');
+            surfaceWorkspaceError('handleTrashItems', null, 'Some items could not be moved to trash');
           } else if (trashedIds.size > 0 && effectivePath !== currentPathRef.current) {
             handleNavigate(effectivePath);
           }
@@ -1938,7 +2233,7 @@ export function App() {
           setFolders(prevFolders);
           setSelectedIds(prevSelected);
           setClipboard(prevClipboard);
-          reportDevError('handleTrashItems', err);
+          surfaceWorkspaceError('handleTrashItems', err, 'Some items could not be moved to trash');
         }
       });
     },
@@ -1951,12 +2246,14 @@ export function App() {
       loadTrashFiles,
       loadClusterData,
       markTrashStale,
+      surfaceWorkspaceError,
     ]
   );
 
   const handleCopyItems = useCallback(
     async (itemsToCopy: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
       if (itemsToCopy.length === 0) return;
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       await runPendingOp(async () => {
         try {
@@ -1965,25 +2262,22 @@ export function App() {
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
-            const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
-            const failed = results.filter((r: any) => !r.success);
+            const results = parseItemOperationResults(data);
+            const failed = results.filter((r) => !r.success);
             if (failed.length > 0) {
-              reportDevError('handleCopyItems', failed[0].error || 'Some items could not be copied');
+              surfaceWorkspaceError('handleCopyItems', failed[0].error, 'Some items could not be copied');
             }
             setSelectedIds(new Set());
             await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
           } else {
-            reportDevError(
-              'handleCopyItems',
-              ('error' in data ? (data.error as string) : null) || 'Failed to copy items'
-            );
+            surfaceWorkspaceError('handleCopyItems', data, 'Failed to copy items');
           }
         } catch (err) {
-          reportDevError('handleCopyItems', err);
+          surfaceWorkspaceError('handleCopyItems', err, 'Failed to copy items');
         }
       });
     },
-    [loadFiles, loadClusterData, runPendingOp]
+    [loadFiles, loadClusterData, runPendingOp, surfaceWorkspaceError]
   );
 
   const handleCutSelected = useCallback(() => {
@@ -2085,6 +2379,22 @@ export function App() {
           if (prevFolders.some((f) => f.id !== id && f.virtualPath === candidatePath)) {
             throw new Error(`A folder named "${newName}" already exists in this directory`);
           }
+          if (prevFiles.some((f) => !f.isTrashed && f.virtualPath === candidatePath)) {
+            throw new Error(`A file named "${newName}" already exists in this directory`);
+          }
+        }
+      } else {
+        const targetFile =
+          prevFiles.find((f) => f.id === id) ?? prevTrashed.find((f) => f.id === id);
+        if (targetFile && !targetFile.isTrashed) {
+          const parentPath = getParentFolderPath(targetFile.virtualPath);
+          const candidatePath = (parentPath === '/' ? '' : parentPath) + '/' + newName;
+          if (prevFolders.some((f) => f.virtualPath === candidatePath)) {
+            throw new Error(`A folder named "${newName}" already exists in this directory`);
+          }
+          if (prevFiles.some((f) => !f.isTrashed && f.id !== id && f.virtualPath === candidatePath)) {
+            throw new Error(`A file named "${newName}" already exists in this directory`);
+          }
         }
       }
 
@@ -2107,17 +2417,60 @@ export function App() {
           const newFolderP =
             ('newPath' in data ? (data.newPath as string) : null) ||
             ('newVirtualPath' in data ? (data.newVirtualPath as string) : null);
-          if (
+          const renamedId = kind === 'folder' && newFolderP ? `${poolId}:${newFolderP}` : id;
+
+          if (kind === 'folder' && oldFolderP && newFolderP) {
+            setClipboard((prev) => {
+              if (!prev) return prev;
+              let changed = false;
+              const nextItems = prev.items.map((item) => {
+                const remapped = remapPathPrefix(item.virtualPath, oldFolderP, newFolderP);
+                if (remapped === null) return item;
+                changed = true;
+                const isExactFolder = item.kind === 'folder' && item.virtualPath === oldFolderP;
+                return {
+                  ...item,
+                  virtualPath: remapped,
+                  ...(isExactFolder ? { name: newName } : {}),
+                  ...(item.kind === 'folder' ? { id: `${poolId}:${remapped}` } : {}),
+                };
+              });
+              return changed ? { ...prev, items: nextItems } : prev;
+            });
+          } else if (kind === 'file') {
+            setClipboard((prev) => {
+              if (!prev) return prev;
+              let changed = false;
+              const nextItems = prev.items.map((item) => {
+                if (item.kind !== 'file' || item.id !== id) return item;
+                changed = true;
+                const parentPath = getParentFolderPath(item.virtualPath);
+                const nextVirtualPath =
+                  newFolderP || (parentPath === '/' ? '' : parentPath) + '/' + newName;
+                return {
+                  ...item,
+                  name: newName,
+                  virtualPath: nextVirtualPath,
+                };
+              });
+              return changed ? { ...prev, items: nextItems } : prev;
+            });
+          }
+
+          const isInsideRenamedFolder =
             kind === 'folder' &&
-            oldFolderP &&
-            (targetPath === oldFolderP || targetPath.startsWith(oldFolderP + '/'))
-          ) {
+            Boolean(oldFolderP) &&
+            (targetPath === oldFolderP || targetPath.startsWith(oldFolderP + '/'));
+
+          if (isInsideRenamedFolder && oldFolderP) {
             const relativeSuffix = targetPath.slice(oldFolderP.length);
             const nextPath = `${newFolderP}${relativeSuffix}`;
             handleNavigate(nextPath);
             await loadFiles(nextPath, poolId);
           } else {
             await loadFiles(targetPath, poolId);
+            setSelectedIds(new Set([renamedId]));
+            setScrollRequest((prev) => ({ id: renamedId, seq: (prev?.seq ?? 0) + 1 }));
           }
           return;
         }
@@ -2145,6 +2498,7 @@ export function App() {
   const executeBatchRestore = useCallback(
     async (toRestore: ClientFileRecord[]) => {
       if (toRestore.length === 0) return;
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       const prevTrashed = trashedFilesRef.current;
       const prevFiles = filesRef.current;
@@ -2162,9 +2516,10 @@ export function App() {
           setTrashedFiles(prevTrashed);
           setFiles(prevFiles);
           setSelectedIds(prevSelected);
-          reportDevError(
+          surfaceWorkspaceError(
             'executeBatchRestore',
-            failed[0].error || 'Some files could not be restored'
+            failed[0].error,
+            'Some files could not be restored'
           );
         }
         await Promise.all([
@@ -2174,7 +2529,7 @@ export function App() {
         ]);
       });
     },
-    [selectedIds, runPendingOp, loadTrashFiles, loadFiles, loadClusterData]
+    [selectedIds, runPendingOp, loadTrashFiles, loadFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handleBatchRestore = useCallback(async () => {
@@ -2198,6 +2553,7 @@ export function App() {
     handleCutSelected,
     handleCopySelected,
     handlePaste,
+    handleOpenNewFolder,
     handleOpenRenameSelected,
     handleDeleteSelected,
     handleDownload,
@@ -2216,6 +2572,7 @@ export function App() {
     handleCutSelected,
     handleCopySelected,
     handlePaste,
+    handleOpenNewFolder,
     handleOpenRenameSelected,
     handleDeleteSelected,
     handleDownload,
@@ -2254,6 +2611,9 @@ export function App() {
         if (state.selectedIds.size > 0) {
           e.preventDefault();
           setSelectedIds(new Set());
+        } else if (state.clipboard?.mode === 'cut') {
+          e.preventDefault();
+          setClipboard(null);
         }
         return;
       }
@@ -2264,6 +2624,33 @@ export function App() {
         }
         e.preventDefault();
         void state.handleDeleteSelected();
+        return;
+      }
+
+      if (
+        e.key === 'Backspace' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        state.selectedIds.size === 0 &&
+        state.currentNav === 'files' &&
+        state.currentPath !== '/'
+      ) {
+        e.preventDefault();
+        state.handleNavigate(getParentFolderPath(state.currentPath));
+        return;
+      }
+
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.shiftKey &&
+        !e.altKey &&
+        (e.key === 'n' || e.key === 'N')
+      ) {
+        if (!state.isSharePoolActive && state.currentNav === 'files') {
+          e.preventDefault();
+          state.handleOpenNewFolder();
+        }
         return;
       }
 
@@ -2350,6 +2737,7 @@ export function App() {
 
   const handleEmptyTrashExecute = useCallback(async () => {
     setConfirmEmptyTrash(false);
+    setWorkspaceError(null);
     const poolId = activePoolIdRef.current;
     const prevTrashed = trashedFilesRef.current;
     const prevSelected = selectedIds;
@@ -2368,18 +2756,15 @@ export function App() {
           setTrashedFiles(prevTrashed);
           setSelectedIds(prevSelected);
           const err = await res.json().catch(() => ({}));
-          reportDevError(
-            'handleEmptyTrashExecute',
-            ('error' in err ? (err.error as string) : null) || 'Empty trash failed'
-          );
+          surfaceWorkspaceError('handleEmptyTrashExecute', err, 'Empty trash failed');
         }
       } catch (err) {
         setTrashedFiles(prevTrashed);
         setSelectedIds(prevSelected);
-        reportDevError('handleEmptyTrashExecute', err);
+        surfaceWorkspaceError('handleEmptyTrashExecute', err, 'Empty trash failed');
       }
     });
-  }, [selectedIds, runPendingOp, loadTrashFiles, loadClusterData]);
+  }, [selectedIds, runPendingOp, loadTrashFiles, loadClusterData, surfaceWorkspaceError]);
 
   // Count active files per account to show the filter toggle only on accounts with files in the pool
   const accountFileCountMap = useMemo(() => {
@@ -2466,6 +2851,7 @@ export function App() {
   const handleTransferFile = useCallback(
     async (fileId: string, targetAccountId: string) => {
       if (isSharePoolActive) return;
+      setWorkspaceError(null);
       const poolId = activePoolIdRef.current;
       setTransferringFileId(fileId);
       try {
@@ -2476,23 +2862,21 @@ export function App() {
           await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
         } else {
           const err = await res.json().catch(() => ({}));
-          reportDevError(
-            'handleTransferFile',
-            ('error' in err ? (err.error as string) : null) || 'Failed to transfer file'
-          );
+          surfaceWorkspaceError('handleTransferFile', err, 'Failed to transfer file');
         }
       } catch (err) {
-        reportDevError('handleTransferFile', err);
+        surfaceWorkspaceError('handleTransferFile', err, 'Failed to transfer file');
       } finally {
         setTransferringFileId(null);
       }
     },
-    [isSharePoolActive, loadFiles, loadClusterData]
+    [isSharePoolActive, loadFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handleTransferBatch = useCallback(
     async (fileIds: string[], targetAccountId: string) => {
       if (isSharePoolActive) return;
+      setWorkspaceError(null);
       setMoveFilesModalGroup(null);
       const poolId = activePoolIdRef.current;
       const prevFiles = filesRef.current;
@@ -2510,19 +2894,17 @@ export function App() {
           if (!res.ok) {
             setFiles(prevFiles);
             const err = await res.json().catch(() => ({}));
-            const errorMsg =
-              ('error' in err ? (err.error as string) : null) || 'Failed to transfer files';
-            reportDevError('handleTransferBatch', errorMsg);
+            surfaceWorkspaceError('handleTransferBatch', err, 'Failed to transfer files');
           }
         } catch (err) {
           setFiles(prevFiles);
-          reportDevError('handleTransferBatch', err);
+          surfaceWorkspaceError('handleTransferBatch', err, 'Failed to transfer files');
         } finally {
           await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
         }
       });
     },
-    [isSharePoolActive, runPendingOp, loadFiles, loadClusterData]
+    [isSharePoolActive, runPendingOp, loadFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handleDisableAccount = useCallback(
@@ -3193,6 +3575,7 @@ export function App() {
           clipboard={isSharePoolActive ? null : clipboard}
           onPaste={isSharePoolActive ? undefined : handlePaste}
           onMoveItemsToPath={isSharePoolActive ? undefined : handleMoveItems}
+          onCopyItemsToPath={isSharePoolActive ? undefined : handleCopyItems}
           onDropExternalToPath={isSharePoolActive ? undefined : handleDropExternalToPath}
           onShareSelected={isSharePoolActive ? undefined : handleShareSelected}
           isSharePoolActive={isSharePoolActive}
@@ -3205,6 +3588,26 @@ export function App() {
           selectedShareBatches={selectedShareBatches}
           onCopyShareBatchLinks={handleCopyBatchLinks}
         />
+
+        {workspaceError && (
+          <div {...stylex.props(styles.workspaceErrorRegion)}>
+            <div {...stylex.props(styles.workspaceErrorBanner)} role="alert">
+              <div {...stylex.props(styles.workspaceErrorContent)}>
+                <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
+                <span {...stylex.props(styles.workspaceErrorText)}>{workspaceError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWorkspaceError(null)}
+                aria-label="Dismiss error"
+                {...stylex.props(styles.workspaceErrorDismissBtn)}
+              >
+                <IconClose size={14} />
+                <span>Dismiss</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         <div {...stylex.props(styles.fileTableStage)}>
           {hasVisitedFiles && (
@@ -3235,6 +3638,8 @@ export function App() {
                 onDropFiles={isSharePoolActive ? undefined : handleDropFilesToTable}
                 onStageDroppedUpload={isSharePoolActive ? undefined : handleStageDroppedUpload}
                 onMoveItems={isSharePoolActive ? undefined : handleMoveItems}
+                onCopyItems={isSharePoolActive ? undefined : handleCopyItems}
+                scrollRequest={scrollRequest}
                 clipboard={isSharePoolActive ? null : clipboard}
                 accounts={accountItems}
                 onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
@@ -3377,6 +3782,22 @@ export function App() {
             files={modalFiles}
             accounts={accountItems}
             onConfirm={handleTransferBatch}
+          />
+        )}
+
+        {pendingMoveConflict !== null && (
+          <MoveConflictModal
+            isOpen={pendingMoveConflict !== null}
+            onClose={() => {
+              if (!isResolvingMoveConflict) {
+                setPendingMoveConflict(null);
+              }
+            }}
+            targetFolderPath={pendingMoveConflict.targetFolderPath}
+            conflicts={pendingMoveConflict.conflicts}
+            cleanCount={pendingMoveConflict.cleanCount}
+            onResolve={handleResolveMoveConflict}
+            isSubmitting={isResolvingMoveConflict}
           />
         )}
 

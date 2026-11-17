@@ -72,6 +72,8 @@ interface FileTableProps {
     basePath?: string;
   }) => void;
   onMoveItems?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => Promise<void> | void;
+  onCopyItems?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => Promise<void> | void;
+  scrollRequest?: { id: string; seq: number } | null;
   clipboard?: { mode: 'cut' | 'copy'; items: Array<{ kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }> } | null;
   accounts?: AccountItem[];
   onTransferFile?: (fileId: string, targetAccountId: string) => Promise<void>;
@@ -937,6 +939,7 @@ interface MemoParentRowProps {
   isDragOver: boolean;
   isTrashView: boolean;
   isSharePoolActive: boolean;
+  canCopy: boolean;
   onItemClick: (id: string, e: React.MouseEvent) => void;
   onNavigate: (path: string) => void;
   onSetDragOverRowId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -952,6 +955,7 @@ const MemoParentRow = React.memo(function MemoParentRow({
   isDragOver,
   isTrashView,
   isSharePoolActive,
+  canCopy,
   onItemClick,
   onNavigate,
   onSetDragOverRowId,
@@ -990,9 +994,14 @@ const MemoParentRow = React.memo(function MemoParentRow({
         }}
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
+          const isInternal = isInternalItemDrag(e);
+          const isCopyDrag = isInternal && (e.ctrlKey || e.altKey) && canCopy;
           if (
-            rejectInvalidInternalDragOver(e, path, () =>
-              onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev))
+            rejectInvalidInternalDragOver(
+              e,
+              path,
+              () => onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev)),
+              isCopyDrag
             )
           ) {
             return;
@@ -1000,17 +1009,20 @@ const MemoParentRow = React.memo(function MemoParentRow({
           e.preventDefault();
           e.stopPropagation();
           if (e.dataTransfer) {
-            e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
+            e.dataTransfer.dropEffect = isInternal ? (isCopyDrag ? 'copy' : 'move') : 'copy';
           }
           onSetDragOverRowId('__parent__');
         }}
         onDragLeave={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
+          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+            onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
+          }
         }}
         onDrop={(e) => {
-          if (isInternalItemDrag(e) && !parseInternalDropItems(e, path)) {
+          const isCopyDrag = (e.ctrlKey || e.altKey) && canCopy;
+          if (isInternalItemDrag(e) && !parseInternalDropItems(e, path, isCopyDrag)) {
             e.preventDefault();
             e.stopPropagation();
             (e.nativeEvent as any).__tsubasaHandled = true;
@@ -1063,6 +1075,7 @@ interface MemoFolderRowProps {
   isCopiedBatch: boolean;
   isTrashView: boolean;
   isSharePoolActive: boolean;
+  canCopy: boolean;
   isSearching: boolean;
   onItemClick: (id: string, e: React.MouseEvent) => void;
   onCheckboxToggle: (id: string, e: React.MouseEvent) => void;
@@ -1088,6 +1101,7 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
   isCopiedBatch,
   isTrashView,
   isSharePoolActive,
+  canCopy,
   isSearching,
   onItemClick,
   onCheckboxToggle,
@@ -1132,9 +1146,14 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
         }
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
+          const isInternal = isInternalItemDrag(e);
+          const isCopyDrag = isInternal && (e.ctrlKey || e.altKey) && canCopy;
           if (
-            rejectInvalidInternalDragOver(e, folder.virtualPath, () =>
-              onSetDragOverRowId((prev) => (prev === folder.id ? null : prev))
+            rejectInvalidInternalDragOver(
+              e,
+              folder.virtualPath,
+              () => onSetDragOverRowId((prev) => (prev === folder.id ? null : prev)),
+              isCopyDrag
             )
           ) {
             return;
@@ -1142,17 +1161,20 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
           e.preventDefault();
           e.stopPropagation();
           if (e.dataTransfer) {
-            e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
+            e.dataTransfer.dropEffect = isInternal ? (isCopyDrag ? 'copy' : 'move') : 'copy';
           }
           onSetDragOverRowId(folder.id);
         }}
         onDragLeave={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          onSetDragOverRowId((prev) => (prev === folder.id ? null : prev));
+          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+            onSetDragOverRowId((prev) => (prev === folder.id ? null : prev));
+          }
         }}
         onDrop={(e) => {
-          if (isInternalItemDrag(e) && !parseInternalDropItems(e, folder.virtualPath)) {
+          const isCopyDrag = (e.ctrlKey || e.altKey) && canCopy;
+          if (isInternalItemDrag(e) && !parseInternalDropItems(e, folder.virtualPath, isCopyDrag)) {
             e.preventDefault();
             e.stopPropagation();
             (e.nativeEvent as any).__tsubasaHandled = true;
@@ -1583,6 +1605,8 @@ export function FileTable({
   onDropFiles,
   onStageDroppedUpload,
   onMoveItems,
+  onCopyItems,
+  scrollRequest,
   clipboard,
   accounts = [],
   onTransferFile,
@@ -1607,6 +1631,9 @@ export function FileTable({
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
+  const typeAheadBufferRef = useRef<string>('');
+  const typeAheadTimerRef = useRef<number | null>(null);
+  const lastHandledScrollSeqRef = useRef<number>(0);
   // Tracked manually because native dblclick is suppressed once the clicked row unmounts mid-sequence.
   const lastClickRef = useRef<{ id: string; path: string; time: number } | null>(null);
   const isMobile = useMediaQuery('(max-width: 768px)');
@@ -1631,6 +1658,7 @@ export function FileTable({
     return () => {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
       if (marqueeRafRef.current !== null) cancelAnimationFrame(marqueeRafRef.current);
+      if (typeAheadTimerRef.current !== null) window.clearTimeout(typeAheadTimerRef.current);
     };
   }, []);
 
@@ -1772,9 +1800,14 @@ export function FileTable({
 
     if (e.dataTransfer) {
       if (isInternalItemDrag(e)) {
-        const parsed = parseInternalDropItems(e, cleanPath);
+        const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+        const parsed = parseInternalDropItems(e, cleanPath, isCopyDrag);
         if (parsed) {
-          onMoveItems?.(parsed, cleanPath);
+          if (isCopyDrag) {
+            onCopyItems?.(parsed, cleanPath);
+          } else {
+            onMoveItems?.(parsed, cleanPath);
+          }
         }
         return;
       }
@@ -1803,9 +1836,14 @@ export function FileTable({
       setDragOverRowId(null);
 
       if (isInternalItemDrag(e)) {
-        const parsed = parseInternalDropItems(e, targetVirtualPath);
+        const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+        const parsed = parseInternalDropItems(e, targetVirtualPath, isCopyDrag);
         if (parsed) {
-          onMoveItems?.(parsed, targetVirtualPath);
+          if (isCopyDrag) {
+            onCopyItems?.(parsed, targetVirtualPath);
+          } else {
+            onMoveItems?.(parsed, targetVirtualPath);
+          }
         }
         return;
       }
@@ -1821,7 +1859,7 @@ export function FileTable({
         }
       }
     },
-    [isTrashView, isSharePoolActive, onMoveItems, onStageDroppedUpload, onDropFiles]
+    [isTrashView, isSharePoolActive, onMoveItems, onCopyItems, onStageDroppedUpload, onDropFiles]
   );
 
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
@@ -1831,6 +1869,11 @@ export function FileTable({
     focusIndexRef.current = -1;
     lastSelectedIdRef.current = null;
     lastClickRef.current = null;
+    typeAheadBufferRef.current = '';
+    if (typeAheadTimerRef.current !== null) {
+      window.clearTimeout(typeAheadTimerRef.current);
+      typeAheadTimerRef.current = null;
+    }
   }, [cleanPath]);
 
   // Filter or search
@@ -2009,15 +2052,25 @@ export function FileTable({
         focusIndexRef.current = clickedIdx;
       }
 
-      if (e.shiftKey && lastSelectedIdRef.current && onSelectMultiple) {
-        const idxA = curSelectableItems.findIndex((it) => it.data.id === lastSelectedIdRef.current);
-        const idxB = curSelectableItems.findIndex((it) => it.data.id === id);
-        if (idxA !== -1 && idxB !== -1) {
-          const start = Math.min(idxA, idxB);
-          const end = Math.max(idxA, idxB);
-          const rangeIds = curSelectableItems.slice(start, end + 1).map((it) => it.data.id);
-          onSelectMultiple(rangeIds, 'add');
-          return;
+      if (e.shiftKey && onSelectMultiple) {
+        const anchorItem =
+          anchorIndexRef.current >= 0 && anchorIndexRef.current < curItems.length
+            ? curItems[anchorIndexRef.current]
+            : null;
+        const anchorId =
+          anchorItem && anchorItem.kind !== 'parent'
+            ? anchorItem.data.id
+            : lastSelectedIdRef.current;
+        if (anchorId) {
+          const idxA = curSelectableItems.findIndex((it) => it.data.id === anchorId);
+          const idxB = curSelectableItems.findIndex((it) => it.data.id === id);
+          if (idxA !== -1 && idxB !== -1) {
+            const start = Math.min(idxA, idxB);
+            const end = Math.max(idxA, idxB);
+            const rangeIds = curSelectableItems.slice(start, end + 1).map((it) => it.data.id);
+            onSelectMultiple(rangeIds, e.ctrlKey || e.metaKey ? 'add' : 'set');
+            return;
+          }
         }
       }
 
@@ -2278,6 +2331,17 @@ export function FileTable({
     rowVirtualizer.measure();
   }, [rowHeight, rowVirtualizer]);
 
+  useEffect(() => {
+    if (!scrollRequest || scrollRequest.seq === lastHandledScrollSeqRef.current) return;
+    const idx = items.findIndex((it) => it.kind !== 'parent' && it.data.id === scrollRequest.id);
+    if (idx === -1) return;
+    lastHandledScrollSeqRef.current = scrollRequest.seq;
+    anchorIndexRef.current = idx;
+    focusIndexRef.current = idx;
+    lastSelectedIdRef.current = scrollRequest.id;
+    rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
+  }, [scrollRequest, items, rowVirtualizer]);
+
   const getActiveIndex = useCallback((): number => {
     if (
       focusIndexRef.current >= 0 &&
@@ -2340,8 +2404,15 @@ export function FileTable({
         return;
       }
 
-      // Arrow navigation
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      // Arrow, PageUp/PageDown, Home/End navigation
+      if (
+        e.key === 'ArrowDown' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'Home' ||
+        e.key === 'End' ||
+        e.key === 'PageDown' ||
+        e.key === 'PageUp'
+      ) {
         if (e.altKey || (e.ctrlKey && !e.shiftKey)) return;
         if (items.length === 0) return;
 
@@ -2355,6 +2426,11 @@ export function FileTable({
           document.activeElement.blur();
         }
 
+        const pageStep = Math.max(
+          1,
+          Math.floor((parentRef.current?.clientHeight ?? 0) / rowHeight) || 10
+        );
+
         // Single selection movement (without Shift)
         if (!e.shiftKey) {
           const currentIndex = getActiveIndex();
@@ -2364,6 +2440,13 @@ export function FileTable({
             nextIndex = 0;
           } else if (e.key === 'End') {
             nextIndex = items.length - 1;
+          } else if (e.key === 'PageDown') {
+            nextIndex =
+              currentIndex === -1
+                ? Math.min(items.length - 1, pageStep - 1)
+                : Math.min(items.length - 1, currentIndex + pageStep);
+          } else if (e.key === 'PageUp') {
+            nextIndex = currentIndex === -1 ? 0 : Math.max(0, currentIndex - pageStep);
           } else if (e.key === 'ArrowDown') {
             nextIndex = currentIndex === -1 ? 0 : Math.min(items.length - 1, currentIndex + 1);
           } else {
@@ -2400,17 +2483,21 @@ export function FileTable({
 
           if (anchor >= items.length || !items[anchor]) return;
 
-          let currentFocus = focusIndexRef.current >= 0 ? focusIndexRef.current : anchor;
+          const currentFocus = focusIndexRef.current >= 0 ? focusIndexRef.current : anchor;
+          const minAllowed = items[0]?.kind === 'parent' ? 1 : 0;
           let newFocus: number;
 
           if (e.key === 'Home') {
-            newFocus = items[0]?.kind === 'parent' ? 1 : 0;
+            newFocus = minAllowed;
           } else if (e.key === 'End') {
             newFocus = items.length - 1;
+          } else if (e.key === 'PageDown') {
+            newFocus = Math.min(items.length - 1, currentFocus + pageStep);
+          } else if (e.key === 'PageUp') {
+            newFocus = Math.max(minAllowed, currentFocus - pageStep);
           } else if (e.key === 'ArrowDown') {
             newFocus = Math.min(items.length - 1, currentFocus + 1);
           } else {
-            const minAllowed = items[0]?.kind === 'parent' ? 1 : 0;
             newFocus = Math.max(minAllowed, currentFocus - 1);
           }
 
@@ -2441,6 +2528,65 @@ export function FileTable({
           return;
         }
       }
+
+      // Type-ahead prefix jump
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && items.length > 0) {
+        if (typeAheadBufferRef.current.length === 0 && e.key.trim().length === 0) {
+          return;
+        }
+        const nowChar = e.key.toLowerCase();
+        const nextBuf = typeAheadBufferRef.current + nowChar;
+        typeAheadBufferRef.current = nextBuf;
+        if (typeAheadTimerRef.current !== null) {
+          window.clearTimeout(typeAheadTimerRef.current);
+        }
+        typeAheadTimerRef.current = window.setTimeout(() => {
+          typeAheadBufferRef.current = '';
+          typeAheadTimerRef.current = null;
+        }, 700);
+
+        const activeIdx = getActiveIndex();
+        const isRepeatedChar =
+          nextBuf.length > 1 && nextBuf.split('').every((ch) => ch === nowChar);
+
+        const findMatchIndex = (prefix: string, startIndex: number): number => {
+          for (let offset = 0; offset < items.length; offset++) {
+            const idx = (startIndex + offset) % items.length;
+            const it = items[idx];
+            if (!it || it.kind === 'parent') continue;
+            if (it.data.name.toLowerCase().startsWith(prefix)) {
+              return idx;
+            }
+          }
+          return -1;
+        };
+
+        let matchIndex = -1;
+        if (isRepeatedChar) {
+          matchIndex = findMatchIndex(nextBuf, activeIdx >= 0 ? activeIdx : 0);
+          if (matchIndex === -1) {
+            matchIndex = findMatchIndex(
+              nowChar,
+              activeIdx >= 0 ? (activeIdx + 1) % items.length : 0
+            );
+          }
+        } else {
+          matchIndex = findMatchIndex(nextBuf, activeIdx >= 0 ? activeIdx : 0);
+        }
+
+        if (matchIndex !== -1) {
+          e.preventDefault();
+          const matchItem = items[matchIndex];
+          if (matchItem && matchItem.kind !== 'parent') {
+            const matchId = matchItem.data.id;
+            anchorIndexRef.current = matchIndex;
+            focusIndexRef.current = matchIndex;
+            lastSelectedIdRef.current = matchId;
+            onSelect(matchId, false);
+            rowVirtualizer.scrollToIndex(matchIndex, { align: 'auto' });
+          }
+        }
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown);
@@ -2451,6 +2597,7 @@ export function FileTable({
     onSelect,
     onSelectMultiple,
     rowVirtualizer,
+    rowHeight,
     getActiveIndex,
   ]);
 
@@ -2675,8 +2822,28 @@ export function FileTable({
         onMouseDown={handleMouseDown}
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
-          if (isExternalFileDrag(e) || isInternalItemDrag(e)) {
+          if (isInternalItemDrag(e)) {
+            const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+            if (rejectInvalidInternalDragOver(e, cleanPath, undefined, isCopyDrag)) {
+              return;
+            }
             e.preventDefault();
+            if (e.dataTransfer) {
+              e.dataTransfer.dropEffect = isCopyDrag ? 'copy' : 'move';
+            }
+            return;
+          }
+          if (isExternalFileDrag(e)) {
+            e.preventDefault();
+          }
+        }}
+        onDrop={(e) => {
+          if (isTrashView || isSharePoolActive) return;
+          if (isInternalItemDrag(e)) {
+            const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+            if (isCopyDrag) {
+              handleDrop(e);
+            }
           }
         }}
         onClick={() => {
@@ -2782,6 +2949,7 @@ export function FileTable({
                       isDragOver={dragOverRowId === '__parent__'}
                       isTrashView={isTrashView}
                       isSharePoolActive={isSharePoolActive}
+                      canCopy={Boolean(onCopyItems)}
                       onItemClick={handleItemClick}
                       onNavigate={onNavigate}
                       onSetDragOverRowId={setDragOverRowId}
@@ -2811,6 +2979,7 @@ export function FileTable({
                       isCopiedBatch={copiedBatchId === folder.id}
                       isTrashView={isTrashView}
                       isSharePoolActive={isSharePoolActive}
+                      canCopy={Boolean(onCopyItems)}
                       isSearching={isSearching}
                       onItemClick={handleItemClick}
                       onCheckboxToggle={handleCheckboxToggle}
@@ -2867,8 +3036,14 @@ export function FileTable({
                 setIsDropZoneActive(true);
               }}
               onDragOver={(e) => {
-                if (isTrashView || isSharePoolActive || !isExternalFileDrag(e)) {
+                if (isTrashView || isSharePoolActive) return;
+                const isInternalCopy =
+                  isInternalItemDrag(e) && (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+                if (!isExternalFileDrag(e) && !isInternalCopy) {
                   if (isDropZoneActive) setIsDropZoneActive(false);
+                  return;
+                }
+                if (isInternalCopy && rejectInvalidInternalDragOver(e, cleanPath, undefined, true)) {
                   return;
                 }
                 e.preventDefault();
@@ -2876,7 +3051,7 @@ export function FileTable({
                 if (e.dataTransfer) {
                   e.dataTransfer.dropEffect = 'copy';
                 }
-                if (!isDropZoneActive) {
+                if (!isInternalCopy && !isDropZoneActive) {
                   setIsDropZoneActive(true);
                 }
               }}
