@@ -93,78 +93,78 @@
 ### Slice A: Database, revision epoch, storage quota, and config
 **Files owned:** `package.json`, `tsconfig.server.json`, `drizzle.config.ts`, `index.html`, `src/server/index.ts`, `src/server/db/index.ts`, `src/server/db/init.ts`, `src/server/db/schema.ts`, `src/server/storage/placement.ts`, `src/server/storage/quota.ts` (coordinate signature check with `src/server/drive/transfer.ts` / `share.ts` callers in Slice D).
 
-- [ ] **A-1 `[Blocking]` Seed monotonic boot epoch for `globalPoolRevisionEpoch` and bump on account rename**
+- [x] **A-1 `[Blocking]` Seed monotonic boot epoch for `globalPoolRevisionEpoch` and bump on account rename**
   - **Locations.** `src/server/db/index.ts:30-45`, `97-142` (consumers: `src/server/app.ts:1039, 1105, 1631`).
   - **Failure mode.** `globalPoolRevisionEpoch` resets to `0` on server restart, causing post-restart ETags (`W/"files-...-r0"`) to collide with pre-restart client `If-None-Match` headers and serve `304 Not Modified` with stale rows. `renameAccountInDb` also omits `bumpPoolRevision()`.
   - **Preserved UX.** ETag caching behavior and `getPoolRevision` / `bumpPoolRevision` return types stay identical.
   - **Steps.** Seed `globalPoolRevisionEpoch = Date.now() * 1000 + crypto.randomInt(1000)` at startup and call `bumpPoolRevision()` inside `renameAccountInDb` when `files` rows are updated.
 
-- [ ] **A-2 `[Warning]` Fix SQLite `busy_timeout` order and deduplicate `renameAccountInDb`**
+- [x] **A-2 `[Warning]` Fix SQLite `busy_timeout` order and deduplicate `renameAccountInDb`**
   - **Locations.** `src/server/db/index.ts:17-23`, `113-140`.
   - **Failure mode.** `journal_mode = WAL` runs before `busy_timeout = 5000`, so concurrent open locks fail immediately with `SQLITE_BUSY`. `renameAccountInDb` repeats row updates across 3 branches and omits `deleteConflictingShareLinks` in branch 3 (`!existingWithOld`), risking `UNIQUE constraint failed` on `share_links_pool_batch_account_idx`.
   - **Preserved UX.** Identical WAL mode and account ID migration results.
   - **Steps.** Move `sqlite.pragma('busy_timeout = 5000');` above `journal_mode = WAL`. Extract `reassignAccountRows(stmts, oldId, targetId)` in `src/server/db/index.ts` running `deleteConflictingShareLinks`, `deleteConflictingPendingDriveSync`, and all five `update*Account` updates across all 3 branches.
 
-- [ ] **A-3 `[Warning]` Fix legacy Share Pool migration (`drive_outbox.pool_id`) and ID conflict warning**
+- [x] **A-3 `[Warning]` Fix legacy Share Pool migration (`drive_outbox.pool_id`) and ID conflict warning**
   - **Locations.** `src/server/db/init.ts:154-231`.
   - **Failure mode.** Migration updates `folders`, `files`, `accounts`, `share_links`, and `pools` to `1_000_000`, omitting `drive_outbox.pool_id` (`init.ts:101`). If `1_000_000` already exists, migration is silently skipped while `user_version` advances to `4`.
   - **Preserved UX.** Cold starts and standard single-share-pool upgrades remain unchanged.
   - **Steps.** Add `UPDATE drive_outbox SET pool_id = ? WHERE pool_id = ?` inside the migration transaction and log a clear `console.warn` when `legacySharePool` collides with an existing `1_000_000` pool.
 
-- [ ] **A-4 `[Blocking]` Prevent torn-read snapshots in `getPooledStorageOverview` and fix cache time checks**
+- [x] **A-4 `[Blocking]` Prevent torn-read snapshots in `getPooledStorageOverview` and fix cache time checks**
   - **Locations.** `src/server/storage/quota.ts:339-396`, `463-467`.
   - **Failure mode.** `getPooledStorageOverview` reads `getDbTotalChanges()`, yields across 4 `await` DB queries, then writes `overviewCache` using a second `getDbTotalChanges()` read, caching mixed pre/post-mutation snapshots for 30s. Passing an earlier `nowMs` also hits a future cache entry.
   - **Preserved UX.** Cached overview payload shape and 30-second TTL stay identical.
   - **Steps.** Run all 4 SQLite reads synchronously inside `sqlite.transaction(() => ...)` (or without `await` between them), capture `startDbVersion` before reading, store `cachedAtMs`, and write `overviewCache` only if `getDbTotalChanges() === startDbVersion`, requiring `nowMs >= cached.cachedAtMs && nowMs < cached.earliestExpiryMs` on lookup.
 
-- [ ] **A-5 `[Warning]` Chunk `getTransferStatsByAccountMap` queries, add `recordTransferSync`, and guard 0-byte writes**
+- [x] **A-5 `[Warning]` Chunk `getTransferStatsByAccountMap` queries, add `recordTransferSync`, and guard 0-byte writes**
   - **Locations.** `src/server/storage/quota.ts:148, 189, 205, 286-312` (cross-ref `src/server/storage/placement.ts:586`).
   - **Failure mode.** Unchunked `inArray` and `or(...expiringPairs)` fail with `SQLITE_ERROR: too many SQL variables` around ~499+ accounts. `recordTransfer` writes `0`-byte rows (creating phantom 24h reset countdowns), prunes using event `timestamp` instead of `nowMs`, and invalidates all pools instead of `poolId`.
   - **Preserved UX.** Identical `AccountTransferStats` outputs and non-zero transfer tracking.
   - **Steps.** Extract a shared `chunkArray(items, 400)` helper in `src/server/db/index.ts` and batch `accountIds` / `expiringPairs` in `quota.ts`. Return early in `recordTransfer` when `!Number.isFinite(byteCount) || byteCount <= 0`, pass `nowMs` to `pruneOldTransferLogs`, accept optional `poolId`, and export `recordTransferSync` for transactional callers (`transfer.ts`, `share.ts`).
 
-- [ ] **A-6 `[Blocking]` Add in-memory per-account capacity reservations for concurrent uploads**
+- [x] **A-6 `[Blocking]` Add in-memory per-account capacity reservations for concurrent uploads**
   - **Locations.** `src/server/storage/placement.ts:82-117, 333-352, 684-736` (paired with `D-2` in `src/server/drive/transfer.ts:278-306, 570-590`).
   - **Failure mode.** `getEligibleAccounts`, `selectPlacementForFile`, and `validateTargetPlacement` read committed SQLite quota/transfer state while `UploadDrawer` runs up to 3 parallel uploads, letting concurrent uploads breach the 750 MB safety reserve (14.25 GB ceiling) or 750 GB daily cap.
   - **Preserved UX.** Parallel upload UI and inline `INSUFFICIENT_STORAGE` / `EXCEEDS_CEILING` error codes stay unchanged.
   - **Steps.** Add `inFlightAccountReservations` (`Map<string, number>`) and export `reserveAccountCapacity(accountId, bytes): () => void` in `src/server/storage/placement.ts`; subtract reserved bytes from `headroomBytes` and `remainingUploadBytes24h` in `getEligibleAccounts` and `validateTargetPlacement`.
 
-- [ ] **A-7 `[Blocking]` Stop stripping branch directory in `simulateBatchPlacement` affinity lookup**
+- [x] **A-7 `[Blocking]` Stop stripping branch directory in `simulateBatchPlacement` affinity lookup**
   - **Locations.** `src/server/storage/placement.ts:158-214`, `478-480`.
   - **Failure mode.** `simulateBatchPlacement` passes folder `node.fullPath` (e.g. `/Photos/2026`) to `getAffinityAccounts` / `findFolderAffinityAccounts`, both of which immediately call `path.posix.dirname(normalizedPath)`, evaluating `/Photos` instead of `/Photos/2026`.
   - **Preserved UX.** File-path callers still use `dirname(filePath)`; batch folder affinity honors files inside the target branch folder.
   - **Steps.** Extract `getAffinityAccountsForDirectory(dirCounts, startDir)` and `findFolderAffinityAccountsForDirectory(startDir, poolId)`, delegate file-path helpers via `path.posix.dirname`, and call the directory helpers directly at lines 478-480.
 
-- [ ] **A-8 `[Warning]` Reject negative/`NaN` `sizeBytes` and 0-byte placements on over-limit accounts**
+- [x] **A-8 `[Warning]` Reject negative/`NaN` `sizeBytes` and 0-byte placements on over-limit accounts**
   - **Locations.** `src/server/storage/placement.ts:226, 248-250, 340, 422-426, 684-728`.
   - **Failure mode.** Negative `sizeBytes` passes `effectiveHeadroom >= sizeBytes` and adds simulated headroom; `NaN` evaluates `NaN > MAX_SINGLE_FILE_BYTES` as `false`; `0`-byte files pass `0 >= 0` even when an account is locked at/over its physical quota ceiling.
   - **Preserved UX.** Valid `0 <= sizeBytes <= MAX_SINGLE_FILE_BYTES` placements on accounts within limits stay identical.
   - **Steps.** Add `assertValidFileSize(sizeBytes)` rejecting `!Number.isFinite(sizeBytes) || sizeBytes < 0` and `sizeBytes > MAX_SINGLE_FILE_BYTES`, call it across placement entrypoints, and reject 0-byte writes when `account.quotaUsedBytes >= account.quotaLimitBytes` (or over usable buffer if locked).
 
-- [ ] **A-9 `[Warning]` Extract shared best-fit and candidate-commit helpers in `placement.ts`**
+- [x] **A-9 `[Warning]` Extract shared best-fit and candidate-commit helpers in `placement.ts`**
   - **Locations.** `src/server/storage/placement.ts:278-327`, `495-524`.
   - **Failure mode.** Duplicated headroom/budget subtraction and minimum-difference selection loops across `selectPlacementFromCandidates` and `simulateBatchPlacement`.
   - **Preserved UX.** Identical placement decisions and reasons.
   - **Steps.** Extract `pickBestFitCandidate` and `commitCandidateDecision` helpers inside `src/server/storage/placement.ts`.
 
-- [ ] **A-10 `[Warning]` Load `dotenv/config`, create `TSUBASA_DB_PATH` parent dir, and add graceful shutdown**
+- [x] **A-10 `[Warning]` Load `dotenv/config`, create `TSUBASA_DB_PATH` parent dir, and add graceful shutdown**
   - **Locations.** `src/server/index.ts:1-22`, `src/server/db/index.ts:7-14`.
   - **Failure mode.** `dotenv` is in `package.json` but never imported in `src/server/index.ts`; custom `TSUBASA_DB_PATH` directories are not created before `new Database(dbPath)`; no `SIGINT`/`SIGTERM` handler closes `server`, watchers, timers, or `sqlite.close()`.
   - **Preserved UX.** Default port `3000` and `./data/tsubasa.db` startup behavior remain unchanged.
-  - **Steps.** Add `import 'dotenv/config';` as line 1 of `src/server/index.ts`; create `path.dirname(dbPath)` when `dbPath !== ':memory:'` in `src/server/db/index.ts`; add `SIGINT`/`SIGTERM` shutdown calling `authPool.stopWatching()`, outbox stop, `server.close()`, and `sqlite.close()`.
+  - **Steps.** Add `import 'dotenv/config';` as line 1 of `src/server/index.ts`; create `path.dirname(dbPath)` when `dbPath !== ':memory:'` in `src/server/db/index.ts`; add `SIGINT`/`SIGTERM` shutdown calling `authPool.stopWatching()`, outbox stop, `server.close()`, and `sqlite.close()`. *(Note: `stopOutboxWorker` wiring in `src/server/index.ts` awaits `outbox.ts` export in Slice C.)*
 
-- [ ] **A-11 `[Warning]` Align `tsconfig.server.json` paths and `schema.ts`/`init.ts` DDL contract**
+- [x] **A-11 `[Warning]` Align `tsconfig.server.json` paths and `schema.ts`/`init.ts` DDL contract**
   - **Locations.** `tsconfig.server.json:16-19`, `src/server/db/init.ts:11-139`, `src/server/db/schema.ts:4-129`, `drizzle.config.ts`.
   - **Failure mode.** `tsconfig.server.json` allows `@/*` aliases that `tsc` leaves un-rewritten in `dist/server/`. `init.ts` duplicates `schema.ts` DDL while `drizzle.config.ts` / `db:generate` / `db:migrate` are unused.
   - **Preserved UX.** Zero runtime behavior change.
   - **Steps.** Remove `@/*` `paths` from `tsconfig.server.json`. Add an explicit synchronization invariant comment linking `schema.ts` and `init.ts` (or migrate `init.ts` to generated Drizzle SQL if desired; do not alter table columns).
 
-- [ ] **A-12 `[Nit]` Document `index.html` anti-FOUC inline boot block**
+- [x] **A-12 `[Nit]` Document `index.html` anti-FOUC inline boot block**
   - **Locations.** `index.html:13-51`.
   - **Preserved UX.** Visual anti-FOUC boot styling stays untouched.
   - **Steps.** Add a brief comment explaining best-effort `localStorage` access on restricted origins and noting CSP hash/nonce requirements for inline boot code.
 
-- [ ] **A-13 `[Nit]` Hygiene cleanup in DB, storage, and `package.json`**
+- [x] **A-13 `[Nit]` Hygiene cleanup in DB, storage, and `package.json`**
   - **Locations.** `tsubasa.db` (root 0-byte file), `src/server/storage/placement.ts:689, 715` (`freedBytesOnAccount`), `src/server/db/init.ts:117` & `schema.ts:61` (`files_pool_trashed_idx`), `src/server/db/schema.ts:131-150` (`ShareLink`/`NewShareLink`), `package.json:7, 9, 31` (`@stylexjs/rollup-plugin`, duplicate `dev`).
   - **Steps.** Remove unused `freedBytesOnAccount` param, drop redundant `files_pool_trashed_idx` with `CURRENT_SCHEMA_VERSION` bump, export `ShareLink`/`NewShareLink`, delete empty root `tsubasa.db`, and remove unused `@stylexjs/rollup-plugin` if `vite.config.ts` only uses `unplugin-stylex`.
 
