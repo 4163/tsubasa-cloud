@@ -17,7 +17,7 @@ import {
   IconCheck,
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
-import { rejectInvalidInternalDragOver, parseInternalDropItems } from '../utils/virtualPath.js';
+import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
 
 export interface ActionPortalClipboard {
   mode: 'cut' | 'copy';
@@ -804,9 +804,13 @@ export function ActionPortal({
           isIconOnly && styles.iconOnlyBtn
         )}
         onClick={async () => {
-          const result = await onCopy();
-          if (result !== false) {
-            markKeyCopied(copyKey);
+          try {
+            const result = await onCopy();
+            if (result !== false) {
+              markKeyCopied(copyKey);
+            }
+          } catch {
+            /* copy failed; leave button un-marked */
           }
         }}
         title={isTruncatedBatch || isIconOnly ? title : undefined}
@@ -918,7 +922,7 @@ export function ActionPortal({
     if (isSharePoolActive) return;
     e.preventDefault();
     e.stopPropagation();
-    (e.nativeEvent as any).__tsubasaHandled = true;
+    markDropHandled(e);
     setDragOverIndex(null);
     const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
 
@@ -1306,7 +1310,8 @@ export function ActionPortal({
                 ref={folderInputRef}
                 type="file"
                 multiple
-                {...({ webkitdirectory: '', directory: '' } as any)}
+                webkitdirectory=""
+                directory=""
                 {...stylex.props(styles.hiddenInput)}
                 onChange={(e) => {
                   if (e.target.files && e.target.files.length > 0) {

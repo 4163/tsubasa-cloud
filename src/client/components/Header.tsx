@@ -282,6 +282,7 @@ export function Header({
           <input
             type="text"
             placeholder="Search pooled files and directories..."
+            aria-label="Search pooled files and directories"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             {...stylex.props(styles.searchInput)}

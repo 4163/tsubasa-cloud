@@ -7,7 +7,8 @@ import { AccountAvatar } from './AccountAvatar.js';
 import { RedactedEmail } from './RedactedEmail.js';
 import { sortPools, copyTextToClipboard } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
-import { rejectInvalidInternalDragOver, parseInternalDropItems } from '../utils/virtualPath.js';
+import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
+import { DAILY_UPLOAD_LIMIT_BYTES, formatGbCompact } from '../utils/accountTransfer.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export interface AccountTransferStats {
@@ -69,7 +70,6 @@ interface SidebarProps {
   accounts: AccountItem[];
   tsubasaUsedBytes: number;
   poolHeadroomBytes: number;
-  totalLimitBytes: number;
   clusterTransfer?: ClusterTransferOverview;
   pools?: PoolSummary[];
   activePoolId?: number;
@@ -1054,13 +1054,15 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
   },
+  progressScale: (scale: number) => ({
+    transform: `scaleX(${scale})`,
+  }),
 });
 
 export function hasActiveTransferStats(stats?: AccountTransferStats): boolean {
   if (!stats) return false;
-  const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
   const uploaded = stats.uploadedBytes24h ?? 0;
-  const remaining = stats.remainingUploadBytes24h ?? DAILY_LIMIT;
+  const remaining = stats.remainingUploadBytes24h ?? DAILY_UPLOAD_LIMIT_BYTES;
   const isRateLimited = stats.isUploadRateLimited || remaining <= 0;
   return uploaded > 0 || isRateLimited;
 }
@@ -1071,9 +1073,8 @@ interface AccountTransferGaugeProps {
 }
 
 export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferGaugeProps) {
-  const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
   const uploaded = stats?.uploadedBytes24h ?? 0;
-  const remaining = stats?.remainingUploadBytes24h ?? DAILY_LIMIT;
+  const remaining = stats?.remainingUploadBytes24h ?? DAILY_UPLOAD_LIMIT_BYTES;
   const isRateLimited = stats?.isUploadRateLimited || remaining <= 0;
   const oldestTs = stats?.oldestTransferTimestamp ?? null;
 
@@ -1094,8 +1095,8 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
     return null;
   }
 
-  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_LIMIT) * 100)));
-  const uploadedGb = (uploaded / (1024 * 1024 * 1024)).toFixed(1);
+  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_UPLOAD_LIMIT_BYTES) * 100)));
+  const uploadedGb = formatGbCompact(uploaded);
 
   return (
     <div {...stylex.props(styles.transferSection)}>
@@ -1113,9 +1114,9 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
         <div
           {...stylex.props(
             styles.transferProgressBarFill,
-            isRateLimited && styles.transferProgressBarBreach
+            isRateLimited && styles.transferProgressBarBreach,
+            styles.progressScale((isRateLimited ? 100 : pct) / 100)
           )}
-          style={{ transform: `scaleX(${(isRateLimited ? 100 : pct) / 100})` }}
         />
       </div>
     </div>
@@ -1126,7 +1127,6 @@ export function Sidebar({
   accounts,
   tsubasaUsedBytes,
   poolHeadroomBytes,
-  totalLimitBytes,
   clusterTransfer,
   pools,
   activePoolId = 1,
@@ -1159,8 +1159,12 @@ export function Sidebar({
   const [authUrls, setAuthUrls] = useState<Record<string, string>>({});
   const authUrlsRef = useRef(authUrls);
   authUrlsRef.current = authUrls;
+  const [authUrlErrors, setAuthUrlErrors] = useState<Record<string, boolean>>({});
+  const authUrlErrorsRef = useRef(authUrlErrors);
+  authUrlErrorsRef.current = authUrlErrors;
   const pendingAuthRequestsRef = useRef<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dragOverNav, setDragOverNav] = useState<'files' | 'trash' | null>(null);
   const isMobileViewport = useMediaQuery('(max-width: 768px)');
   const mobileDialogRef = useRef<HTMLDialogElement>(null);
@@ -1232,8 +1236,21 @@ export function Sidebar({
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     for (const acc of accounts) {
-      if (!acc.authorized && !authUrlsRef.current[acc.id] && !pendingAuthRequestsRef.current.has(acc.id)) {
+      if (
+        !acc.authorized &&
+        !authUrlsRef.current[acc.id] &&
+        !authUrlErrorsRef.current[acc.id] &&
+        !pendingAuthRequestsRef.current.has(acc.id)
+      ) {
         pendingAuthRequestsRef.current.add(acc.id);
         client.api.accounts['auth-url'][':id']
           .$get({ param: { id: acc.id }, query: {} })
@@ -1241,9 +1258,14 @@ export function Sidebar({
           .then((data) => {
             if (data && 'url' in data && data.url) {
               setAuthUrls((prev) => (prev[acc.id] === data.url ? prev : { ...prev, [acc.id]: data.url }));
+              setAuthUrlErrors((prev) => (prev[acc.id] ? { ...prev, [acc.id]: false } : prev));
+            } else {
+              setAuthUrlErrors((prev) => (prev[acc.id] ? prev : { ...prev, [acc.id]: true }));
             }
           })
-          .catch(() => {})
+          .catch(() => {
+            setAuthUrlErrors((prev) => (prev[acc.id] ? prev : { ...prev, [acc.id]: true }));
+          })
           .finally(() => {
             pendingAuthRequestsRef.current.delete(acc.id);
           });
@@ -1254,6 +1276,7 @@ export function Sidebar({
   const handleCopyAuthUrl = async (accountId: string) => {
     let url = authUrls[accountId];
     if (!url) {
+      setAuthUrlErrors((prev) => (prev[accountId] ? { ...prev, [accountId]: false } : prev));
       try {
         const res = await client.api.accounts['auth-url'][':id'].$get({
           param: { id: accountId },
@@ -1261,12 +1284,17 @@ export function Sidebar({
         });
         if (res.ok) {
           const data = await res.json();
-          if ('url' in data) {
+          if ('url' in data && data.url) {
             url = data.url;
             setAuthUrls((prev) => ({ ...prev, [accountId]: data.url }));
+          } else {
+            setAuthUrlErrors((prev) => ({ ...prev, [accountId]: true }));
           }
+        } else {
+          setAuthUrlErrors((prev) => ({ ...prev, [accountId]: true }));
         }
       } catch (err) {
+        setAuthUrlErrors((prev) => ({ ...prev, [accountId]: true }));
         if (import.meta.env.DEV) {
           console.error('[tsubasa] fetch auth URL failed:', err);
         }
@@ -1274,9 +1302,14 @@ export function Sidebar({
     }
 
     if (url) {
-      await copyTextToClipboard(url);
+      const copied = await copyTextToClipboard(url);
+      if (!copied) return;
       setCopiedId(accountId);
-      setTimeout(() => {
+      if (copyTimerRef.current !== null) {
+        clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = setTimeout(() => {
+        copyTimerRef.current = null;
         setCopiedId((prev) => (prev === accountId ? null : prev));
       }, 3000);
     }
@@ -1454,7 +1487,7 @@ export function Sidebar({
               if (activePool?.isSharePool) return;
               e.preventDefault();
               e.stopPropagation();
-              (e.nativeEvent as any).__tsubasaHandled = true;
+              markDropHandled(e);
               setDragOverNav(null);
               if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
                 const parsed = parseInternalDropItems(e, '/');
@@ -1495,7 +1528,7 @@ export function Sidebar({
             onDrop={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              (e.nativeEvent as any).__tsubasaHandled = true;
+              markDropHandled(e);
               setDragOverNav(null);
               if (currentNav !== 'trash' && e.dataTransfer.types.includes('application/x-tsubasa-items')) {
                 try {
@@ -1659,7 +1692,10 @@ export function Sidebar({
                         aria-label="Copy authorize link"
                       >
                         <span {...stylex.props(styles.authLinkText)}>
-                          {authUrls[acc.id] || 'Generating authorize link...'}
+                          {authUrls[acc.id] ||
+                            (authUrlErrors[acc.id]
+                              ? 'Authorize link unavailable (click to retry)'
+                              : 'Generating authorize link...')}
                         </span>
                         <span
                           {...stylex.props(
@@ -1721,9 +1757,9 @@ export function Sidebar({
                         <div
                           {...stylex.props(
                             styles.progressBarFill,
-                            isBreached && styles.progressBarBreach
+                            isBreached && styles.progressBarBreach,
+                            styles.progressScale(Math.min(100, Math.max(0, usedPct)) / 100)
                           )}
-                          style={{ transform: `scaleX(${Math.min(100, Math.max(0, usedPct)) / 100})` }}
                         />
                       </div>
 
@@ -1814,9 +1850,9 @@ export function Sidebar({
             <div
               {...stylex.props(
                 styles.poolProgressBarFill,
-                poolPercentage >= 100 && styles.progressBarBreach
+                poolPercentage >= 100 && styles.progressBarBreach,
+                styles.progressScale(Math.min(100, Math.max(0, poolPercentage)) / 100)
               )}
-              style={{ transform: `scaleX(${Math.min(100, Math.max(0, poolPercentage)) / 100})` }}
             />
           </div>
           <div {...stylex.props(styles.footerStats)}>
@@ -1827,7 +1863,7 @@ export function Sidebar({
           </div>
           {clusterTransfer && clusterTransfer.totalUploadedBytes24h > 0 && (
             <div {...stylex.props(styles.footerTransfer)}>
-              24h cluster transfers: {(clusterTransfer.totalUploadedBytes24h / (1024 * 1024 * 1024)).toFixed(1)} / {(clusterTransfer.dailyUploadLimitBytes / (1024 * 1024 * 1024)).toFixed(0)} GB ({Math.round((clusterTransfer.totalUploadedBytes24h / clusterTransfer.dailyUploadLimitBytes) * 100)}%)
+              24h cluster transfers: {formatGbCompact(clusterTransfer.totalUploadedBytes24h)} / {(clusterTransfer.dailyUploadLimitBytes / (1024 * 1024 * 1024)).toFixed(0)} GB ({Math.round((clusterTransfer.totalUploadedBytes24h / clusterTransfer.dailyUploadLimitBytes) * 100)}%)
             </div>
           )}
         </div>

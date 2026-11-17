@@ -115,14 +115,6 @@ export function IconMenu({ size = 18, ...props }: IconProps) {
   );
 }
 
-export function IconChevronLeft({ size = 18, ...props }: IconProps) {
-  return (
-    <svg width={size} height={size} {...baseProps} {...props}>
-      <polyline points="15 18 9 12 15 6" />
-    </svg>
-  );
-}
-
 export function IconChevronRight({ size = 18, ...props }: IconProps) {
   return (
     <svg width={size} height={size} {...baseProps} {...props}>

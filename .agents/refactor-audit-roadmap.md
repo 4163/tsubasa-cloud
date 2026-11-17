@@ -413,73 +413,73 @@
 ### Slice F: `App.tsx` orchestration, cross-pool safety, and shell components
 **Files owned:** `src/client/App.tsx`, `src/client/components/Header.tsx`, `src/client/components/Sidebar.tsx`, `src/client/components/ActionPortal.tsx`, `src/client/components/AccountAvatar.tsx`, `src/client/components/Icons.tsx` (run before Slice H if parallelizing, since Slice H also updates modal wiring in `App.tsx`).
 
-- [ ] **F-1 `[Blocking]` Guard all async reads and optimistic rollbacks in `App.tsx` with `activePoolIdRef.current === poolId`**
+- [x] **F-1 `[Blocking]` Guard all async reads and optimistic rollbacks in `App.tsx` with `activePoolIdRef.current === poolId`**
   - **Locations.** `src/client/App.tsx:914-1149, 1542-1570, 1779-2251, 2498-2533, 2738-2767, 2876-2908, 3085-3135, 3186-3231`.
   - **Failure mode.** Switching pools mid-request allows settling reads or rollbacks from the old pool to abort the active pool's fetches and overwrite `files`, `folders`, `trashedFiles`, `storage`, `discovered`, `selectedIds`, or navigation with the old pool's data.
   - **Preserved UX.** Instant pool switching and SWR cache hydration stay identical.
   - **Steps.** In `loadClusterData`, `loadFiles`, and `loadTrashFiles`, only abort controllers and update React state when `activePoolIdRef.current === reqPoolId` (still update `setPoolCache(reqPoolId, ...)` for background pools). In every mutation handler, guard state rollbacks and navigation with `activePoolIdRef.current === poolId` and update `setPoolCache(poolId, ...)` when off-pool.
 
-- [ ] **F-2 `[Blocking]` Prevent `filteredAccountIds` pruning from wiping `sessionStorage` before `loadFiles` finishes**
+- [x] **F-2 `[Blocking]` Prevent `filteredAccountIds` pruning from wiping `sessionStorage` before `loadFiles` finishes**
   - **Locations.** `src/client/App.tsx:527-559, 639-651`.
   - **Failure mode.** On initial mount `files` is `[]`, so the pruning effect removes all `filteredAccountIds` and deletes `tsubasa-filtered-account-ids` from `sessionStorage` before `/api/files` returns.
   - **Preserved UX.** Filters still clear automatically when the loaded pool genuinely has zero active files for a filtered account.
   - **Steps.** Guard `if (loadedFilesPoolId !== activePoolId) return;` at line 639 and add `loadedFilesPoolId` and `activePoolId` to the effect deps.
 
-- [ ] **F-3 `[Blocking]` Surface silent `reportDevError` / `!res.ok` failures across account, pool, OAuth, and sync actions**
+- [x] **F-3 `[Blocking]` Surface silent `reportDevError` / `!res.ok` failures across account, pool, OAuth, and sync actions**
   - **Locations.** `src/client/App.tsx:1481-1570, 2910-2952, 3015-3135, 3186-3231`.
   - **Failure mode.** `handleImportOAuth`, `handleSyncAll`, `handleDisableAccount`, `handleEnableAccount`, `handleCreatePool`, `handleDeletePool`, `handleSwitchAccountPool`, and `handleClearSharePoolConfirm` swallow failures via `reportDevError` (no-op in production) or omit the `!res.ok` branch (`handleSyncAll`).
   - **Preserved UX.** Errors appear exclusively in the existing inline `workspaceError` banner (or modal banner for modal actions in Slice H).
   - **Steps.** Clear `setWorkspaceError(null)` at entry, parse server `{ error }` JSON on `!res.ok`, and replace `reportDevError` with `surfaceWorkspaceError` (rethrow in modal-backed handlers per Slice H).
 
-- [ ] **F-4 `[Blocking]` Reset `storage`/`discovered` and abort in-flight requests in `clearWorkspaceState`**
+- [x] **F-4 `[Blocking]` Reset `storage`/`discovered` and abort in-flight requests in `clearWorkspaceState`**
   - **Locations.** `src/client/App.tsx:1182-1201, 1249-1251, 3171-3184`.
   - **Failure mode.** Switching to an uncached pool or completing a Share batch leaves the prior pool's Sidebar accounts/meters rendered and allows in-flight `loadTrashFiles` / `loadFiles` / `loadClusterData` requests to settle onto stale state.
   - **Preserved UX.** Cached pools still hydrate immediately from `getPoolCache`.
   - **Steps.** In `clearWorkspaceState`, abort `clusterAbortRef`, `discrepancyAbortRef`, `filesAbortRef`, and `trashAbortRef`, increment `filesRequestSeqRef` and `trashRequestSeqRef`, and call `setStorage(null)` and `setDiscovered([])`.
 
-- [ ] **F-5 `[Warning]` Surface read failures in `loadClusterData`, `loadFiles`, `loadTrashFiles`, and `share.links`**
+- [x] **F-5 `[Warning]` Surface read failures in `loadClusterData`, `loadFiles`, `loadTrashFiles`, and `share.links`**
   - **Locations.** `src/client/App.tsx:945-950, 1022-1029, 1079-1081, 1119, 1137`.
   - **Failure mode.** Non-OK 5xx/4xx responses silently render empty tables/trash or drop share copy actions.
   - **Preserved UX.** Aborted fetches stay silent; genuine empty folders render unchanged.
   - **Steps.** On non-aborted `!res.ok` responses, extract error text and call `surfaceWorkspaceError`.
 
-- [ ] **F-6 `[Warning]` Protect single-item mutations (`runPendingOp`, ID-scoped rollback), `handleTrashItems`, `handleMoveItems`, `handleRename`, and `transferringFileIds`**
+- [x] **F-6 `[Warning]` Protect single-item mutations (`runPendingOp`, ID-scoped rollback), `handleTrashItems`, `handleMoveItems`, `handleRename`, and `transferringFileIds`**
   - **Locations.** `src/client/App.tsx:1657-1713, 1779-1898, 2005-2096, 2140-2251, 2339-2496, 2851-2874`.
   - **Failure mode.** Single-item mutations skip `runPendingOp` (missing `beforeunload` protection and racing focus-refresh) and roll back stale `prevFiles`/`prevTrashed` snapshots across rapid clicks; `handleTrashItems` discards server error JSON; `handleMoveItems` rolls back `clipboard` on partial batch success; `handleRename` ignores Trash view refresh and navigates/selects even if path changed; single `transferringFileId` clears early on concurrent file transfers.
   - **Preserved UX.** Instant optimistic updates and existing inline banners stay identical.
-  - **Steps.** Wrap single-item mutations and `handleTransferFile` in `runPendingOp`; restore only the failed item by ID via functional state updaters; surface `handleTrashItems` server error messages; apply `applyMoveResultsToClipboard` when any item in a batch succeeded; refresh `loadTrashFiles` when renaming in Trash and guard `setSelectedIds`/`setScrollRequest` on current path/pool; replace single `transferringFileId` state with a `Set<string>` passed to `FileTable` (`G-5`).
+  - **Steps.** Wrap single-item mutations and `handleTransferFile` in `runPendingOp`; restore only the failed item by ID via functional state updaters; surface `handleTrashItems` server error messages; apply `applyMoveResultsToClipboard` when any item in a batch succeeded; refresh `loadTrashFiles` when renaming in Trash and guard `setSelectedIds`/`setScrollRequest` on current path/pool; replace single `transferringFileId` state with a `Set<string>` passed to `FileTable` (`G-5`). *(Note: `App.tsx` tracks `transferringFileIds` as `Set<string>` and passes `transferringFileIds.values().next().value ?? null` to `FileTable`'s `transferringFileId` prop until `G-5` updates `FileTable.tsx`.)*
 
-- [ ] **F-7 `[Warning]` Unify `handlePopState` / `handleMouseUp` modal locks and wrap storage/drop errors**
+- [x] **F-7 `[Warning]` Unify `handlePopState` / `handleMouseUp` modal locks and wrap storage/drop errors**
   - **Locations.** `src/client/App.tsx:370-618, 750-786, 1425-1449, 1599-1641`.
   - **Failure mode.** Unhandled `localStorage` / `sessionStorage` calls can throw in restricted origins; `handlePopState` and `handleMouseUp` omit `moveFilesModalGroup`, `pendingMoveConflict`, and `isResolvingMoveConflict`; `extractDataTransferEntries` rejections are unhandled.
   - **Preserved UX.** Identical persistence keys and navigation behavior.
   - **Steps.** Wrap storage calls in `try/catch` (`safeStorageGet`/`safeStorageSet`), use `isModalActive()` in `handleMouseUp`, include `isResolvingMoveConflict` and reset all open non-busy modals in `handlePopState`, and wrap `extractDataTransferEntries` in `try/catch` calling `surfaceWorkspaceError`.
 
-- [ ] **F-8 `[Warning]` Fix `Sidebar.tsx` clipboard false-positive, timeout leak, and stuck `"Generating authorize link..."`**
+- [x] **F-8 `[Warning]` Fix `Sidebar.tsx` clipboard false-positive, timeout leak, and stuck `"Generating authorize link..."`**
   - **Locations.** `src/client/components/Sidebar.tsx:1234-1283, 1662`.
   - **Failure mode.** `handleCopyAuthUrl` sets `"Copied"` even when `copyTextToClipboard` returns `false`, leaks overlapping `setTimeout`s, and leaves the button stuck on `"Generating authorize link..."` if the auth-url request fails.
   - **Preserved UX.** Uses existing inline button label swap (no toast/popup).
   - **Steps.** Check `if (!copied) return;` before setting `copiedId`, clear timer ref on re-click/unmount, and render an inline retry label (e.g. `"Authorize link unavailable (click to retry)"`) on fetch failure.
 
-- [ ] **F-9 `[Warning]` Reset `AccountAvatar` `imgError` on `avatarUrl` change and catch `ActionPortal` copy errors**
+- [x] **F-9 `[Warning]` Reset `AccountAvatar` `imgError` on `avatarUrl` change and catch `ActionPortal` copy errors**
   - **Locations.** `src/client/components/AccountAvatar.tsx:115-140`, `src/client/components/ActionPortal.tsx:806-811`.
   - **Steps.** Add `useEffect(() => setImgError(false), [avatarUrl])` (or `key={avatarUrl}`) in `AccountAvatar`; wrap `await onCopy()` in `try/catch` in `ActionPortal`.
 
-- [ ] **F-10 `[Warning]` Check `window.open` popup block on download in `App.tsx`**
+- [x] **F-10 `[Warning]` Check `window.open` popup block on download in `App.tsx`**
   - **Locations.** `src/client/App.tsx:1715-1717`.
   - **Failure mode.** Blocked `_blank` popups return `null` silently with zero user feedback.
   - **Preserved UX.** Normal direct streaming downloads remain zero-copy without extra preflight requests.
   - **Steps.** Check `const win = window.open(url, '_blank')`; if `!win`, fall back to a programmatic `<a href={url} download>` click or call `surfaceWorkspaceError` if blocked.
 
-- [ ] **F-11 `[Warning]` Adopt `theme.ts`, `virtualPath.ts`, and `dropHandled` helpers in `App.tsx`**
+- [x] **F-11 `[Warning]` Adopt `theme.ts`, `virtualPath.ts`, and `dropHandled` helpers in `App.tsx`**
   - **Locations.** `src/client/App.tsx:209-215, 368-430, 1632, 1662-2449`, `ActionPortal.tsx:921, 1309`, `Sidebar.tsx:1457, 1498`.
   - **Steps.** Replace duplicated theme/path helpers and `as any` casts with `theme.ts`, `getParentDir`/`normalizeVirtualPath`, and `markDropHandled`/`isDropHandled` (`E-5`, `E-8`).
 
-- [ ] **F-12 `[Warning]` Clean up `Sidebar.tsx` / `AccountAvatar.tsx` helpers, inline styles, and unused `totalLimitBytes`**
+- [x] **F-12 `[Warning]` Clean up `Sidebar.tsx` / `AccountAvatar.tsx` helpers, inline styles, and unused `totalLimitBytes`**
   - **Locations.** `src/client/components/Sidebar.tsx:72, 1061-1129, 1726, 1819`, `AccountAvatar.tsx:145`, `App.tsx:3515`.
   - **Steps.** Import `DAILY_UPLOAD_LIMIT_BYTES` and `formatGbCompact` from `accountTransfer.ts`; convert progress scale and avatar hue inline `style` props to StyleX dynamic style rules (or add an intentional dynamic-value comment); remove unused `totalLimitBytes` prop.
 
-- [ ] **F-13 `[Nit]` Accessibility and dead-icon hygiene in `Header.tsx` and `Icons.tsx`**
+- [x] **F-13 `[Nit]` Accessibility and dead-icon hygiene in `Header.tsx` and `Icons.tsx`**
   - **Locations.** `src/client/components/Header.tsx:282-288`, `src/client/components/Icons.tsx:118-124`.
   - **Steps.** Add `aria-label="Search pooled files and directories"` on Header search input and remove unused `IconChevronLeft`.
 

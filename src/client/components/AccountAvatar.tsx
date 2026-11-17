@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { radius } from '../tokens.stylex.js';
 
@@ -104,6 +104,10 @@ const styles = stylex.create({
     userSelect: 'none',
     pointerEvents: 'none',
   },
+  avatarColor: (backgroundColor: string, color: string) => ({
+    backgroundColor,
+    color,
+  }),
 });
 
 export function AccountAvatar({
@@ -113,6 +117,10 @@ export function AccountAvatar({
   index = 0,
 }: AccountAvatarProps) {
   const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [avatarUrl]);
 
   const isCustomPfp = Boolean(avatarUrl && !avatarUrl.includes('default-user'));
 
@@ -141,8 +149,7 @@ export function AccountAvatar({
 
   return (
     <div
-      {...stylex.props(styles.avatarPill)}
-      style={{ backgroundColor: color.bg, color: color.text }}
+      {...stylex.props(styles.avatarPill, styles.avatarColor(color.bg, color.text))}
       aria-label={displayName || email || 'Account avatar'}
     >
       {initial}
