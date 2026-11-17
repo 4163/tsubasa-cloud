@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { colors, spacing, radius, layout, typography } from '../tokens.stylex.js';
+import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import {
   IconUpload,
   IconFolderPlus,
@@ -17,6 +17,7 @@ import {
   IconCheck,
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
+import { rejectInvalidInternalDragOver, parseInternalDropItems } from '../utils/virtualPath.js';
 
 export interface ActionPortalClipboard {
   mode: 'cut' | 'copy';
@@ -129,6 +130,9 @@ const styles = stylex.create({
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
+    transitionProperty: 'background-color, color, border-color',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
@@ -160,6 +164,7 @@ const styles = stylex.create({
     userSelect: 'none',
   },
   focusRing: {
+    outline: 'none',
     ':focus-visible': {
       outlineWidth: '2px',
       outlineStyle: 'solid',
@@ -184,6 +189,9 @@ const styles = stylex.create({
     gap: spacing.space2,
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, transform',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
     },
@@ -214,6 +222,9 @@ const styles = stylex.create({
     gap: spacing.space2,
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, border-color, color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.rowHover,
       borderColor: colors.brandAccent,
@@ -270,6 +281,9 @@ const styles = stylex.create({
     gap: spacing.space2,
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.dangerHover,
     },
@@ -346,9 +360,11 @@ const styles = stylex.create({
     flexShrink: 1,
     overflow: 'hidden',
     cursor: 'pointer',
+    transitionProperty: 'background-color, transform',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      backgroundColor: colors.accentGold,
-      opacity: 0.9,
+      backgroundColor: colors.accentGoldHover,
     },
     ':active': {
       transform: 'scale(0.98)',
@@ -407,6 +423,9 @@ const styles = stylex.create({
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
     borderRadius: radius.button,
+    transitionProperty: 'background-color, color',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
@@ -575,6 +594,13 @@ export function ActionPortal({
 
     const prevWidth = container.style.width;
     container.style.width = 'max-content';
+    for (const label of compactLabels) {
+      label.style.display = 'inline';
+    }
+    for (const shortEl of compactShorts) {
+      shortEl.style.display = 'none';
+    }
+    syncBadgeFloorWidths(container);
     for (const badgeBtn of styledBadgeBtnsRef.current) {
       badgeBtn.style.maxWidth = badgeBtn.style.minWidth;
     }
@@ -583,12 +609,6 @@ export function ActionPortal({
       btn.style.width = 'auto';
       btn.style.paddingLeft = pad;
       btn.style.paddingRight = pad;
-    }
-    for (const label of compactLabels) {
-      label.style.display = 'inline';
-    }
-    for (const shortEl of compactShorts) {
-      shortEl.style.display = 'none';
     }
 
     const expandedWidth = Math.ceil(container.getBoundingClientRect().width);
@@ -608,9 +628,10 @@ export function ActionPortal({
     for (const shortEl of compactShorts) {
       shortEl.style.display = '';
     }
+    syncBadgeFloorWidths(container);
 
     return expandedWidth;
-  }, []);
+  }, [syncBadgeFloorWidths]);
 
   const reconcileOverflow = useCallback(() => {
     const el = portalRef.current;
@@ -659,12 +680,18 @@ export function ActionPortal({
   }, [measureExpandedScrollWidth]);
 
   const prevSignatureRef = useRef<string | null>(null);
+  const prevCompactRef = useRef<boolean>(compact);
   useLayoutEffect(() => {
     const el = portalRef.current;
     if (!el) return;
-    if (prevSignatureRef.current !== layoutSignature) {
+    const signatureChanged = prevSignatureRef.current !== layoutSignature;
+    const compactChanged = prevCompactRef.current !== compact;
+    if (signatureChanged) {
       prevSignatureRef.current = layoutSignature;
       collapseThresholdRef.current = 0;
+    }
+    if (signatureChanged || compactChanged) {
+      prevCompactRef.current = compact;
       syncBadgeFloorWidths(el);
     }
     reconcileOverflow();
@@ -780,7 +807,7 @@ export function ActionPortal({
             markKeyCopied(copyKey);
           }
         }}
-        title={title}
+        title={isTruncatedBatch || isIconOnly ? title : undefined}
         aria-label={title}
       >
         {isCopied ? (
@@ -858,6 +885,9 @@ export function ActionPortal({
     const hasFiles = e.dataTransfer?.types?.includes('Files');
     if (!hasTsubasa && !hasFiles) return;
 
+    const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
+    if (rejectInvalidInternalDragOver(e, targetPath, () => setDragOverIndex((prev) => (prev === index ? null : prev)))) return;
+
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = hasTsubasa ? 'move' : 'copy';
@@ -881,14 +911,11 @@ export function ActionPortal({
     const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
 
     if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
-      try {
-        const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          onMoveItemsToPath?.(parsed, targetPath);
-          return;
-        }
-      } catch {}
+      const parsed = parseInternalDropItems(e, targetPath);
+      if (parsed) {
+        onMoveItemsToPath?.(parsed, targetPath);
+      }
+      return;
     }
 
     if (e.dataTransfer.types.includes('Files') && e.dataTransfer.files.length > 0) {
@@ -911,7 +938,6 @@ export function ActionPortal({
           onDragOver={(e) => handleBreadcrumbDragOver(e, -1)}
           onDragLeave={(e) => handleBreadcrumbDragLeave(e, -1)}
           onDrop={(e) => handleBreadcrumbDrop(e, -1)}
-          title="All files (/)"
         >
           All files
         </button>
@@ -988,7 +1014,18 @@ export function ActionPortal({
                       data-badge-static={canTruncateName ? 'true' : undefined}
                       {...stylex.props(styles.badgeStaticWrap)}
                     >
-                      <span>· {group.fileIds.length} selected</span>
+                      <span>
+                        {'· '}
+                        <span
+                          data-compact-label="true"
+                          {...stylex.props(compact && styles.compactHiddenLabel)}
+                        >
+                          {`${group.fileIds.length} selected`}
+                        </span>
+                        {compact && (
+                          <span data-compact-short="true">{`(${group.fileIds.length})`}</span>
+                        )}
+                      </span>
                       <span {...stylex.props(styles.selectionBadgeBtnSize)}>
                         · {formatBytes(group.totalBytes)}
                       </span>
@@ -1006,7 +1043,17 @@ export function ActionPortal({
             </>
           ) : (
             <span {...stylex.props(styles.selectionBadge)}>
-              <span>{selectedCount} selected</span>
+              <span>
+                <span
+                  data-compact-label="true"
+                  {...stylex.props(compact && styles.compactHiddenLabel)}
+                >
+                  {`${selectedCount} selected`}
+                </span>
+                {compact && (
+                  <span data-compact-short="true">{`(${selectedCount})`}</span>
+                )}
+              </span>
               {selectedTotalBytes > 0 && (
                 <span {...stylex.props(styles.selectionBadgeSize)}>
                   · {formatBytes(selectedTotalBytes)}
@@ -1022,7 +1069,6 @@ export function ActionPortal({
               {...stylex.props(styles.primaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
               onClick={onRestoreSelected}
               aria-label="Restore selected items"
-              title="Restore selected items to their original locations"
             >
               <IconRotateCcw {...stylex.props(styles.btnIcon)} />
               <span
@@ -1098,7 +1144,6 @@ export function ActionPortal({
               {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
               onClick={onShareSelected}
               aria-label="Share selected items"
-              title="Share selected items via Google Drive"
             >
               <IconShare {...stylex.props(styles.btnIcon)} />
               <span
@@ -1214,7 +1259,6 @@ export function ActionPortal({
           onClick={onEmptyTrash}
           disabled={trashedCount === 0}
           aria-label="Empty trash"
-          title="Empty trash"
         >
           <IconTrash {...stylex.props(styles.btnIcon)} />
           <span
@@ -1261,7 +1305,6 @@ export function ActionPortal({
                 {...stylex.props(styles.primaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Upload file"
-                title="Upload files to current folder"
               >
                 <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
                 <span
@@ -1278,7 +1321,6 @@ export function ActionPortal({
                 {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
                 onClick={() => folderInputRef.current?.click()}
                 aria-label="Upload folder"
-                title="Upload an entire folder with nested files and structure"
               >
                 <IconFolderPlus {...stylex.props(styles.btnIcon)} />
                 <span
@@ -1295,7 +1337,6 @@ export function ActionPortal({
                 {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
                 onClick={onCreateFolderPrompt}
                 aria-label="New folder"
-                title="Create new directory in current location"
               >
                 <IconFolder {...stylex.props(styles.btnIcon)} />
                 <span

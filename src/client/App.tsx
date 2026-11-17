@@ -14,6 +14,7 @@ import { flushSync } from 'react-dom';
 import * as stylex from '@stylexjs/stylex';
 import { client } from './api.js';
 import { colors, darkColors } from './tokens.stylex.js';
+import { filterMovableItemsToPath } from './utils/virtualPath.js';
 import { Header, type ThemeChoice } from './components/Header.js';
 import { Sidebar, type AccountItem, type PoolSummary } from './components/Sidebar.js';
 import {
@@ -159,6 +160,10 @@ function runWithViewTransition(update: () => void) {
 const lastDiscrepancyScanByPool = new Map<number, number>();
 const DISCREPANCY_COOLDOWN_MS = 60_000;
 const EMPTY_SELECTED_IDS = new Set<string>();
+
+function isModalActive(): boolean {
+  return typeof document !== 'undefined' && Boolean(document.querySelector('dialog[open], [role="dialog"]'));
+}
 
 export function App() {
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => {
@@ -1366,7 +1371,7 @@ export function App() {
 
   const handleStageDroppedUpload = useCallback(
     (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[]; basePath?: string }) => {
-      if (isSharePoolActive) return;
+      if (isSharePoolActive || isModalActive()) return;
       if (dropped.files.length > 0 || dropped.emptyFolders.length > 0) {
         setStagedFiles(dropped.files);
         setStagedEmptyFolders(dropped.emptyFolders);
@@ -1379,7 +1384,7 @@ export function App() {
 
   const handleDropExternalToPath = useCallback(
     async (targetPath: string, dataTransfer: DataTransfer) => {
-      if (isSharePoolActive) return;
+      if (isSharePoolActive || isModalActive()) return;
       const extracted = await extractDataTransferEntries(dataTransfer, targetPath);
       if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
         setStagedFiles(extracted.files);
@@ -1393,7 +1398,7 @@ export function App() {
 
   useEffect(() => {
     const handleWindowDragOver = (e: DragEvent) => {
-      if (currentNav === 'trash' || isSharePoolActive) return;
+      if (currentNav === 'trash' || isSharePoolActive || isModalActive()) return;
       if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
@@ -1403,6 +1408,10 @@ export function App() {
 
     const handleWindowDrop = async (e: DragEvent) => {
       if (currentNav === 'trash' || isSharePoolActive) return;
+      if (isModalActive()) {
+        e.preventDefault();
+        return;
+      }
       if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
@@ -1757,8 +1766,17 @@ export function App() {
       const prevClipboard = clipboard;
       const prevSelected = selectedIds;
 
-      const movedIds = new Set(itemsToMove.map((i) => i.id));
-      const destPrefix = targetFolderPath === '/' ? '' : targetFolderPath;
+      const fileById = new Map(prevFiles.map((f) => [f.id, f]));
+      const folderById = new Map(prevFolders.map((f) => [f.id, f]));
+      const { normalizedTarget: normTarget, validItems } = filterMovableItemsToPath(
+        itemsToMove,
+        targetFolderPath,
+        (item) => (item.kind === 'folder' ? folderById.get(item.id) : fileById.get(item.id))?.virtualPath
+      );
+      if (validItems.length === 0) return;
+
+      const movedIds = new Set(validItems.map((i) => i.id));
+      const destPrefix = normTarget === '/' ? '' : normTarget;
       setFiles((prev) =>
         prev.map((f) => (movedIds.has(f.id) ? { ...f, virtualPath: `${destPrefix}/${f.name}` } : f))
       );
@@ -1775,7 +1793,7 @@ export function App() {
       await runPendingOp(async () => {
         try {
           const res = await client.api.items.move.$post({
-            json: { items: itemsToMove, targetFolderPath, poolId },
+            json: { items: validItems, targetFolderPath: normTarget, poolId },
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
@@ -3087,6 +3105,7 @@ export function App() {
   }, [handleCopyBatchLinks]);
 
   const handleDropFilesToTable = useCallback((droppedFiles: File[]) => {
+    if (isModalActive()) return;
     if (droppedFiles.length > 0) {
       setStagedFiles(droppedFiles);
       setStagedEmptyFolders([]);

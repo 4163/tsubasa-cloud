@@ -7,6 +7,7 @@ import { AccountAvatar } from './AccountAvatar.js';
 import { RedactedEmail } from './RedactedEmail.js';
 import { sortPools, copyTextToClipboard } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import { rejectInvalidInternalDragOver, parseInternalDropItems } from '../utils/virtualPath.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export interface AccountTransferStats {
@@ -254,11 +255,18 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '3px',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       borderColor: colors.brandAccent,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -297,11 +305,25 @@ const styles = stylex.create({
     cursor: 'pointer',
     outline: 'none',
     boxSizing: 'border-box',
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      borderColor: colors.border,
+      borderColor: colors.accentGold,
     },
     ':focus': {
-      borderColor: colors.accentGold,
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    ':focus-visible': {
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
   },
   poolSelectChevron: {
@@ -351,6 +373,7 @@ const styles = stylex.create({
     width: '100%',
     boxSizing: 'border-box',
     textAlign: 'left',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -359,6 +382,12 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
     },
   },
   navItemActive: {
@@ -427,6 +456,7 @@ const styles = stylex.create({
     cursor: 'pointer',
     textAlign: 'left',
     boxSizing: 'border-box',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -435,6 +465,12 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
     },
     ':disabled': {
       opacity: 0.6,
@@ -516,7 +552,7 @@ const styles = stylex.create({
     },
   },
   accountCardFiltered: {
-    borderColor: colors.brandAccent,
+    borderColor: colors.accentGold,
   },
   accountTop: {
     display: 'flex',
@@ -565,6 +601,7 @@ const styles = stylex.create({
     color: colors.secondaryText,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.surface,
@@ -572,7 +609,9 @@ const styles = stylex.create({
       color: colors.primaryText,
     },
     ':focus-visible': {
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
@@ -696,10 +735,17 @@ const styles = stylex.create({
     cursor: 'pointer',
     flexShrink: 0,
     fontWeight: '600',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -723,11 +769,18 @@ const styles = stylex.create({
     color: colors.secondaryText,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.surface,
       borderColor: colors.brandAccent,
       color: colors.brandAccent,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -751,10 +804,17 @@ const styles = stylex.create({
     color: colors.success,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.successSurface,
       borderColor: colors.success,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -778,10 +838,17 @@ const styles = stylex.create({
     color: colors.danger,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -844,6 +911,7 @@ const styles = stylex.create({
     textAlign: 'left',
     width: '100%',
     boxSizing: 'border-box',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -852,6 +920,12 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
   },
   authLinkBoxCopied: {
@@ -1299,7 +1373,6 @@ export function Sidebar({
                     type="button"
                     {...stylex.props(styles.poolActionBtn)}
                     onClick={() => onRenamePoolPrompt(activePool)}
-                    title="Rename pool display name"
                     aria-label="Rename storage pool"
                   >
                     <IconEdit size={11} />
@@ -1311,7 +1384,6 @@ export function Sidebar({
                     type="button"
                     {...stylex.props(styles.poolActionBtn, styles.poolDeleteBtn)}
                     onClick={() => onDeletePoolPrompt(activePool)}
-                    title="Delete empty storage pool"
                     aria-label="Delete storage pool"
                   >
                     <IconTrash size={11} />
@@ -1323,7 +1395,6 @@ export function Sidebar({
                     type="button"
                     {...stylex.props(styles.poolActionBtn)}
                     onClick={onCreatePool}
-                    title="Create new storage pool"
                     aria-label="Create new storage pool"
                   >
                     <IconPlus size={11} strokeWidth={2.5} />
@@ -1364,6 +1435,7 @@ export function Sidebar({
             onClick={() => onSelectNav('files')}
             onDragOver={(e) => {
               if (activePool?.isSharePool) return;
+              if (rejectInvalidInternalDragOver(e, '/', () => setDragOverNav((prev) => (prev === 'files' ? null : prev)))) return;
               const hasItems = e.dataTransfer?.types?.includes('application/x-tsubasa-items');
               const hasFiles = e.dataTransfer?.types?.includes('Files');
               if (hasItems || hasFiles) {
@@ -1385,13 +1457,11 @@ export function Sidebar({
               (e.nativeEvent as any).__tsubasaHandled = true;
               setDragOverNav(null);
               if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
-                try {
-                  const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-                  const parsed = JSON.parse(raw);
-                  if (Array.isArray(parsed) && parsed.length > 0) {
-                    onDropItemsToRoot?.(parsed);
-                  }
-                } catch {}
+                const parsed = parseInternalDropItems(e, '/');
+                if (parsed) {
+                  onDropItemsToRoot?.(parsed);
+                }
+                return;
               } else if (e.dataTransfer.types.includes('Files') && e.dataTransfer.files.length > 0) {
                 onDropExternalToRoot?.(e.dataTransfer);
               }
@@ -1565,7 +1635,7 @@ export function Sidebar({
                         Full
                       </span>
                     ) : acc.authorized ? (
-                      <span {...stylex.props(styles.authPill)} title="Authorized and active in storage pool">
+                      <span {...stylex.props(styles.authPill)}>
                         Active
                       </span>
                     ) : null}
@@ -1611,7 +1681,6 @@ export function Sidebar({
                               type="button"
                               {...stylex.props(styles.miniSyncBtn)}
                               onClick={() => onOpenMovePool?.(acc)}
-                              title="Move account to another storage pool"
                             >
                               Move pool
                             </button>
@@ -1691,7 +1760,6 @@ export function Sidebar({
                             type="button"
                             {...stylex.props(styles.miniSyncBtn)}
                             onClick={() => onOpenMovePool?.(acc)}
-                            title="Move account to another storage pool"
                           >
                             Move pool
                           </button>
@@ -1701,7 +1769,6 @@ export function Sidebar({
                             type="button"
                             {...stylex.props(styles.miniEnableBtn)}
                             onClick={() => onEnableAccount(acc.id)}
-                            title="Re-enable drive in storage pool"
                           >
                             Enable
                           </button>
@@ -1711,7 +1778,6 @@ export function Sidebar({
                             type="button"
                             {...stylex.props(styles.miniSyncBtn)}
                             onClick={() => onDisableAccount(acc)}
-                            title="Disable drive and exclude from storage pool"
                           >
                             Disable
                           </button>
