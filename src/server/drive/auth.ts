@@ -21,11 +21,22 @@ export function safeRenameFile(srcPath: string, destPath: string): void {
   }
 
   if (fs.existsSync(resolvedDest)) {
-    try {
-      fs.unlinkSync(resolvedDest);
-    } catch {}
+    const destStat = fs.statSync(resolvedDest);
+    if (destStat.size > 0) {
+      throw new Error(`Refusing to overwrite non-empty destination file: ${resolvedDest}`);
+    }
+    fs.unlinkSync(resolvedDest);
   }
   fs.renameSync(resolvedSrc, resolvedDest);
+}
+
+function extractBaseName(filePath: string): string {
+  const fileName = path.basename(filePath);
+  return path.basename(fileName, path.extname(fileName));
+}
+
+function buildFileSignature(stat: fs.Stats, tokenSig: string): string {
+  return `${stat.mtimeMs}:${stat.size}:${tokenSig}`;
 }
 
 export function extractEmailFromIdToken(idToken?: string | null): string | null {
@@ -72,7 +83,8 @@ class AuthPool {
   private hasScanned = false;
   private watcher: fs.FSWatcher | null = null;
   private watchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private tokenWriteQueues = new Map<string, Promise<void>>();
+  private tokenWriteQueues = new WeakMap<AccountAuthRecord, Promise<void>>();
+  private handlingCallbackRecords = new WeakSet<AccountAuthRecord>();
 
   constructor(oauthDir = path.resolve(process.cwd(), '.oauths')) {
     this.oauthDir = oauthDir;
@@ -93,14 +105,24 @@ class AuthPool {
     return 'none';
   }
 
+  private async getTokenFileSignatureAsync(baseName: string): Promise<string> {
+    const tokenPath = path.join(this.oauthDir, `${baseName}.tokens.json`);
+    try {
+      const tokenStat = await fs.promises.stat(tokenPath);
+      if (tokenStat.isFile()) {
+        return `${tokenStat.mtimeMs}:${tokenStat.size}`;
+      }
+    } catch {}
+    return 'none';
+  }
+
   private refreshFileCacheSignature(sourceFile: string, accountId: string): void {
     const fileName = path.basename(sourceFile);
-    const ext = path.extname(fileName).toLowerCase();
-    const baseName = path.basename(fileName, ext);
+    const baseName = extractBaseName(fileName);
     try {
       const stat = fs.statSync(sourceFile);
       if (stat.isFile()) {
-        const signature = `${stat.mtimeMs}:${stat.size}:${this.getTokenFileSignature(baseName)}`;
+        const signature = buildFileSignature(stat, this.getTokenFileSignature(baseName));
         this.fileCache.set(fileName, { signature, accountId });
       }
     } catch {}
@@ -108,21 +130,13 @@ class AuthPool {
 
   private async refreshFileCacheSignatureAsync(sourceFile: string, accountId: string): Promise<void> {
     const fileName = path.basename(sourceFile);
-    const ext = path.extname(fileName).toLowerCase();
-    const baseName = path.basename(fileName, ext);
+    const baseName = extractBaseName(fileName);
     try {
       const stat = await fs.promises.stat(sourceFile);
       if (!stat.isFile()) return;
-      let tokenSig = 'none';
-      const tokenPath = path.join(this.oauthDir, `${baseName}.tokens.json`);
-      try {
-        const tokenStat = await fs.promises.stat(tokenPath);
-        if (tokenStat.isFile()) {
-          tokenSig = `${tokenStat.mtimeMs}:${tokenStat.size}`;
-        }
-      } catch {}
+      const tokenSig = await this.getTokenFileSignatureAsync(baseName);
       this.fileCache.set(fileName, {
-        signature: `${stat.mtimeMs}:${stat.size}:${tokenSig}`,
+        signature: buildFileSignature(stat, tokenSig),
         accountId,
       });
     } catch {}
@@ -133,13 +147,17 @@ class AuthPool {
     merged: Credentials,
     recordRef?: AccountAuthRecord
   ): Promise<void> {
-    const prev = this.tokenWriteQueues.get(accountId) ?? Promise.resolve();
+    const record = recordRef ?? this.pool.get(accountId);
+    if (!record) {
+      return Promise.resolve();
+    }
+
+    const prev = this.tokenWriteQueues.get(record) ?? Promise.resolve();
     const next = prev
       .catch(() => {})
       .then(async () => {
-        const record = recordRef ?? this.pool.get(accountId);
-        const currentAccountId = record?.config.accountId ?? accountId;
-        if (!this.pool.has(currentAccountId)) {
+        const currentAccountId = record.config.accountId;
+        if (this.pool.get(currentAccountId) !== record) {
           return;
         }
 
@@ -150,17 +168,17 @@ class AuthPool {
         await fs.promises.writeFile(tmpPath, JSON.stringify(merged, null, 2), 'utf8');
         await fs.promises.rename(tmpPath, tokenFilePath);
 
-        if (record?.config.sourceFile) {
+        if (record.config.sourceFile) {
           await this.refreshFileCacheSignatureAsync(record.config.sourceFile, currentAccountId);
         }
       })
       .finally(() => {
-        if (this.tokenWriteQueues.get(accountId) === next) {
-          this.tokenWriteQueues.delete(accountId);
+        if (this.tokenWriteQueues.get(record) === next) {
+          this.tokenWriteQueues.delete(record);
         }
       });
 
-    this.tokenWriteQueues.set(accountId, next);
+    this.tokenWriteQueues.set(record, next);
     return next;
   }
 
@@ -189,7 +207,11 @@ class AuthPool {
         }
         this.watchDebounceTimer = setTimeout(() => {
           this.watchDebounceTimer = null;
-          this.scan();
+          try {
+            this.scan();
+          } catch (err) {
+            console.warn('OAuth directory rescan failed:', err);
+          }
         }, 150);
         this.watchDebounceTimer.unref?.();
       });
@@ -197,7 +219,9 @@ class AuthPool {
       this.watcher.on('error', () => {
         this.stopWatching();
       });
-    } catch {}
+    } catch (err) {
+      console.warn('Failed to start OAuth directory watcher:', err);
+    }
   }
 
   public stopWatching(): void {
@@ -239,9 +263,8 @@ class AuthPool {
         continue;
       }
 
-      const ext = path.extname(file).toLowerCase();
-      const baseName = path.basename(file, ext);
-      const signature = `${stat.mtimeMs}:${stat.size}:${this.getTokenFileSignature(baseName)}`;
+      const baseName = extractBaseName(file);
+      const signature = buildFileSignature(stat, this.getTokenFileSignature(baseName));
       const cached = this.fileCache.get(file);
       if (cached && cached.signature === signature && this.pool.has(cached.accountId)) {
         seenFiles.add(file);
@@ -260,6 +283,22 @@ class AuthPool {
         const email = extractEmailFromIdToken(parsed.tokens.id_token);
         if (email && email.toLowerCase() !== parsed.accountId.toLowerCase()) {
           const oldId = parsed.accountId;
+          const targetExt = path.extname(parsed.sourceFile).toLowerCase() || '.json';
+          const newSourceFile = path.join(this.oauthDir, `${email}${targetExt}`);
+          const oldTokenFile = path.join(this.oauthDir, `${oldId}.tokens.json`);
+          const newTokenFile = path.join(this.oauthDir, `${email}.tokens.json`);
+
+          try {
+            safeRenameFile(parsed.sourceFile, newSourceFile);
+            parsed.sourceFile = newSourceFile;
+            if (fs.existsSync(oldTokenFile)) {
+              safeRenameFile(oldTokenFile, newTokenFile);
+            }
+          } catch (err) {
+            console.warn(`Skipping account rename from ${oldId} to ${email}:`, err);
+            continue;
+          }
+
           const prevPreferred =
             this.preferredPools.get(oldId) ??
             this.pool.get(oldId)?.config.preferredPoolId;
@@ -269,18 +308,7 @@ class AuthPool {
           this.preferredPools.delete(oldId);
           this.pool.delete(oldId);
 
-          const targetExt = path.extname(parsed.sourceFile).toLowerCase() || '.json';
-          const newSourceFile = path.join(this.oauthDir, `${email}${targetExt}`);
-          const oldTokenFile = path.join(this.oauthDir, `${oldId}.tokens.json`);
-          const newTokenFile = path.join(this.oauthDir, `${email}.tokens.json`);
-
-          safeRenameFile(parsed.sourceFile, newSourceFile);
-          if (fs.existsSync(oldTokenFile)) {
-            safeRenameFile(oldTokenFile, newTokenFile);
-          }
-
           parsed.accountId = email;
-          parsed.sourceFile = newSourceFile;
 
           try {
             renameAccountInDb(oldId, email);
@@ -296,7 +324,7 @@ class AuthPool {
         this.fileCache.delete(file);
         try {
           const renamedStat = fs.statSync(parsed.sourceFile);
-          finalSignature = `${renamedStat.mtimeMs}:${renamedStat.size}:${this.getTokenFileSignature(parsed.accountId)}`;
+          finalSignature = buildFileSignature(renamedStat, this.getTokenFileSignature(parsed.accountId));
         } catch {}
       }
 
@@ -304,7 +332,11 @@ class AuthPool {
       if (existing) {
         existing.config.mtimeMs = stat.mtimeMs;
         existing.config.sourceFile = parsed.sourceFile;
-        if (parsed.tokens && JSON.stringify(parsed.tokens) !== JSON.stringify(existing.config.tokens)) {
+        if (!parsed.tokens) {
+          existing.config.tokens = undefined;
+          existing.client.setCredentials({});
+          existing.authorized = false;
+        } else if (JSON.stringify(parsed.tokens) !== JSON.stringify(existing.config.tokens)) {
           existing.config.tokens = parsed.tokens;
           existing.client.setCredentials(parsed.tokens);
           existing.authorized = Boolean(parsed.tokens.refresh_token || parsed.tokens.access_token);
@@ -333,9 +365,22 @@ class AuthPool {
     return this.pool;
   }
 
+  private readTokenFile(baseName: string): Credentials | undefined {
+    const tokenFile = path.join(this.oauthDir, `${baseName}.tokens.json`);
+    if (!fs.existsSync(tokenFile)) {
+      return undefined;
+    }
+    try {
+      return JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Credentials;
+    } catch (err) {
+      console.warn(`Failed to parse token file ${tokenFile}:`, err);
+      return undefined;
+    }
+  }
+
   private parseCredentialFile(filePath: string): AccountCredentials | null {
     const ext = path.extname(filePath).toLowerCase();
-    const baseName = path.basename(filePath, ext);
+    const baseName = extractBaseName(filePath);
 
     if (ext === '.json') {
       try {
@@ -346,12 +391,8 @@ class AuthPool {
           return null;
         }
 
-        const tokenFile = path.join(this.oauthDir, `${baseName}.tokens.json`);
-        let tokens: Credentials | undefined;
-
-        if (fs.existsSync(tokenFile)) {
-          tokens = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
-        } else if (target.refresh_token) {
+        let tokens = this.readTokenFile(baseName);
+        if (!tokens && target.refresh_token) {
           tokens = {
             refresh_token: target.refresh_token,
             access_token: target.access_token,
@@ -392,12 +433,8 @@ class AuthPool {
         const refreshToken = env.GOOGLE_REFRESH_TOKEN || env.REFRESH_TOKEN;
         const redirectUri = env.GOOGLE_REDIRECT_URI || env.REDIRECT_URI || 'http://localhost:3000/api/auth/callback';
 
-        const tokenFile = path.join(this.oauthDir, `${baseName}.tokens.json`);
-        let tokens: Credentials | undefined;
-
-        if (fs.existsSync(tokenFile)) {
-          tokens = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
-        } else if (refreshToken) {
+        let tokens = this.readTokenFile(baseName);
+        if (!tokens && refreshToken) {
           tokens = { refresh_token: refreshToken };
         }
 
@@ -439,6 +476,10 @@ class AuthPool {
       };
       record.config.tokens = merged;
       record.authorized = true;
+
+      if (this.handlingCallbackRecords.has(record)) {
+        return;
+      }
 
       const currentAccountId = record.config.accountId;
       void this.persistTokensAsync(currentAccountId, merged, record).catch((err) => {
@@ -483,12 +524,6 @@ class AuthPool {
       const pref = this.preferredPools.get(oldAccountId)!;
       this.preferredPools.set(newAccountId, pref);
       this.preferredPools.delete(oldAccountId);
-    }
-
-    const pendingWrite = this.tokenWriteQueues.get(oldAccountId);
-    if (pendingWrite) {
-      this.tokenWriteQueues.set(newAccountId, pendingWrite);
-      this.tokenWriteQueues.delete(oldAccountId);
     }
 
     const oldSourceFile = record.config.sourceFile;
@@ -605,25 +640,30 @@ class AuthPool {
       ? new google.auth.OAuth2(record.config.clientId, record.config.clientSecret, redirectUri)
       : record.client;
 
-    const { tokens } = await client.getToken(code);
-    const merged: Credentials = {
-      ...(record.config.tokens || {}),
-      ...tokens,
-    };
+    this.handlingCallbackRecords.add(record);
+    try {
+      const { tokens } = await client.getToken(code);
+      const merged: Credentials = {
+        ...(record.config.tokens || {}),
+        ...tokens,
+      };
 
-    record.client.setCredentials(merged);
-    record.config.tokens = merged;
-    record.authorized = true;
+      record.client.setCredentials(merged);
+      record.config.tokens = merged;
+      record.authorized = true;
 
-    let targetAccountId = accountId;
-    const email = extractEmailFromIdToken(tokens.id_token);
-    if (email && email.toLowerCase() !== accountId.toLowerCase()) {
-      targetAccountId = this.renameAccount(accountId, email.toLowerCase());
+      let targetAccountId = accountId;
+      const email = extractEmailFromIdToken(tokens.id_token);
+      if (email && email.toLowerCase() !== accountId.toLowerCase()) {
+        targetAccountId = this.renameAccount(accountId, email.toLowerCase());
+      }
+
+      await this.persistTokensAsync(targetAccountId, merged, record);
+
+      return { tokens: merged, accountId: targetAccountId };
+    } finally {
+      this.handlingCallbackRecords.delete(record);
     }
-
-    await this.persistTokensAsync(targetAccountId, merged, record);
-
-    return { tokens: merged, accountId: targetAccountId };
   }
 
   public async importCredentials(
@@ -724,7 +764,9 @@ class AuthPool {
               error: `The .env specifies a non-loopback redirect URI (${envRedirect}). Desktop apps must use loopback (http://localhost or http://127.0.0.1).`,
             };
           }
-        } catch {}
+        } catch {
+          return { success: false, error: 'Invalid redirect URI in .env file.' };
+        }
       }
 
       const probe = await verifyDesktopAppClientId(clientId);

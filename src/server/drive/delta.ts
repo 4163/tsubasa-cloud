@@ -1,18 +1,21 @@
 import {
+  clearOrphanAppProperties,
   getDriveClient,
   refreshAccountLiveQuota,
   resolveRemoteParentPath,
-  runBoundedConcurrency,
   withDriveRetry,
 } from './client.js';
 import {
-  runColdReconciliation,
+  runColdReconciliationLocked,
+  runWithAccountSyncLock,
   extractFolderPaths,
   insertFolderRecord,
   upsertFileRecord,
   deleteFileStmt,
   trashFileStmt,
 } from './sync.js';
+import { evictRemoteFolderByDriveId, normalizeVirtualPath } from './mirror.js';
+import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 import { invalidateDiscrepancyCache } from './detector.js';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
 import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
@@ -35,7 +38,7 @@ function isExpiredTokenError(err: unknown): boolean {
 }
 
 async function fallbackToColdSync(accountId: string): Promise<DeltaSyncReport> {
-  const coldReport = await runColdReconciliation(accountId);
+  const coldReport = await runColdReconciliationLocked(accountId);
   invalidateDiscrepancyCache(accountId);
   const refreshed = await db.query.accounts.findFirst({
     where: eq(accounts.id, accountId),
@@ -56,8 +59,10 @@ export function runIncrementalSync(accountId: string): Promise<DeltaSyncReport> 
     return existing;
   }
 
-  const promise = executeIncrementalSync(accountId).finally(() => {
-    inFlightIncrementalSyncs.delete(accountId);
+  const promise = runWithAccountSyncLock(accountId, () => executeIncrementalSync(accountId)).finally(() => {
+    if (inFlightIncrementalSyncs.get(accountId) === promise) {
+      inFlightIncrementalSyncs.delete(accountId);
+    }
   });
   inFlightIncrementalSyncs.set(accountId, promise);
   return promise;
@@ -124,6 +129,7 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
         }
 
         if (change.removed) {
+          evictRemoteFolderByDriveId(rootFolderId, change.fileId);
           batchOperations.push(() => {
             deleteFileStmt.run(change.fileId, accountId);
           });
@@ -135,35 +141,46 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
         if (!file) continue;
 
         if (file.mimeType === 'application/vnd.google-apps.folder') {
+          let folderInsidePool = false;
           if (!file.trashed && file.parents && file.parents.length > 0) {
-            const parentId = file.parents[0];
-            const parentRes = await resolveRemoteParentPath(
-              drive,
-              rootFolderId,
-              parentId,
-              folderPathCache,
-              {
-                onResolvedFolder: (virtualPath) => batchFolderPaths.add(virtualPath),
+            for (const parentId of file.parents) {
+              const parentRes = await resolveRemoteParentPath(
+                drive,
+                rootFolderId,
+                parentId,
+                folderPathCache,
+                {
+                  onResolvedFolder: (virtualPath) => batchFolderPaths.add(virtualPath),
+                }
+              );
+              if (parentRes.isInsidePool) {
+                const folderPath = normalizeVirtualPath(
+                  file.appProperties?.tsubasa_folder_path ||
+                    (parentRes.path === '/'
+                      ? `/${file.name}`
+                      : `${parentRes.path}/${file.name}`)
+                );
+                batchFolderPaths.add(folderPath);
+                folderPathCache.set(change.fileId, folderPath);
+                folderInsidePool = true;
+                break;
               }
-            );
-            if (parentRes.isInsidePool) {
-              const folderPath =
-                file.appProperties?.tsubasa_folder_path ||
-                (parentRes.path === '/'
-                  ? `/${file.name}`
-                  : `${parentRes.path}/${file.name}`);
-              batchFolderPaths.add(folderPath);
-              folderPathCache.set(change.fileId, folderPath);
             }
+          }
+          if (!folderInsidePool) {
+            evictRemoteFolderByDriveId(rootFolderId, change.fileId);
           }
           continue;
         }
 
         if (file.trashed) {
+          const driveFileId = change.fileId;
           batchOperations.push(() => {
-            trashFileStmt.run(change.fileId, accountId);
+            const info = trashFileStmt.run(driveFileId, accountId);
+            if (info.changes > 0) {
+              updatedCount++;
+            }
           });
-          updatedCount++;
           continue;
         }
 
@@ -202,9 +219,14 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
         }
 
         if (file.appProperties?.tsubasa_managed === 'true') {
+          const sizeBytes = Number(file.size || 0);
+          if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+            continue;
+          }
+
           const computedPath =
             parentFolderPath === '/' ? `/${file.name}` : `${parentFolderPath}/${file.name}`;
-          const virtualPath = file.appProperties.tsubasa_virtual_path || computedPath;
+          const virtualPath = normalizeVirtualPath(file.appProperties.tsubasa_virtual_path || computedPath);
           const fileId = file.appProperties.tsubasa_virtual_id || file.id || change.fileId;
           const hash =
             file.appProperties.tsubasa_checksum || file.md5Checksum || file.sha256Checksum || null;
@@ -218,7 +240,7 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
               id: fileId,
               virtualPath,
               name: file.name || 'unnamed',
-              sizeBytes: Number(file.size || 0),
+              sizeBytes,
               mimeType: file.mimeType || 'application/octet-stream',
               hash,
               accountId,
@@ -248,21 +270,7 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
       pageToken = res.data.nextPageToken || undefined;
     }
 
-    await runBoundedConcurrency(orphanDriveIds, 5, async (orphanId) => {
-      await withDriveRetry(() =>
-        drive.files.update({
-          fileId: orphanId,
-          requestBody: {
-            appProperties: {
-              tsubasa_managed: null,
-              tsubasa_virtual_path: null,
-              tsubasa_virtual_id: null,
-            } as any,
-          },
-          supportsAllDrives: false,
-        })
-      ).catch(() => {});
-    });
+    await clearOrphanAppProperties(drive, orphanDriveIds);
 
     const finalToken = newStartToken || accountRecord.lastSyncToken;
 

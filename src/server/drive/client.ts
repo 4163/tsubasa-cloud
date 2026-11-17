@@ -1,7 +1,11 @@
 import { google, type drive_v3 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import { authPool } from './auth.js';
-import { getCachedVirtualPathByDriveId, setCachedRemoteFolder } from './mirror.js';
+import {
+  clearRemoteFolderCache,
+  getCachedVirtualPathByDriveId,
+  setCachedRemoteFolder,
+} from './mirror.js';
 import { drainOutboxForAccount } from './outbox.js';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
 import { accounts } from '../db/schema.js';
@@ -15,16 +19,65 @@ const TRANSIENT_NETWORK_CODES = new Set([
   'UND_ERR_SOCKET',
 ]);
 
+const MAX_RETRY_AFTER_MS = 60_000;
+
 const driveClientCache = new WeakMap<OAuth2Client, drive_v3.Drive>();
 
-function getDriveErrorStatus(err: any): number | null {
-  const candidates = [err?.status, err?.response?.status, err?.code];
+export function getDriveErrorStatus(err: unknown): number | null {
+  const e = err as { status?: unknown; response?: { status?: unknown }; code?: unknown } | null | undefined;
+  const candidates = [e?.status, e?.response?.status, e?.code];
   for (const val of candidates) {
     if (typeof val === 'number' && Number.isFinite(val)) {
       return val;
     }
   }
   return null;
+}
+
+export function isDriveNotFoundError(err: unknown): boolean {
+  const status = getDriveErrorStatus(err);
+  return status === 404 || status === 410;
+}
+
+export function isAuthInvalidError(err: unknown): boolean {
+  if (getDriveErrorStatus(err) === 401) {
+    return true;
+  }
+
+  const e = err as {
+    message?: unknown;
+    response?: { data?: { error?: unknown; error_description?: unknown } };
+    data?: { error?: unknown };
+  } | null | undefined;
+
+  const candidates = [
+    e?.message,
+    e?.response?.data?.error,
+    e?.response?.data?.error_description,
+    e?.data?.error,
+  ];
+  for (const val of candidates) {
+    if (typeof val === 'string' && val.includes('invalid_grant')) {
+      return true;
+    }
+    if (
+      val &&
+      typeof val === 'object' &&
+      'message' in val &&
+      typeof (val as { message?: unknown }).message === 'string' &&
+      (val as { message: string }).message.includes('invalid_grant')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function markAccountSyncError(accountId: string): Promise<void> {
+  await db
+    .update(accounts)
+    .set({ syncState: 'error', updatedAt: new Date() })
+    .where(eq(accounts.id, accountId));
 }
 
 function isRateLimit403(err: any): boolean {
@@ -105,10 +158,18 @@ export async function withDriveRetry<T>(
       }
 
       const retryAfterMs = parseRetryAfterMs(err);
-      const delayMs =
-        retryAfterMs !== null
-          ? retryAfterMs
-          : Math.round(baseDelayMs * Math.pow(2, attempt) * (0.75 + Math.random() * 0.5));
+      if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_AFTER_MS) {
+        throw err;
+      }
+
+      let delayMs: number;
+      if (retryAfterMs === 0) {
+        delayMs = Math.round(baseDelayMs * (0.5 + Math.random() * 0.5));
+      } else if (retryAfterMs !== null) {
+        delayMs = retryAfterMs;
+      } else {
+        delayMs = Math.round(baseDelayMs * Math.pow(2, attempt) * (0.75 + Math.random() * 0.5));
+      }
 
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -126,15 +187,28 @@ export async function runBoundedConcurrency<T>(
 
   const limit = Math.max(1, Math.min(concurrency, items.length));
   let nextIndex = 0;
+  let hasError = false;
+  let firstError: unknown;
 
   const runners = Array.from({ length: limit }, async () => {
-    while (nextIndex < items.length) {
+    while (!hasError && nextIndex < items.length) {
       const idx = nextIndex++;
-      await worker(items[idx]);
+      try {
+        await worker(items[idx]);
+      } catch (err) {
+        if (!hasError) {
+          hasError = true;
+          firstError = err;
+        }
+        return;
+      }
     }
   });
 
-  await Promise.all(runners);
+  await Promise.allSettled(runners);
+  if (hasError) {
+    throw firstError;
+  }
 }
 
 export class AccountPoolLockedError extends Error {
@@ -171,7 +245,15 @@ export async function refreshAccountLiveQuota(accountId: string): Promise<number
   }
 
   const drive = getDriveClient(accountId);
-  const aboutRes = await withDriveRetry(() => drive.about.get({ fields: 'storageQuota' }));
+  let aboutRes: { data: drive_v3.Schema$About };
+  try {
+    aboutRes = await withDriveRetry(() => drive.about.get({ fields: 'storageQuota' }));
+  } catch (err) {
+    if (isAuthInvalidError(err)) {
+      await markAccountSyncError(accountId);
+    }
+    throw err;
+  }
   const storage = aboutRes.data.storageQuota;
 
   const liveUsage = Number(storage?.usage ?? NaN);
@@ -321,7 +403,7 @@ async function checkRemoteRootFolderEmpty(
 ): Promise<{ empty: true } | { empty: false; reason: 'managed' | 'folder_files' }> {
   const managedCheck = await withDriveRetry(() =>
     drive.files.list({
-      q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder' and trashed = false",
+      q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder'",
       pageSize: 1,
       fields: 'files(id, name)',
       spaces: 'drive',
@@ -341,7 +423,7 @@ async function checkRemoteRootFolderEmpty(
       const parentQuery = chunk.map((fid) => `'${fid}' in parents`).join(' or ');
       const checkRes = await withDriveRetry(() =>
         drive.files.list({
-          q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+          q: `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder'`,
           pageSize: 1,
           fields: 'files(id, name)',
           spaces: 'drive',
@@ -363,21 +445,32 @@ async function retargetRemoteRootFolder(
   rootFolderId: string,
   targetPoolId: number
 ): Promise<void> {
-  const childFoldersRes = await withDriveRetry(() =>
-    drive.files.list({
-      q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder'`,
-      fields: 'files(id, name)',
-      pageSize: 100,
-      spaces: 'drive',
-      supportsAllDrives: false,
-    })
-  );
+  const childFolders: drive_v3.Schema$File[] = [];
+  let pageToken: string | undefined = undefined;
+  do {
+    const childFoldersRes: { data: drive_v3.Schema$FileList } = await withDriveRetry(() =>
+      drive.files.list({
+        q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'nextPageToken, files(id, name)',
+        pageSize: 100,
+        pageToken,
+        spaces: 'drive',
+        supportsAllDrives: false,
+      })
+    );
+    childFolders.push(...(childFoldersRes.data.files || []));
+    pageToken = childFoldersRes.data.nextPageToken || undefined;
+  } while (pageToken);
 
-  for (const folder of childFoldersRes.data.files || []) {
+  for (const folder of childFolders) {
     if (folder.id) {
       try {
         await withDriveRetry(() =>
-          drive.files.delete({ fileId: folder.id!, supportsAllDrives: false })
+          drive.files.update({
+            fileId: folder.id!,
+            requestBody: { trashed: true },
+            supportsAllDrives: false,
+          })
         );
       } catch (delErr) {
         console.warn(`Failed to clean empty subfolder ${folder.id} during pool switch:`, delErr);
@@ -398,23 +491,47 @@ async function retargetRemoteRootFolder(
       supportsAllDrives: false,
     })
   );
+
+  clearRemoteFolderCache(rootFolderId);
 }
 
-export async function ensureRootFolder(
+const ensureRootFolderQueues = new WeakMap<drive_v3.Drive, Promise<unknown>>();
+
+export function ensureRootFolder(
+  drive: drive_v3.Drive,
+  preferredPoolId = 1,
+  preferTargetWhenEmpty = false
+): Promise<{ rootFolderId: string; poolId: number }> {
+  const prev = ensureRootFolderQueues.get(drive) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(() => ensureRootFolderInternal(drive, preferredPoolId, preferTargetWhenEmpty));
+  ensureRootFolderQueues.set(drive, next);
+  return next;
+}
+
+async function ensureRootFolderInternal(
   drive: drive_v3.Drive,
   preferredPoolId = 1,
   preferTargetWhenEmpty = false
 ): Promise<{ rootFolderId: string; poolId: number }> {
   const query = `mimeType = 'application/vnd.google-apps.folder' and name contains '_Tsubasa~ Pool ' and 'root' in parents and trashed = false`;
-  const searchRes = await withDriveRetry(() =>
-    drive.files.list({
-      q: query,
-      spaces: 'drive',
-      fields: 'files(id, name, appProperties)',
-      pageSize: 20,
-      supportsAllDrives: false,
-    })
-  );
+  const listedFiles: drive_v3.Schema$File[] = [];
+  let pageToken: string | undefined = undefined;
+  do {
+    const searchRes: { data: drive_v3.Schema$FileList } = await withDriveRetry(() =>
+      drive.files.list({
+        q: query,
+        spaces: 'drive',
+        fields: 'nextPageToken, files(id, name, appProperties)',
+        pageSize: 100,
+        pageToken,
+        supportsAllDrives: false,
+      })
+    );
+    listedFiles.push(...(searchRes.data.files || []));
+    pageToken = searchRes.data.nextPageToken || undefined;
+  } while (pageToken);
 
   const matchingFolders: Array<{
     id: string;
@@ -423,7 +540,7 @@ export async function ensureRootFolder(
     isSharePool: boolean;
   }> = [];
 
-  for (const f of searchRes.data.files || []) {
+  for (const f of listedFiles) {
     if (f.id && f.name) {
       const descriptor = parsePoolFolderDescriptor(f.name);
       if (!descriptor) continue;
@@ -504,97 +621,104 @@ export async function hydrateAccount(
   accountId: string,
   preferredPoolId?: number
 ): Promise<AccountHydrationResult> {
-  const drive = getDriveClient(accountId);
-
-  const aboutRes = await withDriveRetry(() =>
-    drive.about.get({
-      fields: 'user,storageQuota',
-    })
-  );
-
-  const user = aboutRes.data.user;
-  const storage = aboutRes.data.storageQuota;
-
-  if (!user?.emailAddress) {
-    throw new Error(`Failed to retrieve user profile for account ${accountId}`);
-  }
-
-  const email = user.emailAddress.toLowerCase().trim();
   let canonicalAccountId = accountId;
+  try {
+    const drive = getDriveClient(accountId);
 
-  if (accountId.toLowerCase() !== email) {
-    authPool.renameAccount(accountId, email);
-    canonicalAccountId = email;
-  }
+    const aboutRes = await withDriveRetry(() =>
+      drive.about.get({
+        fields: 'user,storageQuota',
+      })
+    );
 
-  const existingAccount = await db.query.accounts.findFirst({
-    where: eq(accounts.id, canonicalAccountId),
-  });
+    const user = aboutRes.data.user;
+    const storage = aboutRes.data.storageQuota;
 
-  const fileCountRow = sqlite
-    .prepare('SELECT count(*) as c FROM files WHERE account_id = ?')
-    .get(canonicalAccountId) as { c: number } | undefined;
-  const hasLocalFiles = (fileCountRow?.c ?? 0) > 0;
+    if (!user?.emailAddress) {
+      throw new Error(`Failed to retrieve user profile for account ${accountId}`);
+    }
 
-  const explicitPoolId =
-    preferredPoolId ??
-    (authPool.hasPreferredPool(canonicalAccountId)
-      ? authPool.getPreferredPool(canonicalAccountId)
-      : undefined);
+    const email = user.emailAddress.toLowerCase().trim();
 
-  const targetPoolId = existingAccount
-    ? existingAccount.poolId
-    : (explicitPoolId ?? 1);
-  const preferTargetWhenEmpty =
-    !hasLocalFiles && (existingAccount !== undefined || explicitPoolId !== undefined);
+    if (accountId.toLowerCase() !== email) {
+      authPool.renameAccount(accountId, email);
+      canonicalAccountId = email;
+    }
 
-  const { rootFolderId, poolId } = await ensureRootFolder(
-    drive,
-    targetPoolId,
-    preferTargetWhenEmpty
-  );
-  authPool.setPreferredPool(canonicalAccountId, poolId);
+    const existingAccount = await db.query.accounts.findFirst({
+      where: eq(accounts.id, canonicalAccountId),
+    });
 
-  const quotaLimit = storage?.limit ? Number(storage.limit) : 16106127360; // 15 GB fallback
-  const quotaUsed = storage?.usage ? Number(storage.usage) : 0;
+    const fileCountRow = sqlite
+      .prepare('SELECT count(*) as c FROM files WHERE account_id = ?')
+      .get(canonicalAccountId) as { c: number } | undefined;
+    const hasLocalFiles = (fileCountRow?.c ?? 0) > 0;
 
-  await db
-    .insert(accounts)
-    .values({
-      id: canonicalAccountId,
-      email: user.emailAddress,
-      displayName: user.displayName || user.emailAddress.split('@')[0],
-      avatarUrl: user.photoLink || null,
-      poolId,
-      quotaLimitBytes: quotaLimit,
-      quotaUsedBytes: quotaUsed,
-      syncState: 'idle',
-      rootFolderId,
-    })
-    .onConflictDoUpdate({
-      target: accounts.id,
-      set: {
+    const explicitPoolId =
+      preferredPoolId ??
+      (authPool.hasPreferredPool(canonicalAccountId)
+        ? authPool.getPreferredPool(canonicalAccountId)
+        : undefined);
+
+    const targetPoolId = existingAccount
+      ? existingAccount.poolId
+      : (explicitPoolId ?? 1);
+    const preferTargetWhenEmpty =
+      !hasLocalFiles && (existingAccount !== undefined || explicitPoolId !== undefined);
+
+    const { rootFolderId, poolId } = await ensureRootFolder(
+      drive,
+      targetPoolId,
+      preferTargetWhenEmpty
+    );
+    authPool.setPreferredPool(canonicalAccountId, poolId);
+
+    const quotaLimit = storage?.limit ? Number(storage.limit) : 16106127360; // 15 GB fallback
+    const quotaUsed = storage?.usage ? Number(storage.usage) : 0;
+
+    await db
+      .insert(accounts)
+      .values({
+        id: canonicalAccountId,
         email: user.emailAddress,
         displayName: user.displayName || user.emailAddress.split('@')[0],
         avatarUrl: user.photoLink || null,
         poolId,
         quotaLimitBytes: quotaLimit,
         quotaUsedBytes: quotaUsed,
+        syncState: 'idle',
         rootFolderId,
-        updatedAt: new Date(),
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: accounts.id,
+        set: {
+          email: user.emailAddress,
+          displayName: user.displayName || user.emailAddress.split('@')[0],
+          avatarUrl: user.photoLink || null,
+          poolId,
+          quotaLimitBytes: quotaLimit,
+          quotaUsedBytes: quotaUsed,
+          rootFolderId,
+          updatedAt: new Date(),
+        },
+      });
 
-  return {
-    accountId: canonicalAccountId,
-    email: user.emailAddress,
-    displayName: user.displayName || user.emailAddress.split('@')[0],
-    avatarUrl: user.photoLink || null,
-    poolId,
-    quotaLimitBytes: quotaLimit,
-    quotaUsedBytes: quotaUsed,
-    rootFolderId,
-  };
+    return {
+      accountId: canonicalAccountId,
+      email: user.emailAddress,
+      displayName: user.displayName || user.emailAddress.split('@')[0],
+      avatarUrl: user.photoLink || null,
+      poolId,
+      quotaLimitBytes: quotaLimit,
+      quotaUsedBytes: quotaUsed,
+      rootFolderId,
+    };
+  } catch (err) {
+    if (isAuthInvalidError(err)) {
+      await markAccountSyncError(canonicalAccountId);
+    }
+    throw err;
+  }
 }
 
 export interface RemoteFolderItem {
@@ -762,9 +886,12 @@ export async function resolveRemoteParentPath(
     options?.onResolvedFolder?.(computedPath);
 
     return { isInsidePool: true, path: computedPath };
-  } catch {
-    cache.set(parentFolderId, null);
-    return { isInsidePool: false, path: '/' };
+  } catch (err) {
+    if (isDriveNotFoundError(err)) {
+      cache.set(parentFolderId, null);
+      return { isInsidePool: false, path: '/' };
+    }
+    throw err;
   } finally {
     visiting.delete(parentFolderId);
   }
@@ -782,24 +909,38 @@ export async function getDescendantFolderIds(
   return tree.folderIds;
 }
 
-export async function getAccountRootFolderId(accountId: string): Promise<string> {
-  const accountRecord = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
+const inFlightRootFolderIds = new Map<string, Promise<string>>();
 
-  if (accountRecord?.rootFolderId) {
-    return accountRecord.rootFolderId;
+export async function getAccountRootFolderId(accountId: string): Promise<string> {
+  const existing = inFlightRootFolderIds.get(accountId);
+  if (existing) {
+    return existing;
   }
 
-  const drive = getDriveClient(accountId);
-  const { rootFolderId } = await ensureRootFolder(drive, accountRecord?.poolId ?? 1);
+  const promise = (async () => {
+    const accountRecord = await db.query.accounts.findFirst({
+      where: eq(accounts.id, accountId),
+    });
 
-  await db
-    .update(accounts)
-    .set({ rootFolderId, updatedAt: new Date() })
-    .where(eq(accounts.id, accountId));
+    if (accountRecord?.rootFolderId) {
+      return accountRecord.rootFolderId;
+    }
 
-  return rootFolderId;
+    const drive = getDriveClient(accountId);
+    const { rootFolderId } = await ensureRootFolder(drive, accountRecord?.poolId ?? 1);
+
+    await db
+      .update(accounts)
+      .set({ rootFolderId, updatedAt: new Date() })
+      .where(eq(accounts.id, accountId));
+
+    return rootFolderId;
+  })().finally(() => {
+    inFlightRootFolderIds.delete(accountId);
+  });
+
+  inFlightRootFolderIds.set(accountId, promise);
+  return promise;
 }
 
 async function inspectRemoteRootFolder(
@@ -821,8 +962,22 @@ async function inspectRemoteRootFolder(
       return { exists: false, name: null };
     }
     return { exists: true, name: res.data.name ?? null };
-  } catch {
-    return { exists: false, name: null };
+  } catch (err) {
+    if (isDriveNotFoundError(err)) {
+      return { exists: false, name: null };
+    }
+    throw err;
+  }
+}
+
+function assertNoDeadOutboxEntries(accountId: string): void {
+  const deadOutboxRow = sqlite
+    .prepare("SELECT count(*) as c FROM drive_outbox WHERE account_id = ? AND status = 'dead'")
+    .get(accountId) as { c: number } | undefined;
+  if ((deadOutboxRow?.c ?? 0) > 0) {
+    throw new AccountPoolLockedError(
+      'Cannot switch pool: unresolved failed Drive operations remain in the outbox for this account.'
+    );
   }
 }
 
@@ -890,6 +1045,7 @@ export async function switchAccountPool(
     }
 
     await drainOutboxForAccount(accountId);
+    assertNoDeadOutboxEntries(accountId);
 
     const emptyCheck = await checkRemoteRootFolderEmpty(drive, resolvedRootFolderId);
     if (!emptyCheck.empty) {
@@ -914,6 +1070,8 @@ export async function switchAccountPool(
   } else if (accountRecord.poolId === targetPoolId) {
     authPool.setPreferredPool(accountId, targetPoolId);
     return { accountId, poolId: targetPoolId, rootFolderId: accountRecord.rootFolderId };
+  } else {
+    assertNoDeadOutboxEntries(accountId);
   }
 
   await db
@@ -983,6 +1141,34 @@ export function evaluateFileContentMatch(
   }
 
   return hasSameLengthCandidate ? 'different' : 'unverified';
+}
+
+export const CLEARED_TSUBASA_APP_PROPERTIES = {
+  tsubasa_managed: null,
+  tsubasa_virtual_path: null,
+  tsubasa_virtual_id: null,
+  tsubasa_checksum: null,
+} as const;
+
+export async function clearOrphanAppProperties(
+  drive: drive_v3.Drive,
+  orphanDriveIds: string[]
+): Promise<void> {
+  await runBoundedConcurrency(orphanDriveIds, 5, async (orphanId) => {
+    try {
+      await withDriveRetry(() =>
+        drive.files.update({
+          fileId: orphanId,
+          requestBody: {
+            appProperties: CLEARED_TSUBASA_APP_PROPERTIES as any,
+          },
+          supportsAllDrives: false,
+        })
+      );
+    } catch (err) {
+      console.warn(`Failed to clear orphan appProperties for ${orphanId}:`, err);
+    }
+  });
 }
 
 

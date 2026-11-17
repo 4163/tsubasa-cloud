@@ -2,8 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { accounts } from '../db/schema.js';
 import { authPool } from './auth.js';
-import { hydrateAccount, isSharePoolId } from './client.js';
-import { runColdReconciliation } from './sync.js';
+import { hydrateAccount, isAuthInvalidError, isSharePoolId, runBoundedConcurrency } from './client.js';
 import { runIncrementalSync } from './delta.js';
 import { startOutboxWorker } from './outbox.js';
 
@@ -31,14 +30,24 @@ export interface AccountSyncStepResult {
 
 const inFlightAccountSyncs = new Map<string, Promise<AccountSyncStepResult>>();
 
-function syncAccountSingleFlight(
+async function syncAccountSingleFlight(
   accountId: string,
   expectedPoolId: number,
   preferredPoolId?: number
 ): Promise<AccountSyncStepResult> {
   const existing = inFlightAccountSyncs.get(accountId);
   if (existing) {
-    return existing;
+    const res = await existing;
+    if (isSharePoolId(res.poolId) || res.poolId !== expectedPoolId) {
+      return {
+        accountId: res.accountId,
+        email: res.email,
+        poolId: res.poolId,
+        hydrated: false,
+        synced: false,
+      };
+    }
+    return res;
   }
 
   const promise = (async (): Promise<AccountSyncStepResult> => {
@@ -98,28 +107,6 @@ async function resolveAccountTargetPool(
   return { eligible: true, preferredPoolId: targetPoolId };
 }
 
-async function runBoundedWorkers<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) {
-    return;
-  }
-
-  let nextIndex = 0;
-  const workerCount = Math.min(Math.max(1, concurrency), items.length);
-
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const item = items[nextIndex++];
-        await worker(item);
-      }
-    })
-  );
-}
-
 export async function hydratePool1Startup(
   concurrency = STARTUP_HYDRATION_CONCURRENCY
 ): Promise<void> {
@@ -130,7 +117,7 @@ export async function hydratePool1Startup(
   console.log(`Discovered ${allRecords.length} account credential files in .oauths/`);
   const records = allRecords.filter((r) => r.authorized);
 
-  await runBoundedWorkers(records, concurrency, async (record) => {
+  await runBoundedConcurrency(records, concurrency, async (record) => {
     const accountId = record.config.accountId;
     const { eligible, preferredPoolId } = await resolveAccountTargetPool(
       accountId,
@@ -148,6 +135,11 @@ export async function hydratePool1Startup(
         console.log(`Hydrated account ${res.email} (${res.accountId}) in Pool ${res.poolId}`);
       }
     } catch (err) {
+      if (isAuthInvalidError(err)) {
+        try {
+          await db.update(accounts).set({ syncState: 'error' }).where(eq(accounts.id, accountId));
+        } catch {}
+      }
       console.warn(
         `Hydration deferred for ${accountId}:`,
         err instanceof Error ? err.message : String(err)
@@ -171,7 +163,7 @@ export async function syncAllAccounts(poolId = 1): Promise<{
   const synced: string[] = [];
   const errors: Array<{ accountId: string; error: string }> = [];
 
-  await runBoundedWorkers(records, SYNC_ACCOUNT_CONCURRENCY, async (record) => {
+  await runBoundedConcurrency(records, SYNC_ACCOUNT_CONCURRENCY, async (record) => {
     const accountId = record.config.accountId;
     const { eligible, preferredPoolId } = await resolveAccountTargetPool(
       accountId,
@@ -194,6 +186,11 @@ export async function syncAllAccounts(poolId = 1): Promise<{
         synced.push(res.accountId);
       }
     } catch (err) {
+      if (isAuthInvalidError(err)) {
+        try {
+          await db.update(accounts).set({ syncState: 'error' }).where(eq(accounts.id, accountId));
+        } catch {}
+      }
       errors.push({
         accountId,
         error: err instanceof Error ? err.message : String(err),

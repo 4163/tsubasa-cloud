@@ -173,64 +173,64 @@
 ### Slice B: Drive auth, client resilience, mirror, sync, and delta
 **Files owned:** `src/server/drive/index.ts`, `src/server/drive/auth.ts`, `src/server/drive/client.ts`, `src/server/drive/mirror.ts`, `src/server/drive/sync.ts`, `src/server/drive/delta.ts`.
 
-- [ ] **B-1 `[Blocking]` Stop `resolveRemoteParentPath` and `inspectRemoteRootFolder` from swallowing non-404 errors**
+- [x] **B-1 `[Blocking]` Stop `resolveRemoteParentPath` and `inspectRemoteRootFolder` from swallowing non-404 errors**
   - **Locations.** `src/server/drive/client.ts:765-768`, `805-827`; `src/server/drive/delta.ts:173-201, 251-265`.
   - **Failure mode.** `resolveRemoteParentPath` catches all non-2xx errors and caches `{ isInsidePool: false }`, causing `delta.ts` to delete SQLite rows and clear `tsubasa_managed` on Drive during transient 5xx/429/401 errors. `inspectRemoteRootFolder` similarly masks transient errors in `switchAccountPool`.
   - **Preserved UX.** True `404` / `410` / `trashed` / out-of-root items still resolve identically.
   - **Steps.** Use `getDriveErrorStatus(err)` in both functions; return `isInsidePool: false` / `exists: false` only on `404` (or `410`), and rethrow all other errors so delta sync aborts cleanly and marks `syncState = 'error'`.
 
-- [ ] **B-2 `[Blocking]` Fix `mirror.ts` cache generation race and external folder deletion staleness**
+- [x] **B-2 `[Blocking]` Fix `mirror.ts` cache generation race and external folder deletion staleness**
   - **Locations.** `src/server/drive/mirror.ts:93-158`, `src/server/drive/delta.ts:126-160`.
   - **Failure mode.** `delta.ts` never evicts `remoteFolderCache` / `driveIdToPathCache` when a folder is removed or trashed, and `clearRemoteFolderCache` races with `inFlightFolderPromises` so settling promises re-insert stale folder IDs.
   - **Preserved UX.** Single-flight folder lookup and fast cache hits stay unchanged.
   - **Steps.** Add a per-`rootFolderId` generation counter in `mirror.ts` checked before caching `inFlightFolderPromises` results; export `evictRemoteFolderByDriveId` and call it from `delta.ts` on folder removal/trash; evict and retry from `rootFolderId` if `ensureRemoteFolderHierarchy` hits 404 on a cached parent.
 
-- [ ] **B-3 `[Blocking]` Settle all lanes in `runBoundedConcurrency` before throwing and deduplicate `runBoundedWorkers`**
+- [x] **B-3 `[Blocking]` Settle all lanes in `runBoundedConcurrency` before throwing and deduplicate `runBoundedWorkers`**
   - **Locations.** `src/server/drive/client.ts:118-138`, `src/server/drive/index.ts:101-121, 133, 174`.
   - **Failure mode.** `Promise.all` rejects on the first lane failure while sibling workers continue mutating SQLite and Drive unawaited. `index.ts` also duplicates `runBoundedConcurrency` as `runBoundedWorkers`.
   - **Preserved UX.** Same concurrency limits and first-error rejection behavior.
   - **Steps.** In `runBoundedConcurrency`, record `firstError`, stop pulling new items once `firstError !== null`, `await Promise.allSettled(runners)`, then rethrow `firstError`. Delete `runBoundedWorkers` in `index.ts` and call `runBoundedConcurrency`.
 
-- [ ] **B-4 `[Blocking]` Fix `auth.ts` token write-queue leak, `handleCallback` race, `.tokens.json` removal, and `invalid_grant` tracking**
+- [x] **B-4 `[Blocking]` Fix `auth.ts` token write-queue leak, `handleCallback` race, `.tokens.json` removal, and `invalid_grant` tracking**
   - **Locations.** `src/server/drive/auth.ts:131-165, 192-200, 259-311, 435-513, 608-626`; `src/server/drive/index.ts:150-155, 196-201`.
   - **Failure mode.** `tokenWriteQueues` keys by `accountId` and leaks when `renameAccount` changes the key; `handleCallback` emits `'tokens'` before `renameAccount` completes, racing with `safeRenameFile`; `scan()` unlinks colliding `resolvedDest`, leaves stale in-memory tokens when `.tokens.json` is deleted, and throws uncaught in `startWatching()` timer; `invalid_grant` never sets `accounts.syncState = 'error'`.
   - **Preserved UX.** Email-based canonical account IDs and atomic `.tmp` writes stay unchanged.
   - **Steps.** Key `tokenWriteQueues` by `AccountAuthRecord` (`WeakMap` or `Map<AccountAuthRecord, Promise<void>>`), suppress `on('tokens')` during `handleCallback` until post-rename persist, clear tokens / `authorized = false` in `scan()` when `.tokens.json` vanishes, guard `startWatching()` timer with `try/catch`, prevent `safeRenameFile` from overwriting distinct non-empty credential files, and mark `syncState = 'error'` on `invalid_grant` / `401`.
 
-- [ ] **B-5 `[Warning]` Fix `ensureRootFolder` concurrency race, pagination, and `retargetRemoteRootFolder` trashed deletion**
+- [x] **B-5 `[Warning]` Fix `ensureRootFolder` concurrency race, pagination, and `retargetRemoteRootFolder` trashed deletion**
   - **Locations.** `src/server/drive/client.ts:344-501, 785-803`.
   - **Failure mode.** Concurrent calls can create duplicate `_Tsubasa~ Pool <N>` folders; `ensureRootFolder` stops at `pageSize: 20`; `retargetRemoteRootFolder` permanently deletes subfolders that only hold trashed files (`trashed = false` check) and skips `clearRemoteFolderCache`.
   - **Preserved UX.** Empty pool folder retargeting and `tsubasa_root` metadata stay identical.
   - **Steps.** Add a single-flight map around `getAccountRootFolderId` / `ensureRootFolder`, paginate `ensureRootFolder` / `retargetRemoteRootFolder`, check all children (including trashed) in `checkRemoteRootFolderEmpty` or trash subfolders rather than hard-deleting, and clear `remoteFolderCache`.
 
-- [ ] **B-6 `[Warning]` Unify cold/delta sync single-flight locks and bound `Retry-After` in `withDriveRetry`**
+- [x] **B-6 `[Warning]` Unify cold/delta sync single-flight locks and bound `Retry-After` in `withDriveRetry`**
   - **Locations.** `src/server/drive/client.ts:57-116, 892-901`, `src/server/drive/sync.ts:299-312`, `src/server/drive/delta.ts:30-64`, `src/server/drive/index.ts:34-72`.
   - **Failure mode.** Cold sync and delta sync can run concurrently on the same account; `syncAccountSingleFlight` does not re-check `expectedPoolId` after awaiting; uncapped `Retry-After` headers can hang requests for an hour (`3600s`); `switchAccountPool` ignores `dead` outbox entries.
   - **Preserved UX.** Same single-flight behavior for identical syncs and normal 1-30s retry delays.
   - **Steps.** Share a per-account sync lock between `runColdReconciliation` and `runIncrementalSync` (allowing internal `fallbackToColdSync`), re-verify `expectedPoolId` in `syncAccountSingleFlight`, clamp `retryAfterMs` (e.g. `<= 60_000` ms or fail fast above cap) with jitter on `0`, and reject `switchAccountPool` if `dead` outbox rows remain for that account.
 
-- [ ] **B-7 `[Blocking]` Enforce `MAX_SINGLE_FILE_BYTES`, path normalization, startToken check, and cache invalidation in `sync.ts` and `delta.ts`**
+- [x] **B-7 `[Blocking]` Enforce `MAX_SINGLE_FILE_BYTES`, path normalization, startToken check, and cache invalidation in `sync.ts` and `delta.ts`**
   - **Locations.** `src/server/drive/sync.ts:67-82, 329-387, 475-486`, `src/server/drive/delta.ts:137-168, 217-241`.
   - **Failure mode.** `sync.ts` and `delta.ts` index files `> 14.25 GB`, `sync.ts` skips `normalizeVirtualPath`, ignores empty `startToken`, and leaves `discrepancyCache` stale; `delta.ts` checks only `file.parents[0]` for folders, inflates `updatedCount` on unmanaged trashed files, and leaves `trashed_at` set when untrashed in Drive.
   - **Preserved UX.** Normal cold and delta sync results stay identical.
   - **Steps.** Skip indexing files `> MAX_SINGLE_FILE_BYTES` in `sync.ts` and `delta.ts` (leaving them for `detector.ts` over-ceiling inspection), call `normalizeVirtualPath` and `invalidateDiscrepancyCache(accountId)` in `sync.ts`, throw if `!startToken`, iterate `file.parents` for folders in `delta.ts`, increment `updatedCount` only when `trashFileStmt.run(...).changes > 0`, and clear `trashed_at` on untrash in `upsertFileStmt`.
 
-- [ ] **B-8 `[Warning]` Surface corrupt `.tokens.json`, invalid `.env` URLs, and watcher errors in `auth.ts`**
+- [x] **B-8 `[Warning]` Surface corrupt `.tokens.json`, invalid `.env` URLs, and watcher errors in `auth.ts`**
   - **Locations.** `src/server/drive/auth.ts:200, 376, 412, 727`.
   - **Failure mode.** Corrupt `.tokens.json` drops the credential from `authPool` instead of marking it unauthorized; `importCredentials` accepts malformed redirect URIs; watcher init failure is silent.
   - **Preserved UX.** Valid `.json` and `.env` imports work identically.
   - **Steps.** Isolate `.tokens.json` `JSON.parse` so corrupt tokens yield `authorized: false` with a warning; return `{ success: false, error }` on invalid `envRedirect`; log watcher errors via `console.warn`.
 
-- [ ] **B-9 `[Warning]` Deduplicate credential parsing and signature logic in `auth.ts`**
+- [x] **B-9 `[Warning]` Deduplicate credential parsing and signature logic in `auth.ts`**
   - **Locations.** `src/server/drive/auth.ts:96-129`, `340-415`, `659-739`.
   - **Steps.** Extract `readTokenFile(baseName)`, `extractBaseName(filePath)`, and `buildSignature(...)` shared across sync/async signature refreshers and `.json`/`.env` parsers.
 
-- [ ] **B-10 `[Warning]` Share `CLEARED_TSUBASA_APP_PROPERTIES` and `clearOrphanAppProperties`**
+- [x] **B-10 `[Warning]` Share `CLEARED_TSUBASA_APP_PROPERTIES` and `clearOrphanAppProperties`**
   - **Locations.** `src/server/drive/client.ts`, `sync.ts:397-411`, `delta.ts:251-265`.
   - **Failure mode.** Inline literals omit `tsubasa_checksum` and duplicate concurrency loops.
-  - **Steps.** Export `CLEARED_TSUBASA_APP_PROPERTIES` (clearing `tsubasa_managed`, `tsubasa_virtual_path`, `tsubasa_virtual_id`, `tsubasa_checksum`) and `clearOrphanAppProperties` from `client.ts` and reuse in `sync.ts`, `delta.ts`, and `detector.ts`.
+  - **Steps.** Export `CLEARED_TSUBASA_APP_PROPERTIES` (clearing `tsubasa_managed`, `tsubasa_virtual_path`, `tsubasa_virtual_id`, `tsubasa_checksum`) and `clearOrphanAppProperties` from `client.ts` and reuse in `sync.ts`, `delta.ts`, and `detector.ts`. *(Note: `client.ts`, `sync.ts`, and `delta.ts` updated in Slice B; `detector.ts` reuse belongs to Slice C.)*
 
-- [ ] **B-11 `[Nit]` Remove dead `runColdReconciliation` import in `index.ts` and `ensureLocalFolderHierarchy` in `sync.ts`**
+- [x] **B-11 `[Nit]` Remove dead `runColdReconciliation` import in `index.ts` and `ensureLocalFolderHierarchy` in `sync.ts`**
   - **Locations.** `src/server/drive/index.ts:6`, `src/server/drive/sync.ts:230-240`.
   - **Steps.** Delete both unused symbols after confirming zero callers via `rg`.
 
