@@ -1,9 +1,10 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { colors, motion, radius, spacing, typography } from '../tokens.stylex.js';
-import { IconAlertTriangle, IconClose } from './Icons.js';
+import { colors, layout, radius, spacing, typography } from '../tokens.stylex.js';
+import { IconAlertTriangle } from './Icons.js';
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
+import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 
 export type MoveConflictContentMatch = 'identical' | 'different' | 'unverified';
 
@@ -31,6 +32,7 @@ export interface MoveConflictModalProps {
   cleanCount: number;
   onResolve: (mode: MoveConflictResolutionMode) => Promise<void>;
   isSubmitting: boolean;
+  errorMessage?: string | null;
 }
 
 function getDestinationDirectory(destPath: string, fallbackDir: string): string {
@@ -52,75 +54,23 @@ function formatConflictDate(epochValue: number | undefined): string | null {
   });
 }
 
+function getConflictMatchMeta(conflict: MoveConflictItem): { label: string; isIdentical: boolean } {
+  const match = conflict.contentMatch;
+  if (match === 'identical') {
+    return { label: 'Identical copy', isIdentical: true };
+  }
+  if (conflict.existingSizeBytes !== undefined && conflict.existingSizeBytes === conflict.sourceSizeBytes) {
+    return {
+      label: match === 'different' ? 'Same size, different content' : 'Same size (no checksum)',
+      isIdentical: false,
+    };
+  }
+  return { label: 'Different size', isIdentical: false };
+}
+
 const styles = stylex.create({
   surface: {
-    width: '460px',
-  },
-  header: {
-    height: '48px',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    flexShrink: 0,
-  },
-  titleGroup: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-    color: colors.primaryText,
-  },
-  title: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightTitle,
-    color: colors.primaryText,
-    margin: 0,
-  },
-  closeBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    cursor: 'pointer',
-    color: colors.secondaryText,
-    padding: spacing.space1,
-    borderRadius: radius.compact,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      color: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.35,
-      color: colors.secondaryText,
-      backgroundColor: 'transparent',
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minWidth: '44px',
-      minHeight: '44px',
-    },
-  },
-  body: {
-    padding: spacing.space5,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing.space3,
-    backgroundColor: colors.surface,
+    width: layout.drawerWidth,
   },
   summaryText: {
     margin: 0,
@@ -254,7 +204,7 @@ const styles = stylex.create({
     margin: 0,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
-    lineHeight: '1.4',
+    lineHeight: typography.lineHeightBody,
     color: colors.secondaryText,
   },
   warningBox: {
@@ -269,135 +219,34 @@ const styles = stylex.create({
     margin: 0,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
-    lineHeight: '1.4',
+    lineHeight: typography.lineHeightBody,
     color: colors.dangerTextOnSurface,
   },
-  footer: {
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    paddingTop: spacing.space3,
-    paddingBottom: spacing.space3,
-    borderTopWidth: '1px',
-    borderTopStyle: 'solid',
-    borderTopColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-    gap: spacing.space2,
-    flexShrink: 0,
-  },
   skipBtn: {
-    height: '32px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surface,
     color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
     fontWeight: typography.fontWeightSection,
-    cursor: 'pointer',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      backgroundColor: colors.surface,
-      color: colors.secondaryText,
-      borderColor: colors.border,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-    },
   },
   overwriteBtn: {
-    height: '32px',
     paddingLeft: spacing.space4,
     paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: colors.danger,
-    color: colors.dangerText,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.danger,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    fontWeight: typography.fontWeightTitle,
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
     justifyContent: 'center',
-    outline: 'none',
-    transition: motion.transitionFast,
     ':hover': {
-      backgroundColor: colors.dangerHover,
       borderColor: colors.dangerHover,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.45,
       backgroundColor: colors.surfaceAlt,
       color: colors.secondaryText,
       borderColor: colors.borderSubtle,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
     },
   },
   keepBothBtn: {
-    height: '32px',
     paddingLeft: spacing.space4,
     paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    backgroundColor: colors.brandAccent,
-    color: colors.brandAccentText,
-    borderWidth: '0px',
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    fontWeight: typography.fontWeightTitle,
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
     justifyContent: 'center',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.brandAccentHover,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-    },
   },
 });
 
@@ -409,13 +258,16 @@ export function MoveConflictModal({
   cleanCount,
   onResolve,
   isSubmitting,
+  errorMessage,
 }: MoveConflictModalProps) {
   const [activeMode, setActiveMode] = useState<MoveConflictResolutionMode | null>(null);
+  const submittingRef = useRef(false);
   const keepBothBtnRef = useRef<HTMLButtonElement | null>(null);
   const titleId = useId();
 
   useEffect(() => {
     if (!isOpen || !isSubmitting) {
+      submittingRef.current = false;
       setActiveMode(null);
     }
   }, [isOpen, isSubmitting]);
@@ -424,27 +276,16 @@ export function MoveConflictModal({
   const singleConflict = conflicts.length === 1 ? conflicts[0] : null;
 
   const handleChoose = (mode: MoveConflictResolutionMode) => {
-    if (isSubmitting) return;
+    if (submittingRef.current || isSubmitting) return;
+    submittingRef.current = true;
     setActiveMode(mode);
-    void onResolve(mode);
+    void onResolve(mode).finally(() => {
+      submittingRef.current = false;
+    });
   };
 
   const singleSourceDate = singleConflict ? formatConflictDate(singleConflict.sourceUpdatedAt) : null;
   const singleExistingDate = singleConflict ? formatConflictDate(singleConflict.existingUpdatedAt) : null;
-
-  const getConflictMatchMeta = (conflict: MoveConflictItem): { label: string; isIdentical: boolean } => {
-    const match = conflict.contentMatch;
-    if (match === 'identical') {
-      return { label: 'Identical copy', isIdentical: true };
-    }
-    if (conflict.existingSizeBytes !== undefined && conflict.existingSizeBytes === conflict.sourceSizeBytes) {
-      return {
-        label: match === 'different' ? 'Same size, different content' : 'Same size (no checksum)',
-        isIdentical: false,
-      };
-    }
-    return { label: 'Different size', isIdentical: false };
-  };
 
   const overwriteableConflicts = conflicts.filter(
     (c) => c.canOverwrite ?? Boolean(c.existingFileId)
@@ -471,25 +312,17 @@ export function MoveConflictModal({
       initialFocusRef={keepBothBtnRef}
       surfaceStyle={styles.surface}
     >
-      <div {...stylex.props(styles.header)}>
-        <div {...stylex.props(styles.titleGroup)}>
-          <IconAlertTriangle size={16} />
-          <h2 id={titleId} {...stylex.props(styles.title)}>
-            {singleConflict ? 'File already exists' : `${conflicts.length} files already exist`}
-          </h2>
-        </div>
-        <button
-          type="button"
-          {...stylex.props(styles.closeBtn)}
-          onClick={onClose}
-          disabled={isSubmitting}
-          aria-label="Close dialog"
-        >
-          <IconClose size={14} />
-        </button>
-      </div>
+      <ModalHeader
+        titleId={titleId}
+        title={singleConflict ? 'File already exists' : `${conflicts.length} files already exist`}
+        icon={<IconAlertTriangle size={16} />}
+        onClose={onClose}
+        isBusy={isSubmitting}
+        closeAriaLabel="Close dialog"
+        closeIconSize={14}
+      />
 
-      <div {...stylex.props(styles.body)}>
+      <div {...stylex.props(modalChromeStyles.body)}>
         {singleConflict ? (
           <>
             <p {...stylex.props(styles.summaryText)}>
@@ -611,12 +444,20 @@ export function MoveConflictModal({
             </p>
           </div>
         )}
+
+        <div role="status" aria-live="polite">
+          {errorMessage && (
+            <div {...stylex.props(styles.warningBox)}>
+              <p {...stylex.props(styles.warningText)}>{errorMessage}</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div {...stylex.props(styles.footer)}>
+      <div {...stylex.props(modalChromeStyles.footer, modalChromeStyles.footerWrap)}>
         <button
           type="button"
-          {...stylex.props(styles.skipBtn)}
+          {...stylex.props(modalChromeStyles.cancelBtn, modalChromeStyles.cancelBtnSurface, styles.skipBtn)}
           onClick={() => handleChoose('skip')}
           disabled={isSubmitting}
         >
@@ -624,7 +465,7 @@ export function MoveConflictModal({
         </button>
         <button
           type="button"
-          {...stylex.props(styles.overwriteBtn)}
+          {...stylex.props(modalChromeStyles.dangerBtn, styles.overwriteBtn)}
           onClick={() => handleChoose('overwrite')}
           disabled={isSubmitting || !hasOverwriteTarget}
           title={
@@ -639,7 +480,7 @@ export function MoveConflictModal({
           ref={keepBothBtnRef}
           type="button"
           autoFocus
-          {...stylex.props(styles.keepBothBtn)}
+          {...stylex.props(modalChromeStyles.primaryBtn, styles.keepBothBtn)}
           onClick={() => handleChoose('keep_both')}
           disabled={isSubmitting}
         >

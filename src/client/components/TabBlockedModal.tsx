@@ -23,6 +23,7 @@ import {
 import type { TabOwnerKind } from '../utils/useTabLock.js';
 import { DitherDivider } from './DitherDivider.js';
 import { ModalDialog } from './ModalDialog.js';
+import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export type EffectiveTheme = 'light' | 'dark';
@@ -62,6 +63,7 @@ function readInitialTheme(): EffectiveTheme {
 function applyDocumentTheme(theme: EffectiveTheme): void {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-theme', theme);
+  // Intentional pre-hydration/standalone blocked-shell theme sync matching index.html and tokens.stylex.ts before StyleX mounts.
   document.documentElement.style.backgroundColor = theme === 'dark' ? '#0b1412' : '#eef2ec';
   document.documentElement.style.color = theme === 'dark' ? '#e5f2eb' : '#111d18';
   if (theme === 'dark') {
@@ -178,7 +180,7 @@ const styles = stylex.create({
   brandTitleGroup: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: spacing.space1,
     minWidth: 0,
   },
   brandWordmark: {
@@ -188,13 +190,13 @@ const styles = stylex.create({
     color: colors.primaryText,
     letterSpacing: '0.02em',
     margin: 0,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBrand,
   },
   brandSubtitle: {
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     fontFamily: typography.fontFamilyBody,
-    lineHeight: '1.3',
+    lineHeight: typography.lineHeightMeta,
   },
   poolSection: {
     paddingTop: spacing.space3,
@@ -232,12 +234,12 @@ const styles = stylex.create({
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     fontSize: typography.fontSizeBadge,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightBadge,
     color: colors.secondaryText,
     display: 'inline-flex',
     alignItems: 'center',
@@ -364,22 +366,22 @@ const styles = stylex.create({
   addAccountTextCol: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: spacing.space1,
     minWidth: 0,
     flex: 1,
   },
   addAccountLabel: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBadge,
   },
   addAccountSub: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBadge,
     color: colors.secondaryText,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBadge,
   },
   accountList: {
     display: 'flex',
@@ -422,7 +424,7 @@ const styles = stylex.create({
   accountTextGroup: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: spacing.space1,
     minWidth: 0,
   },
   accountNameBar: {
@@ -438,7 +440,7 @@ const styles = stylex.create({
   authPill: {
     fontSize: typography.fontSizeBadge,
     color: colors.success,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightBadge,
     flexShrink: 0,
   },
   storageSection: {
@@ -454,14 +456,14 @@ const styles = stylex.create({
   },
   storageLabel: {
     fontFamily: typography.fontFamilyBody,
-    fontSize: '10px',
-    fontWeight: '600',
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightBadge,
     color: colors.secondaryText,
     textTransform: 'uppercase',
     letterSpacing: '0.03em',
     display: 'flex',
     alignItems: 'center',
-    gap: '4px',
+    gap: spacing.space2,
   },
   storageValueBar: {
     height: '10px',
@@ -490,15 +492,15 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: spacing.space2,
-    marginTop: '2px',
+    marginTop: spacing.space1,
   },
   accountMiniChip: {
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     fontSize: typography.fontSizeBadge,
@@ -531,7 +533,7 @@ const styles = stylex.create({
     fontSize: typography.fontSizeMeta,
     color: colors.primaryText,
     fontVariantNumeric: 'tabular-nums',
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
   },
   footerHeadroom: {
     fontSize: typography.fontSizeBadge,
@@ -636,8 +638,8 @@ const styles = stylex.create({
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     borderRadius: radius.button,
-    padding: '2px',
-    gap: '2px',
+    padding: spacing.space1,
+    gap: spacing.space1,
     boxSizing: 'border-box',
   },
   themeBtn: {
@@ -650,7 +652,7 @@ const styles = stylex.create({
     paddingRight: spacing.space3,
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '4px',
+    gap: spacing.space2,
     boxSizing: 'border-box',
   },
   themeBtnActive: {
@@ -660,7 +662,7 @@ const styles = stylex.create({
   githubChip: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: spacing.space3,
     height: '28px',
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
@@ -922,40 +924,12 @@ const styles = stylex.create({
   surface: {
     width: '440px',
   },
-  header: {
-    height: '48px',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-    backgroundColor: colors.surface,
-    flexShrink: 0,
-  },
   iconWrap: {
     color: colors.warning,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-  },
-  title: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightTitle,
-    lineHeight: typography.lineHeightSection,
-    color: colors.primaryText,
-    margin: 0,
-  },
-  body: {
-    padding: spacing.space5,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing.space4,
-    backgroundColor: colors.surface,
   },
   noticeBox: {
     padding: spacing.space4,
@@ -1242,16 +1216,17 @@ export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
         ariaLabelledBy={titleId}
         surfaceStyle={styles.surface}
       >
-        <div {...stylex.props(styles.header)}>
-          <span {...stylex.props(styles.iconWrap)} aria-hidden="true">
-            <IconAlertTriangle size={16} />
-          </span>
-          <h2 id={titleId} {...stylex.props(styles.title)}>
-            Tsubasa~ Cloud is already open
-          </h2>
-        </div>
+        <ModalHeader
+          titleId={titleId}
+          title="Tsubasa~ Cloud is already open"
+          icon={
+            <span {...stylex.props(styles.iconWrap)} aria-hidden="true">
+              <IconAlertTriangle size={16} />
+            </span>
+          }
+        />
 
-        <div {...stylex.props(styles.body)}>
+        <div {...stylex.props(modalChromeStyles.body, modalChromeStyles.bodySpaced)}>
           <div {...stylex.props(styles.noticeBox)}>
             <p {...stylex.props(styles.leadText)}>
               {isElectronOwner

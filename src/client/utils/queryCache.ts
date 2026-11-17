@@ -7,6 +7,7 @@ import type { AccountTransferStats } from '../components/Sidebar.js';
 export type { DiscrepancyReport };
 
 export type StoredShareLink = InferResponseType<typeof client.api.share.links.$get, 200>['links'][number];
+export type ShareInspectResponse = InferResponseType<typeof client.api.share.inspect.$post, 200>;
 
 export interface AccountSummary {
   id: string;
@@ -76,6 +77,7 @@ const YIELD_BUDGET_MS = 50;
 const MAX_POOL_CACHE_ENTRIES = 16;
 const MAX_DISCREPANCY_CACHE_ENTRIES = 64;
 const DEFAULT_DISCREPANCY_TTL_MS = 60_000;
+const SHARE_INSPECT_TTL_MS = 15_000;
 
 interface InFlightEntry<T = unknown> {
   promise: Promise<T>;
@@ -85,6 +87,7 @@ interface InFlightEntry<T = unknown> {
 
 const poolCache = new Map<number, PoolCacheEntry>();
 const discrepancyCache = new Map<string, { report: DiscrepancyReport; updatedAt: number }>();
+const shareInspectCache = new Map<string, { data: ShareInspectResponse; ts: number }>();
 const inFlightReads = new Map<string, InFlightEntry>();
 
 function nowMs(): number {
@@ -234,6 +237,24 @@ export function invalidateDiscrepancyReportCache(accountId?: string): void {
     return;
   }
   discrepancyCache.clear();
+}
+
+export function getShareInspectCache(signature: string): ShareInspectResponse | null {
+  const entry = shareInspectCache.get(signature);
+  if (!entry) return null;
+  if (Date.now() - entry.ts >= SHARE_INSPECT_TTL_MS) {
+    shareInspectCache.delete(signature);
+    return null;
+  }
+  return entry.data;
+}
+
+export function setShareInspectCache(signature: string, data: ShareInspectResponse): void {
+  shareInspectCache.set(signature, { data, ts: Date.now() });
+}
+
+export function invalidateShareInspectCache(): void {
+  shareInspectCache.clear();
 }
 
 /**

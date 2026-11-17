@@ -77,10 +77,23 @@ export function ModalDialog({
 }: ModalDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pointerDownOutsideRef = useRef(false);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const isOpenRef = useRef(isOpen);
   isOpenRef.current = isOpen;
+  const isBusyRef = useRef(isBusy);
+  isBusyRef.current = isBusy;
 
   useBeforeUnload(isOpen && isBusy);
+
+  useEffect(() => {
+    return () => {
+      const prev = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (isOpenRef.current && prev && prev.isConnected) {
+        prev.focus();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -91,6 +104,8 @@ export function ModalDialog({
     if (isOpen) {
       dialog.removeAttribute('data-closing');
       if (!dialog.open) {
+        previousFocusRef.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
         dialog.showModal();
       }
       initialFocusRef?.current?.focus();
@@ -106,18 +121,21 @@ export function ModalDialog({
         window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
       if (supportsDiscrete || prefersReducedMotion) {
+        previousFocusRef.current = null;
         dialog.close();
       } else {
         dialog.setAttribute('data-closing', 'true');
         const animations = typeof dialog.getAnimations === 'function' ? dialog.getAnimations() : [];
         if (animations.length === 0) {
           dialog.removeAttribute('data-closing');
+          previousFocusRef.current = null;
           dialog.close();
         } else {
           void Promise.allSettled(animations.map((a) => a.finished)).then(() => {
             if (cancelled || isOpenRef.current) return;
             dialog.removeAttribute('data-closing');
             if (dialog.open) {
+              previousFocusRef.current = null;
               dialog.close();
             }
           });
@@ -134,31 +152,48 @@ export function ModalDialog({
     const dialog = dialogRef.current;
     if (!dialog) return;
     dialog.setAttribute('closedby', isBusy ? 'none' : 'any');
-  }, [isBusy]);
+  }, [isBusy, isOpen]);
 
   const handleCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    if (isBusy) {
+    if (isBusyRef.current) {
       e.preventDefault();
     }
   };
 
   const handleClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.currentTarget.removeAttribute('data-closing');
-    e.currentTarget.returnValue = '';
+    const dialog = e.currentTarget;
+    dialog.returnValue = '';
+    if (isBusyRef.current && isOpenRef.current) {
+      queueMicrotask(() => {
+        if (dialog.isConnected && isOpenRef.current && !dialog.open) {
+          dialog.showModal();
+        }
+      });
+      return;
+    }
+    dialog.removeAttribute('data-closing');
     onClose();
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if ('closedBy' in HTMLDialogElement.prototype) return;
+    if (isBusyRef.current || 'closedBy' in HTMLDialogElement.prototype) {
+      pointerDownOutsideRef.current = false;
+      return;
+    }
     pointerDownOutsideRef.current =
-      e.target === e.currentTarget && isOutsideDialogBounds(e, e.currentTarget);
+      e.button === 0 &&
+      e.target === e.currentTarget &&
+      isOutsideDialogBounds(e, e.currentTarget);
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if ('closedBy' in HTMLDialogElement.prototype) return;
+    if (isBusyRef.current || 'closedBy' in HTMLDialogElement.prototype) {
+      pointerDownOutsideRef.current = false;
+      return;
+    }
     const startedOutside = pointerDownOutsideRef.current;
     pointerDownOutsideRef.current = false;
-    if (!startedOutside || isBusy) return;
+    if (!startedOutside) return;
     if (e.target === e.currentTarget && isOutsideDialogBounds(e, e.currentTarget)) {
       e.currentTarget.close();
     }

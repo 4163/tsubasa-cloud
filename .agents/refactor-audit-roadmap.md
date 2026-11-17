@@ -549,53 +549,53 @@
 ---
 
 ### Slice H: Modals and dialog primitives
-**Files owned:** `src/client/components/ModalDialog.tsx`, `src/client/components/SelectField.tsx`, `src/client/components/MoveConflictModal.tsx`, `src/client/components/MoveFilesModal.tsx`, `src/client/components/MovePoolModal.tsx`, `src/client/components/NewFolderModal.tsx`, `src/client/components/RenameModal.tsx`, `src/client/components/ShareModal.tsx`, `src/client/components/ConfirmDriveActionModal.tsx`, `src/client/components/ConfirmPurgeModal.tsx`, `src/client/components/TabBlockedModal.tsx`, and modal handlers in `src/client/App.tsx` (coordinate `App.tsx` after Slice F).
+**Files owned:** `src/client/components/ModalDialog.tsx`, `src/client/components/ModalChrome.tsx`, `src/client/components/SelectField.tsx`, `src/client/components/MoveConflictModal.tsx`, `src/client/components/MoveFilesModal.tsx`, `src/client/components/MovePoolModal.tsx`, `src/client/components/NewFolderModal.tsx`, `src/client/components/RenameModal.tsx`, `src/client/components/ShareModal.tsx`, `src/client/components/ConfirmDriveActionModal.tsx`, `src/client/components/ConfirmPurgeModal.tsx`, `src/client/components/TabBlockedModal.tsx`, `src/client/utils/queryCache.ts` (`shareInspectCache` extracted from `ShareModal.tsx`), and modal handlers in `src/client/App.tsx` (coordinate `App.tsx` after Slice F).
 
-- [ ] **H-1 `[Blocking]` Prevent busy-modal and `TabBlockedModal` dismiss bypass, fix pointer button check, and restore focus on unmount**
+- [x] **H-1 `[Blocking]` Prevent busy-modal and `TabBlockedModal` dismiss bypass, fix pointer button check, and restore focus on unmount**
   - **Locations.** `src/client/components/ModalDialog.tsx:97-165`, `src/client/components/TabBlockedModal.tsx:1238-1244`.
   - **Failure mode.** Browsers lacking `closedby="none"` (or Chromium double-Escape bypass) fire native `close` -> `handleClose` -> `onClose()`, unmounting busy modals mid-mutation and permanently dismissing `TabBlockedModal` onto a blank blurred shell. `handlePointerDown` also triggers on right/middle clicks (`e.button !== 0`). Conditional `{isOpen && <Modal />}` unmounting skips `dialog.close()` native focus restoration.
   - **Preserved UX.** Non-busy modals close on Escape/left-click backdrop; busy modals and `TabBlockedModal` stay locked; focus returns to the trigger element on close.
   - **Steps.** Track `isBusyRef` / `isOpenRef` in `ModalDialog.tsx` and re-call `dialog.showModal()` in `handleClose` via microtask when `isBusyRef.current && isOpenRef.current` instead of calling `onClose()`; require `e.button === 0` in `handlePointerDown`/`handlePointerUp`; save `previousFocusRef` before `showModal()` and restore focus on unmount if still connected.
 
-- [ ] **H-2 `[Blocking]` Fix premature close and silent errors in `ConfirmPurgeModal` and `MovePoolModal`**
+- [x] **H-2 `[Blocking]` Fix premature close and silent errors in `ConfirmPurgeModal` and `MovePoolModal`**
   - **Locations.** `src/client/components/ConfirmPurgeModal.tsx:227-236`, `src/client/components/MovePoolModal.tsx:250-263, 326-328`, `src/client/App.tsx:2738-2767, 3085-3135, 3186-3231`.
   - **Failure mode.** `ConfirmPurgeModal` catches and swallows `onConfirm()` errors with no inline error banner, and `App.tsx` closes `ConfirmPurgeModal` (`handleEmptyTrashExecute`, `handleClearSharePoolConfirm`) and `MovePoolModal` (`handleSwitchAccountPool`) on line 1 before the request starts, making Share Pool clear and Move Pool errors 100% silent.
   - **Preserved UX.** Visual modal design stays untouched; errors render inside the modal's inline `role="status"` slot on failure.
   - **Steps.** Add `error` state + inline `<div role="status" aria-live="polite">` in `ConfirmPurgeModal.tsx`; stop closing `ConfirmPurgeModal` and `MovePoolModal` at the top of `App.tsx` handlers (let modals call `onClose()` after `await onConfirm(...)` resolves) and rethrow parsed server error messages on `!res.ok` / `catch`.
 
-- [ ] **H-3 `[Blocking]` Fix premature close, background refresh reset, and partial batch filtering in `MoveFilesModal`**
+- [x] **H-3 `[Blocking]` Fix premature close, background refresh reset, and partial batch filtering in `MoveFilesModal`**
   - **Locations.** `src/client/components/MoveFilesModal.tsx:344-350, 357-370, 482-484`, `src/client/App.tsx:2876-2908, 3400-3404`.
   - **Failure mode.** `App.tsx:2880` closes `MoveFilesModal` immediately before `POST /api/sync/rebalance/batch`, bypassing `isLoading`, `isBusy`, and inline error rendering. `useEffect(..., [isOpen, firstEligibleId])` resets live `targetAccountId`, `error`, and `isLoading` whenever background focus refresh updates `accounts`. On partial batch failure, `modalFiles` keeps already-moved files in the list.
   - **Preserved UX.** Modal layout, virtualized list, and `SelectField` controls stay unchanged.
   - **Steps.** Narrow `MoveFilesModal`'s reset `useEffect` to `isOpen` false->true transitions (or `sourceAccount?.id` changes); remove premature `setMoveFilesModalGroup(null)` from `App.tsx:2880`, throw errors to `MoveFilesModal`, and filter `modalFiles` (`App.tsx:3400-3404`) by `f.accountId === moveFilesModalGroup.accountId`.
 
-- [ ] **H-4 `[Blocking]` Keep `MoveConflictModal` open and render inline errors on failure**
+- [x] **H-4 `[Blocking]` Keep `MoveConflictModal` open and render inline errors on failure**
   - **Locations.** `src/client/components/MoveConflictModal.tsx:404-430, 616-649`, `src/client/App.tsx:167-173, 2098-2138`.
   - **Failure mode.** `MoveConflictModal` has no inline error banner and `App.tsx` dismisses `pendingMoveConflict` on `!res.ok` or network error.
   - **Preserved UX.** Existing 3 action buttons and warning/info styling stay unchanged; inline warning box renders only on failure.
   - **Steps.** Add `errorMessage?: string | null` to `MoveConflictModalProps` and `PendingMoveConflict`; render `errorMessage` inline in `role="status"` and keep the modal open for retry on failure in `handleResolveMoveConflict`.
 
-- [ ] **H-5 `[Warning]` Fix `ShareModal` hidden validation reason, empty-`items` crash, missing `webViewLink`, clipboard error, `onComplete`, and stale `inspectCache`**
+- [x] **H-5 `[Warning]` Fix `ShareModal` hidden validation reason, empty-`items` crash, missing `webViewLink`, clipboard error, `onComplete`, and stale `inspectCache`**
   - **Locations.** `src/client/components/ShareModal.tsx:69-78, 816-833, 916-930, 1020-1081, 1234-1253, 1286`.
   - **Failure mode.** `validationData.reason` is never rendered in JSX; indexing `items[0].name` crashes if rendered closed with `items=[]`; missing `webViewLink` renders silently; failed clipboard copy fails silently; `onComplete` rejection is unawaited; 15s `inspectCache` goes stale across workspace mutations.
   - **Preserved UX.** Existing two-step share UI stays identical; notices render via existing `dangerBanner` / inline row note.
-  - **Steps.** Guard `items.length > 0` before accessing `items[0]`; render `validationData.reason` when `valid === false`; render inline `"Share link unavailable for this drive"` when `!link.webViewLink`; set inline error on clipboard failure and `onComplete` rejection; export and invoke `invalidateShareInspectCache()` on account/pool/file mutations.
+  - **Steps.** Guard `items.length > 0` before accessing `items[0]`; render `validationData.reason` when `valid === false`; render inline `"Share link unavailable for this drive"` when `!link.webViewLink`; set inline error on clipboard failure and `onComplete` rejection; export and invoke `invalidateShareInspectCache()` on account/pool/file mutations. *(Note: `shareInspectCache`, `getShareInspectCache`, `setShareInspectCache`, and `invalidateShareInspectCache()` live in `src/client/utils/queryCache.ts` instead of `ShareModal.tsx` so `App.tsx` only imports types from `ShareModal.tsx` and keeps `ShareModal` in its own lazy chunk.)*
 
-- [ ] **H-6 `[Warning]` Add synchronous `useRef` submit locks across all modals and `App.tsx` action handlers**
+- [x] **H-6 `[Warning]` Add synchronous `useRef` submit locks across all modals and `App.tsx` action handlers**
   - **Locations.** `NewFolderModal.tsx:250-261`, `RenameModal.tsx:265-280`, `MoveFilesModal.tsx:357-361`, `MovePoolModal.tsx:250-254`, `ConfirmPurgeModal.tsx:227-230`, `ShareModal.tsx:1059-1065`, `MoveConflictModal.tsx:426-430`, `App.tsx:2099, 2964-2968`.
   - **Failure mode.** Async React state alone allows rapid double-clicks / double-Enter before re-render to fire duplicate mutations (`handleExecuteDriveAction` lacks any guard at all).
   - **Steps.** Add synchronous `submittingRef = useRef(false)` guards in every modal submit handler and in `handleExecuteDriveAction` / `handleResolveMoveConflict`.
 
-- [ ] **H-7 `[Warning]` Include trashed files in `ConfirmDriveActionModal` counts (`App.tsx`)**
+- [x] **H-7 `[Warning]` Include trashed files in `ConfirmDriveActionModal` counts (`App.tsx`)**
   - **Locations.** `src/client/App.tsx:2994-2996` (vs `src/server/app.ts:780`).
   - **Failure mode.** `driveFilesCount` counts only active `files`, showing `0 files (0 B)` while `DELETE /api/accounts/:id` counts and evacuates trashed files too.
   - **Steps.** Include `trashedFiles` matching `driveActionModal.account?.id` when computing `driveFilesCount` and `driveTotalBytes`.
 
-- [ ] **H-8 `[Warning]` Deduplicate modal chrome styles, standardize `<h2>` headings, and use `tokens.stylex.ts` tokens**
+- [x] **H-8 `[Warning]` Deduplicate modal chrome styles, standardize `<h2>` headings, and use `tokens.stylex.ts` tokens**
   - **Locations.** `ConfirmDriveActionModal.tsx`, `ConfirmPurgeModal.tsx`, `MoveConflictModal.tsx`, `MoveFilesModal.tsx`, `MovePoolModal.tsx`, `NewFolderModal.tsx`, `RenameModal.tsx`, `ShareModal.tsx`, `TabBlockedModal.tsx`.
   - **Preserved UX.** Exact same modal dimensions, spacing, colors, and borders per modal.
   - **Steps.** Extract shared modal header/footer/field StyleX rules into `ModalChrome.tsx` (or `ModalDialog.tsx`) with explicit variant props; change `<h3>` in `NewFolderModal.tsx:291` and `ConfirmPurgeModal.tsx:250` to `<h2>`; replace hardcoded `'48px'`, `'4px'`, `'2px'`, `'8px'`, `'10px'`, `'600'`, `'1.4'` literals with `tokens.stylex.ts` tokens; add a comment at `TabBlockedModal.tsx:65-66` documenting intentional pre-hydration theme sync.
 
-- [ ] **H-9 `[Nit]` Modal hygiene cleanup**
+- [x] **H-9 `[Nit]` Modal hygiene cleanup**
   - **Locations.** `ConfirmDriveActionModal.tsx:13, 263` (`_action` prop + `App.tsx:3844`), `NewFolderModal.tsx:4` (`./Icons.js`), `MoveConflictModal.tsx:435-447` (`getConflictMatchMeta` hoist).
   - **Steps.** Remove unused `action` prop (or document if reserved), add `.js` extension to `Icons` import, and hoist `getConflictMatchMeta` to module scope.

@@ -1,16 +1,16 @@
 import React, { useRef, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconAlertTriangle, IconTrash } from './Icons.js';
+import { colors, layout, spacing, radius, typography } from '../tokens.stylex.js';
+import { IconAlertTriangle, IconTrash } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
+import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import type { AccountItem } from './Sidebar.js';
 
 interface ConfirmDriveActionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void> | void;
-  action: 'remove';
   account: AccountItem | null;
   filesCount: number;
   totalBytes: number;
@@ -20,72 +20,7 @@ interface ConfirmDriveActionModalProps {
 
 const styles = stylex.create({
   surface: {
-    width: '460px',
-  },
-  header: {
-    height: '48px',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    flexShrink: 0,
-  },
-  titleGroup: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-  },
-  title: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightTitle,
-    color: colors.primaryText,
-    margin: 0,
-  },
-  closeBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    cursor: 'pointer',
-    color: colors.secondaryText,
-    padding: spacing.space1,
-    borderRadius: radius.compact,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      color: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.35,
-      color: colors.secondaryText,
-      backgroundColor: 'transparent',
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minWidth: '44px',
-      minHeight: '44px',
-    },
-  },
-  body: {
-    padding: spacing.space5,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing.space3,
-    backgroundColor: colors.surface,
+    width: layout.drawerWidth,
   },
   driveInfoCard: {
     padding: spacing.space3,
@@ -96,12 +31,12 @@ const styles = stylex.create({
     borderColor: colors.borderSubtle,
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: spacing.space2,
   },
   driveName: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
   },
   driveMeta: {
@@ -129,7 +64,7 @@ const styles = stylex.create({
     color: colors.brandAccent,
   },
   statsLabel: {
-    fontWeight: '600',
+    fontWeight: typography.fontWeightSection,
   },
   statsValue: {
     fontFamily: typography.fontFamilyMono,
@@ -151,108 +86,14 @@ const styles = stylex.create({
   warningIcon: {
     color: colors.dangerTextOnSurface,
     flexShrink: 0,
-    marginTop: '2px',
+    marginTop: spacing.space1,
   },
   warningText: {
     fontSize: typography.fontSizeMeta,
     color: colors.dangerTextOnSurface,
-    lineHeight: '1.4',
+    lineHeight: typography.lineHeightBody,
     margin: 0,
     fontWeight: '500',
-  },
-  footer: {
-    paddingTop: spacing.space3,
-    paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderTopWidth: '1px',
-    borderTopStyle: 'solid',
-    borderTopColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: spacing.space3,
-    backgroundColor: colors.surface,
-  },
-  cancelBtn: {
-    height: '32px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    color: colors.primaryText,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: typography.fontWeightTitle,
-    cursor: 'pointer',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      backgroundColor: colors.surface,
-      borderColor: colors.border,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-    },
-  },
-  confirmBtn: {
-    height: '32px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.compact,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.brandAccent,
-    backgroundColor: colors.brandAccent,
-    color: colors.brandAccentText,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: typography.fontWeightTitle,
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.brandAccentHover,
-      borderColor: colors.brandAccentHover,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-    },
-  },
-  confirmBtnDanger: {
-    backgroundColor: colors.danger,
-    borderColor: colors.danger,
-    color: colors.dangerText,
-    ':hover': {
-      backgroundColor: colors.dangerHover,
-      borderColor: colors.dangerHover,
-    },
   },
 });
 
@@ -260,7 +101,6 @@ export function ConfirmDriveActionModal({
   isOpen,
   onClose,
   onConfirm,
-  action: _action,
   account,
   filesCount,
   totalBytes,
@@ -284,25 +124,16 @@ export function ConfirmDriveActionModal({
     >
       {account && (
         <>
-          <div {...stylex.props(styles.header)}>
-            <div {...stylex.props(styles.titleGroup)}>
-              <IconTrash size={16} strokeWidth={2} {...stylex.props(styles.warningIcon)} />
-              <h2 id={titleId} {...stylex.props(styles.title)}>
-                Remove drive
-              </h2>
-            </div>
-            <button
-              type="button"
-              {...stylex.props(styles.closeBtn)}
-              onClick={onClose}
-              disabled={isLoading}
-              aria-label="Close dialog"
-            >
-              <IconClose size={16} />
-            </button>
-          </div>
+          <ModalHeader
+            titleId={titleId}
+            title="Remove drive"
+            icon={<IconTrash size={16} strokeWidth={2} {...stylex.props(styles.warningIcon)} />}
+            onClose={onClose}
+            isBusy={isLoading}
+            closeAriaLabel="Close dialog"
+          />
 
-          <div {...stylex.props(styles.body)}>
+          <div {...stylex.props(modalChromeStyles.body)}>
             <div {...stylex.props(styles.driveInfoCard)}>
               <span {...stylex.props(styles.driveName)}>
                 {account.displayName || account.id}
@@ -333,10 +164,10 @@ export function ConfirmDriveActionModal({
             </div>
           </div>
 
-          <div {...stylex.props(styles.footer)}>
+          <div {...stylex.props(modalChromeStyles.footer, modalChromeStyles.footerGapLg)}>
             <button
               type="button"
-              {...stylex.props(styles.cancelBtn)}
+              {...stylex.props(modalChromeStyles.cancelBtn, modalChromeStyles.cancelBtnSurface)}
               onClick={onClose}
               disabled={isLoading}
             >
@@ -346,7 +177,7 @@ export function ConfirmDriveActionModal({
               ref={confirmBtnRef}
               type="button"
               autoFocus
-              {...stylex.props(styles.confirmBtn, styles.confirmBtnDanger)}
+              {...stylex.props(modalChromeStyles.dangerBtn)}
               onClick={() => onConfirm()}
               disabled={isLoading}
             >
