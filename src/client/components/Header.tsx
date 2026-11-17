@@ -49,11 +49,14 @@ const styles = stylex.create({
     padding: spacing.space2,
     color: colors.primaryText,
     borderRadius: radius.compact,
+    outline: 'none',
     ':hover': {
       backgroundColor: colors.rowHover,
     },
     ':focus-visible': {
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '2px',
     },
     '@media (max-width: 768px)': {
@@ -118,11 +121,14 @@ const styles = stylex.create({
     borderRadius: radius.compact,
     fontSize: '12px',
     lineHeight: '1',
+    outline: 'none',
     ':hover': {
       color: colors.primaryText,
     },
     ':focus-visible': {
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '2px',
     },
     '@media (pointer: coarse)': {
@@ -167,6 +173,7 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: '4px',
     boxSizing: 'border-box',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       color: colors.primaryText,
@@ -177,7 +184,9 @@ const styles = stylex.create({
       transition: motion.transitionTap,
     },
     ':focus-visible': {
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '2px',
     },
     '@media (pointer: coarse)': {
@@ -215,6 +224,7 @@ const styles = stylex.create({
     fontWeight: '500',
     textDecoration: 'none',
     boxSizing: 'border-box',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.surface,
@@ -226,7 +236,9 @@ const styles = stylex.create({
       transition: motion.transitionTap,
     },
     ':focus-visible': {
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '2px',
     },
     '@media (pointer: coarse)': {

@@ -315,7 +315,7 @@ const styles = stylex.create({
   },
   meterTrack: {
     width: '100%',
-    height: '6px',
+    height: '4px',
     borderRadius: radius.pill,
     backgroundColor: colors.progressTrack,
     overflow: 'hidden',
@@ -323,11 +323,8 @@ const styles = stylex.create({
   meterFill: {
     height: '100%',
     borderRadius: radius.pill,
-    backgroundColor: colors.brandAccent,
+    backgroundColor: colors.accentGold,
     transition: motion.transitionFast,
-  },
-  meterFillReady: {
-    backgroundColor: colors.success,
   },
   autoSelectBtn: {
     height: '26px',
@@ -422,9 +419,6 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.selectionBg,
     },
-  },
-  driveRowActive: {
-    boxShadow: `inset 2px 0 0 0 ${colors.focusRing}`,
   },
   rowLast: {
     borderBottomWidth: '0px',
@@ -1376,10 +1370,7 @@ export function ShareModal({
                     </div>
                     <div {...stylex.props(styles.meterTrack)}>
                       <div
-                        {...stylex.props(
-                          styles.meterFill,
-                          validationData?.valid && styles.meterFillReady
-                        )}
+                        {...stylex.props(styles.meterFill)}
                         style={{ width: `${meterPercent}%` }}
                       />
                     </div>
@@ -1410,7 +1401,6 @@ export function ShareModal({
                           if (!acc) return null;
                           const selectable = isDriveSelectable(acc);
                           const isSelected = selectedAccountIds.includes(acc.id);
-                          const isActive = virtualRow.index === activeDriveIndex;
                           const statusBadge = getDriveStatusBadge(acc);
 
                           return (
@@ -1427,7 +1417,6 @@ export function ShareModal({
                               {...stylex.props(
                                 styles.driveRow,
                                 isSelected && styles.driveRowSelected,
-                                isActive && styles.driveRowActive,
                                 (!selectable || isSubmitting) && styles.driveRowDisabled,
                                 virtualRow.index === emptyAccounts.length - 1 && styles.rowLast
                               )}

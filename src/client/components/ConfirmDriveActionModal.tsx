@@ -228,7 +228,8 @@ const styles = stylex.create({
     outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
-      filter: 'brightness(1.1)',
+      backgroundColor: colors.brandAccentHover,
+      borderColor: colors.brandAccentHover,
     },
     ':focus-visible': {
       outlineWidth: '2px',

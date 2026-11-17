@@ -27,12 +27,13 @@ export const colors = stylex.defineVars({
 
   // Brand & interactive states
   primary: '#111d18',
-  primaryHover: '#233830',
+  primaryHover: '#2a4339',
   brandAccent: '#135349',
-  brandAccentHover: '#0f443c',
+  brandAccentHover: '#0d7362',
   brandAccentText: '#ffffff',
   brandAccentSurface: '#e1efe9',
   accentGold: '#deb76c',
+  accentGoldHover: '#e8c682',
   accentGoldText: '#111d18',
   selectionBg: '#dcebe2',
   selectionBorder: '#deb76c',
@@ -49,13 +50,14 @@ export const colors = stylex.defineVars({
   // Status semantics (Strict WCAG AAA contrast against surface #f7faf5)
   success: '#116329',
   successSurface: '#e6f4ea',
-  warning: '#7a4400',
-  warningSurface: '#fef3c7',
+  warning: '#6b3e00',
+  warningSurface: '#f4f2e5',
+  warningBorder: '#c9ae72',
   danger: '#82071e',
   dangerSurface: '#fdf2f2',
   dangerBorder: '#f1b5bc',
   dangerTextOnSurface: '#82071e',
-  dangerHover: '#6a0518',
+  dangerHover: '#c61332',
   dangerText: '#ffffff',
   modalBackdrop: 'rgba(11, 20, 18, 0.65)',
 });
@@ -86,27 +88,29 @@ export const darkColors = stylex.createTheme(colors, {
   brandAccentText: '#111d18',
   brandAccentSurface: '#0d2721',
   accentGold: '#d4a13c',
+  accentGoldHover: '#e6b856',
   accentGoldText: '#111d18',
   selectionBg: '#1b3b32',
   selectionBorder: '#d4a13c',
   rowHover: '#162d26',
   focusRing: '#d4a13c',
 
-  border: '#2d453b',
-  borderSubtle: '#1e302a',
-  outline: '#2d453b',
+  border: '#456659',
+  borderSubtle: '#294138',
+  outline: '#456659',
   progressTrack: '#38584c',
   poolGold: '#fbbf24',
 
   success: '#2dd4bf',
   successSurface: '#0d2a24',
-  warning: '#facc15',
-  warningSurface: '#2d2407',
+  warning: '#f7d154',
+  warningSurface: '#232212',
+  warningBorder: '#604d19',
   danger: '#ff9492',
   dangerSurface: '#261615',
-  dangerBorder: '#5c1d24',
+  dangerBorder: '#742730',
   dangerTextOnSurface: '#ff9492',
-  dangerHover: '#ffa8a6',
+  dangerHover: '#ffc4c2',
   dangerText: '#1c080a',
   modalBackdrop: 'rgba(11, 20, 18, 0.65)',
 });
@@ -146,6 +150,7 @@ export const radius = stylex.defineVars({
  */
 export const layout = stylex.defineVars({
   headerHeight: '56px',
+  drawerHeaderHeight: '48px',
   actionsPortalHeight: '48px',
   sidebarWidth: '280px',
   sidebarCollapsedWidth: '64px',
@@ -204,8 +209,13 @@ export const typography = stylex.defineVars({
  * Animation timing.
  */
 export const motion = stylex.defineVars({
-  transitionFast: '150ms ease-out',
-  transitionNormal: '200ms ease-out',
-  transitionTap: '100ms ease',
+  durationFast: '150ms',
+  easingOut: 'ease-out',
+  transitionFast:
+    'background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out, opacity 150ms ease-out, transform 150ms ease-out, width 150ms ease-out, filter 150ms ease-out',
+  transitionNormal:
+    'background-color 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out, opacity 200ms ease-out, transform 200ms ease-out, width 200ms ease-out, filter 200ms ease-out',
+  transitionTap:
+    'background-color 100ms ease, border-color 100ms ease, color 100ms ease, opacity 100ms ease, transform 100ms ease, filter 100ms ease',
 });
 

@@ -39,7 +39,7 @@ const styles = stylex.create({
   },
   verticalDark: {
     backgroundImage:
-      'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%276%27 height=%274%27 shape-rendering=%27crispEdges%27%3E%3Crect width=%276%27 height=%274%27 fill=%27%2312211d%27/%3E%3Cpath d=%27M0 0h2v4H0zM2 0h1v1H2zM2 2h1v1H2zM3 1h1v1H3zM5 1h1v1H5zM3 3h1v1H3zM5 3h1v1H5z%27 fill=%27%23182824%27/%3E%3C/svg%3E")',
+      'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%276%27 height=%274%27 shape-rendering=%27crispEdges%27%3E%3Crect width=%276%27 height=%274%27 fill=%27%2312211d%27/%3E%3Cpath d=%27M0 0h2v4H0zM2 0h1v1H2zM2 2h1v1H2zM3 1h1v1H3zM5 1h1v1H5zM3 3h1v1H3zM5 3h1v1H5z%27 fill=%27%231e332c%27/%3E%3C/svg%3E")',
   },
   horizontalLight: {
     backgroundImage:
@@ -47,7 +47,7 @@ const styles = stylex.create({
   },
   horizontalDark: {
     backgroundImage:
-      'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%274%27 height=%276%27 shape-rendering=%27crispEdges%27%3E%3Crect width=%274%27 height=%276%27 fill=%27%2312211d%27/%3E%3Cpath d=%27M0 0h4v2H0zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v1H1zM3 3h1v1H3zM1 5h1v1H1zM3 5h1v1H3z%27 fill=%27%23182824%27/%3E%3C/svg%3E")',
+      'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%274%27 height=%276%27 shape-rendering=%27crispEdges%27%3E%3Crect width=%274%27 height=%276%27 fill=%27%2312211d%27/%3E%3Cpath d=%27M0 0h4v2H0zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v1H1zM3 3h1v1H3zM1 5h1v1H1zM3 5h1v1H3z%27 fill=%27%231e332c%27/%3E%3C/svg%3E")',
   },
 });
 
