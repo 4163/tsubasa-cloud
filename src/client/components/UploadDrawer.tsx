@@ -2,10 +2,12 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import * as stylex from '@stylexjs/stylex';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { client } from '../api.js';
-import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconUpload, FileTypeIcon, IconCheck, IconAlertTriangle, IconChevronDown, IconChevronUp, IconFolder, IconFolderFilled, IconMinus, IconRotateCcw } from './Icons.js';
+import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
+import { IconClose, IconUpload, FileTypeIcon, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder, IconFolderFilled, IconRotateCcw } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { useBeforeUnload } from '../utils/useBeforeUnload.js';
+import { DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
 import type { AccountItem } from './Sidebar.js';
 
 export type UploadConflictAction = 'skip' | 'replace' | 'keep_both';
@@ -56,6 +58,7 @@ interface UploadFolderGroup {
 }
 
 type UploadDisplayRow =
+  | { kind: 'section_header'; key: string; title: string; count: number }
   | { kind: 'loose_file'; key: string; item: NormalizedUploadItem }
   | { kind: 'folder_group'; key: string; group: UploadFolderGroup }
   | { kind: 'folder_child_file'; key: string; item: NormalizedUploadItem; parentFolderPath: string }
@@ -71,9 +74,6 @@ interface UploadDrawerProps {
   poolId?: number;
   onUploadComplete: () => Promise<void>;
   onClearFiles: () => void;
-  isMinimized?: boolean;
-  onMinimize?: () => void;
-  onRestore?: () => void;
 }
 
 const CEILING_14_25_GB = 14.25 * 1024 * 1024 * 1024;
@@ -96,7 +96,7 @@ const styles = stylex.create({
     outline: 'none',
     overflow: 'hidden',
     width: {
-      default: '420px',
+      default: '460px',
       '@media (max-width: 768px)': '100vw',
     },
     maxWidth: '100vw',
@@ -131,12 +131,10 @@ const styles = stylex.create({
       borderBottomWidth: '1px',
       borderBottomStyle: 'solid',
       borderBottomColor: colors.border,
-      borderBottomLeftRadius: radius.card,
-      borderBottomRightRadius: radius.card,
     },
   },
   drawerHeader: {
-    height: '56px',
+    height: layout.drawerHeaderHeight,
     paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderBottomWidth: '1px',
@@ -155,7 +153,7 @@ const styles = stylex.create({
   },
   title: {
     fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeTitle,
+    fontSize: typography.fontSizeSection,
     fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
     margin: 0,
@@ -253,42 +251,12 @@ const styles = stylex.create({
     whiteSpace: 'nowrap',
     flexShrink: 0,
   },
-  summarySubRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space2,
-    fontSize: typography.fontSizeMeta,
-    color: colors.dimText,
-  },
-  statusIndicator: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
-    fontWeight: '500',
-  },
-  statusDot: {
-    width: '6px',
-    height: '6px',
-    borderRadius: radius.pill,
-    backgroundColor: colors.accentGold,
-    flexShrink: 0,
-  },
-  statusDotActive: {
-    backgroundColor: colors.brandAccent,
-  },
-  statusDotComplete: {
-    backgroundColor: colors.success,
-  },
   progressBarContainer: {
     width: '100%',
     height: '3px',
     borderRadius: radius.pill,
     backgroundColor: colors.progressTrack,
     overflow: 'hidden',
-    marginTop: spacing.space1,
   },
   progressBarFill: {
     width: '100%',
@@ -320,6 +288,9 @@ const styles = stylex.create({
     paddingRight: spacing.space6,
     borderRadius: radius.none,
     borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
@@ -328,47 +299,44 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.rowHover,
     },
-    '@media (max-width: 768px)': {
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: 'transparent',
-    },
   },
   fileCardRejected: {
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.danger,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      borderLeftColor: colors.danger,
+      display: 'block',
     },
   },
   fileCardHeader: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: spacing.space3,
   },
   fileInfoGroup: {
     display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
+    alignItems: 'flex-start',
+    gap: spacing.space4,
     minWidth: 0,
     flex: 1,
   },
   fileIcon: {
     color: colors.brandAccent,
     flexShrink: 0,
+    marginTop: '2px',
   },
   fileName: {
     fontFamily: typography.fontFamilyBody,
@@ -380,34 +348,11 @@ const styles = stylex.create({
     whiteSpace: 'nowrap',
   },
   fileMeta: {
-    fontFamily: typography.fontFamilyBody,
+    fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
+    color: colors.primaryText,
     fontVariantNumeric: 'tabular-nums',
-    fontWeight: '500',
-    flexShrink: 0,
-  },
-  driveAllocationRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space2,
-    paddingTop: spacing.space1,
-  },
-  driveSelectorGroup: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    minWidth: 0,
-    flex: 1,
-  },
-  driveLabel: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: '10px',
     fontWeight: '600',
-    color: colors.dimText,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
     flexShrink: 0,
   },
   selectWrapper: {
@@ -415,37 +360,38 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     minWidth: 0,
-    flex: 1,
+    maxWidth: '180px',
   },
   accountSelect: {
     appearance: 'none',
     WebkitAppearance: 'none',
     MozAppearance: 'none',
-    width: '100%',
-    height: '24px',
-    lineHeight: '20px',
+    fontSize: typography.fontSizeBadge,
+    fontFamily: typography.fontFamilyMono,
+    height: '22px',
+    lineHeight: '18px',
     paddingTop: '1px',
     paddingBottom: '1px',
     paddingLeft: spacing.space2,
     paddingRight: '22px',
     borderRadius: radius.compact,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.brandAccentSurface,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
-    color: colors.primaryText,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: '500',
+    color: colors.brandAccent,
+    maxWidth: '180px',
     outline: 'none',
     cursor: 'pointer',
     boxSizing: 'border-box',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    transition: motion.transitionFast,
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      borderColor: colors.brandAccent,
-      backgroundColor: colors.surface,
+      borderColor: colors.accentGold,
+      backgroundColor: colors.surfaceAlt,
     },
     ':focus': {
       borderColor: colors.focusRing,
@@ -454,27 +400,41 @@ const styles = stylex.create({
       outlineColor: colors.focusRing,
       outlineOffset: '-1px',
     },
+    ':focus-visible': {
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
     ':disabled': {
-      opacity: 0.6,
+      opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
     },
   },
   selectChevron: {
     position: 'absolute',
-    right: '6px',
+    right: '7px',
     top: '50%',
     transform: 'translateY(-50%)',
     pointerEvents: 'none',
-    color: colors.dimText,
+    color: colors.brandAccent,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
   },
   badge: {
+    height: '20px',
+    display: 'inline-flex',
+    alignItems: 'center',
     fontSize: typography.fontSizeBadge,
-    fontFamily: typography.fontFamilyMono,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    fontFamily: typography.fontFamilyBody,
+    fontWeight: typography.fontWeightBadge,
+    paddingTop: 0,
+    paddingBottom: 0,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
@@ -484,36 +444,29 @@ const styles = stylex.create({
     borderColor: colors.borderSubtle,
     color: colors.primaryText,
     whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
   badgeError: {
     backgroundColor: colors.dangerSurface,
-    borderColor: colors.danger,
-    color: colors.danger,
-    fontWeight: '600',
+    borderColor: colors.dangerBorder,
+    color: colors.dangerTextOnSurface,
   },
   badgeSuccess: {
     backgroundColor: colors.successSurface,
-    borderColor: colors.success,
+    borderColor: colors.borderSubtle,
     color: colors.success,
-    fontWeight: '600',
-    display: 'inline-flex',
-    alignItems: 'center',
     gap: '3px',
   },
   badgeWarning: {
     backgroundColor: colors.warningSurface,
-    borderColor: colors.warning,
+    borderColor: colors.warningBorder,
     color: colors.warning,
-    fontWeight: '600',
-    display: 'inline-flex',
-    alignItems: 'center',
     gap: '3px',
   },
   badgeMuted: {
     backgroundColor: colors.surfaceAlt,
     borderColor: colors.borderSubtle,
     color: colors.secondaryText,
-    fontWeight: '600',
   },
   miniProgressContainer: {
     width: '100%',
@@ -521,7 +474,6 @@ const styles = stylex.create({
     borderRadius: radius.pill,
     backgroundColor: colors.progressTrack,
     overflow: 'hidden',
-    marginTop: spacing.space1,
   },
   miniProgressFill: {
     width: '100%',
@@ -532,7 +484,10 @@ const styles = stylex.create({
     transition: 'transform 0.15s ease',
   },
   footer: {
-    padding: spacing.space5,
+    paddingTop: spacing.space3,
+    paddingBottom: spacing.space3,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
     borderTopWidth: '1px',
     borderTopStyle: 'solid',
     borderTopColor: colors.borderSubtle,
@@ -540,16 +495,16 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: spacing.space3,
+    gap: spacing.space2,
     flexShrink: 0,
   },
   secondaryBtn: {
-    height: '36px',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderRadius: radius.button,
-    backgroundColor: 'transparent',
-    color: colors.primaryText,
+    height: '32px',
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.compact,
+    backgroundColor: colors.surface,
+    color: colors.secondaryText,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.border,
@@ -557,23 +512,35 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     fontWeight: '500',
     cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
+      color: colors.primaryText,
+      borderColor: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
     },
     '@media (pointer: coarse)': {
-      minHeight: '56px',
+      minHeight: '44px',
     },
   },
   primaryBtn: {
-    height: '36px',
-    paddingLeft: spacing.space6,
-    paddingRight: spacing.space6,
-    borderRadius: radius.button,
+    height: '32px',
+    paddingLeft: spacing.space5,
+    paddingRight: spacing.space5,
+    borderRadius: radius.compact,
     backgroundColor: colors.brandAccent,
     color: colors.brandAccentText,
     borderWidth: '0px',
@@ -584,47 +551,56 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
     },
     '@media (pointer: coarse)': {
-      minHeight: '56px',
+      minHeight: '44px',
     },
   },
   planErrorBanner: {
     position: 'relative',
-    marginTop: spacing.space3,
-    marginBottom: spacing.space2,
+    marginTop: 0,
+    marginBottom: 0,
     paddingTop: spacing.space2,
     paddingBottom: spacing.space2,
     paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
     borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: colors.dangerSurface,
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.danger,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: colors.danger,
+      display: 'block',
     },
   },
   planErrorNotice: {
@@ -633,11 +609,11 @@ const styles = stylex.create({
     color: colors.danger,
   },
   conflictBanner: {
-    paddingTop: spacing.space3,
-    paddingBottom: spacing.space3,
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
     paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
-    backgroundColor: colors.warningSurface,
+    backgroundColor: colors.surface,
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
@@ -654,79 +630,20 @@ const styles = stylex.create({
     fontWeight: '600',
     color: colors.warning,
   },
-  conflictBatchActions: {
+  actionsRow: {
     display: 'flex',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing.space2,
-  },
-  conflictActionGroup: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space1,
-    flexShrink: 0,
-  },
-  conflictPillBtn: {
-    height: '24px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    color: colors.primaryText,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    outline: 'none',
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.border,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-      paddingLeft: spacing.space3,
-      paddingRight: spacing.space3,
-    },
-  },
-  conflictPillBtnActive: {
-    backgroundColor: colors.brandAccent,
-    borderColor: colors.brandAccent,
-    color: colors.brandAccentText,
-    ':hover': {
-      backgroundColor: colors.brandAccentHover,
-      borderColor: colors.brandAccentHover,
-    },
-  },
-  conflictRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     gap: spacing.space2,
     flexWrap: 'wrap',
-    paddingTop: spacing.space1,
   },
   conflictHintText: {
-    fontSize: typography.fontSizeBadge,
+    fontSize: typography.fontSizeMeta,
     color: colors.warning,
     fontWeight: '500',
     minWidth: 0,
   },
   skippedNoticeText: {
-    fontSize: typography.fontSizeBadge,
+    fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     fontWeight: '500',
   },
@@ -737,50 +654,12 @@ const styles = stylex.create({
     display: 'inline-flex',
     color: colors.poolGold,
     flexShrink: 0,
+    marginTop: '2px',
   },
   folderSubMeta: {
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
-  },
-  folderExpandRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    flexWrap: 'wrap',
-    marginTop: spacing.space1,
-  },
-  folderExpandBtn: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.surface,
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '500',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    outline: 'none',
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.border,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-      paddingLeft: spacing.space4,
-      paddingRight: spacing.space4,
-    },
   },
   fileTitleCol: {
     display: 'flex',
@@ -804,11 +683,6 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
   },
-  headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space1,
-  },
   virtualListInner: {
     position: 'relative',
     width: '100%',
@@ -820,10 +694,10 @@ const styles = stylex.create({
     width: '100%',
   },
   dangerBtn: {
-    height: '36px',
+    height: '32px',
     paddingLeft: spacing.space5,
     paddingRight: spacing.space5,
-    borderRadius: radius.button,
+    borderRadius: radius.compact,
     backgroundColor: colors.dangerSurface,
     color: colors.dangerTextOnSurface,
     borderWidth: '1px',
@@ -836,6 +710,7 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space2,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.danger,
@@ -846,95 +721,10 @@ const styles = stylex.create({
       outlineWidth: '2px',
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
-      minHeight: '56px',
-    },
-  },
-  pillContainer: {
-    position: 'fixed',
-    bottom: spacing.space6,
-    right: spacing.space6,
-    zIndex: 100,
-    minWidth: '280px',
-    maxWidth: '360px',
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    borderRadius: radius.card,
-    paddingTop: spacing.space4,
-    paddingBottom: spacing.space4,
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing.space3,
-  },
-  pillMain: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space4,
-  },
-  pillLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-    minWidth: 0,
-    flex: 1,
-  },
-  pillTextGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing.space1,
-    minWidth: 0,
-  },
-  pillTitle: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    fontWeight: '600',
-    color: colors.primaryText,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  pillMeta: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  pillExpandBtn: {
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.button,
-    color: colors.primaryText,
-    cursor: 'pointer',
-    paddingTop: spacing.space2,
-    paddingBottom: spacing.space2,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space1,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '600',
-    flexShrink: 0,
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.brandAccent,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
+      minHeight: '44px',
     },
   },
 });
@@ -1033,20 +823,19 @@ const UploadFileCard = React.memo(function UploadFileCard({
       )}
 
       {!isRejected && existingFile && !isComplete && (
-        <div {...stylex.props(styles.conflictRow)}>
-          <span {...stylex.props(isSkipped ? styles.skippedNoticeText : styles.conflictHintText)}>
-            Existing: {formatBytes(existingFile.sizeBytes)}
-            {existingAcc ? ` on ${existingAcc.displayName || existingAcc.id}` : ''}
-            {' · '}
-            {isSameSize ? 'Same size' : 'Different size'}
-          </span>
+        <span {...stylex.props(isSkipped ? styles.skippedNoticeText : styles.conflictHintText)}>
+          Existing: {formatBytes(existingFile.sizeBytes)}
+          {existingAcc ? ` on ${existingAcc.displayName || existingAcc.id}` : ''}
+          {' · '}
+          {isSameSize ? 'Same size' : 'Different size'}
+        </span>
+      )}
 
-          <div
-            {...stylex.props(styles.conflictActionGroup)}
-            role="group"
-            aria-label={`Conflict action for ${item.virtualPath}`}
-          >
-            {(
+      {!isRejected && ((existingFile && !isComplete) || !isSkipped) && (
+        <div {...stylex.props(styles.actionsRow)}>
+          {existingFile &&
+            !isComplete &&
+            (
               [
                 { value: 'skip', label: 'Skip' },
                 { value: 'replace', label: 'Replace' },
@@ -1055,30 +844,20 @@ const UploadFileCard = React.memo(function UploadFileCard({
             ).map((opt) => {
               const active = effectiveConflictAction === opt.value;
               return (
-                <button
+                <DrawerButton
                   key={opt.value}
-                  type="button"
+                  variant={active ? 'primary' : 'secondary'}
                   aria-pressed={active}
                   disabled={conflictControlsDisabled}
                   onClick={() => onSelectConflictAction(item.key, opt.value)}
-                  {...stylex.props(
-                    styles.conflictPillBtn,
-                    active && styles.conflictPillBtnActive
-                  )}
                 >
                   {opt.label}
-                </button>
+                </DrawerButton>
               );
             })}
-          </div>
-        </div>
-      )}
 
-      {!isRejected && !isSkipped && (
-        <div {...stylex.props(styles.driveAllocationRow)}>
-          <div {...stylex.props(styles.driveSelectorGroup)}>
-            <span {...stylex.props(styles.driveLabel)}>Drive:</span>
-            {accounts.length > 0 ? (
+          {!isSkipped &&
+            (accounts.length > 0 ? (
               <div {...stylex.props(styles.selectWrapper)}>
                 <select
                   aria-label={`Select target drive for ${item.virtualPath}`}
@@ -1094,45 +873,33 @@ const UploadFileCard = React.memo(function UploadFileCard({
                     </option>
                   )}
                   {accounts.map((acc) => {
-                    const isDriveDisabled = Boolean(acc.isDisabled);
                     const freedBytes =
                       effectiveConflictAction === 'replace' && existingFile?.accountId === acc.id
                         ? existingFile.sizeBytes
                         : 0;
-                    const hasHeadroom = acc.headroomBytes + freedBytes >= item.file.size;
-                    const remainingBudget =
-                      acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
-                    const hasTransferBudget = remainingBudget >= item.file.size;
-                    const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
-
-                    let labelSuffix = '';
-                    if (isDriveDisabled) {
-                      labelSuffix = ' (Disabled)';
-                    } else if (!acc.authorized) {
-                      labelSuffix = ' (Unauthorized)';
-                    } else if (!hasHeadroom) {
-                      labelSuffix = ' (No headroom)';
-                    } else if (!hasTransferBudget) {
-                      labelSuffix = ' (24h limit reached)';
-                    } else if (acc.id === preview?.targetAccountId) {
-                      labelSuffix = ' (Auto)';
-                    }
-
-                    const fullLabel = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
+                    const { canHold, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
+                      acc,
+                      item.file.size,
+                      {
+                        freedBytes,
+                        isAutoSelected: acc.id === preview?.targetAccountId,
+                        compactHeadroomLabel: true,
+                      },
+                    );
 
                     return (
-                      <option key={acc.id} value={acc.id} disabled={!canHold} title={fullLabel}>
-                        {fullLabel}
+                      <option key={acc.id} value={acc.id} disabled={!canHold} title={optionTitle}>
+                        {optionLabel}
                       </option>
                     );
                   })}
                 </select>
                 <div {...stylex.props(styles.selectChevron)}>
-                  <IconChevronDown size={11} strokeWidth={2.5} />
+                  <IconChevronDown size={10} strokeWidth={2.5} />
                 </div>
               </div>
             ) : preview?.targetAccountId ? (
-              <span {...stylex.props(styles.badge)} title={preview.targetAccountId}>
+              <span {...stylex.props(styles.badge)}>
                 {preview.targetAccountId}
               </span>
             ) : planError ? (
@@ -1141,8 +908,7 @@ const UploadFileCard = React.memo(function UploadFileCard({
               </span>
             ) : (
               <span {...stylex.props(styles.badge)}>Calculating...</span>
-            )}
-          </div>
+            ))}
         </div>
       )}
 
@@ -1277,7 +1043,7 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
       <div {...stylex.props(styles.fileCardHeader)}>
         <div {...stylex.props(styles.fileInfoGroup)}>
           <span {...stylex.props(styles.poolFolderIcon)}>
-            <IconFolderFilled size={18} />
+            <IconFolderFilled size={16} />
           </span>
           <div {...stylex.props(styles.fileTitleCol)}>
             <span {...stylex.props(styles.fileName)} title={group.folderPath}>
@@ -1343,42 +1109,9 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
       </div>
 
       {!allRejected && editableConflicts.length > 0 && (
-        <div {...stylex.props(styles.conflictRow)}>
-          <span {...stylex.props(uniformFolderConflictAction === 'skip' ? styles.skippedNoticeText : styles.conflictHintText)}>
-            {editableConflicts.length} {editableConflicts.length === 1 ? 'file already exists' : 'files already exist'}
-          </span>
-
-          <div
-            {...stylex.props(styles.conflictActionGroup)}
-            role="group"
-            aria-label={`Conflict action for folder ${group.name}`}
-          >
-            {(
-              [
-                { value: 'skip', label: 'Skip all' },
-                { value: 'replace', label: 'Replace all' },
-                { value: 'keep_both', label: 'Keep both' },
-              ] as const
-            ).map((opt) => {
-              const active = uniformFolderConflictAction === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  aria-pressed={active}
-                  disabled={isUploading}
-                  onClick={() => onApplyFolderConflictAction(group.key, opt.value)}
-                  {...stylex.props(
-                    styles.conflictPillBtn,
-                    active && styles.conflictPillBtnActive
-                  )}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <span {...stylex.props(uniformFolderConflictAction === 'skip' ? styles.skippedNoticeText : styles.conflictHintText)}>
+          {editableConflicts.length} {editableConflicts.length === 1 ? 'file already exists' : 'files already exist'}
+        </span>
       )}
 
       {(uploadingCount > 0 || (completedCount > 0 && allComplete)) && (
@@ -1393,15 +1126,37 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
         </div>
       )}
 
-      <div {...stylex.props(styles.folderExpandRow)}>
-        <button
-          type="button"
+      <div {...stylex.props(styles.actionsRow)}>
+        {!allRejected &&
+          editableConflicts.length > 0 &&
+          (
+            [
+              { value: 'skip', label: 'Skip all' },
+              { value: 'replace', label: 'Replace all' },
+              { value: 'keep_both', label: 'Keep both' },
+            ] as const
+          ).map((opt) => {
+            const active = uniformFolderConflictAction === opt.value;
+            return (
+              <DrawerButton
+                key={opt.value}
+                variant={active ? 'primary' : 'secondary'}
+                aria-pressed={active}
+                disabled={isUploading}
+                onClick={() => onApplyFolderConflictAction(group.key, opt.value)}
+              >
+                {opt.label}
+              </DrawerButton>
+            );
+          })}
+
+        <DrawerButton
+          variant="secondary"
           aria-expanded={isExpanded}
           onClick={() => onToggleExpand(group.key)}
-          {...stylex.props(styles.folderExpandBtn)}
         >
           {isExpanded ? 'Hide individual files' : 'Review individually'}
-        </button>
+        </DrawerButton>
       </div>
     </div>
   );
@@ -1417,9 +1172,6 @@ export function UploadDrawer({
   poolId = 1,
   onUploadComplete,
   onClearFiles,
-  isMinimized,
-  onMinimize,
-  onRestore,
 }: UploadDrawerProps) {
   const [previews, setPreviews] = useState<PlacementItemPreview[]>([]);
   const [conflictsByPath, setConflictsByPath] = useState<Record<string, ExistingPoolFile>>({});
@@ -1431,7 +1183,6 @@ export function UploadDrawer({
 
   const [isUploading, setIsUploading] = useState(false);
   const [fileProgress, setFileProgress] = useState<Record<string, FileProgressState>>({});
-  const [internalMinimized, setInternalMinimized] = useState(false);
 
   const progressRef = useRef<Record<string, FileProgressState>>({});
   const hasCreatedEmptyFoldersRef = useRef(false);
@@ -1440,24 +1191,6 @@ export function UploadDrawer({
   const xhrMapRef = useRef<Map<string, XMLHttpRequest>>(new Map());
   const abortedRef = useRef(false);
   const fileListRef = useRef<HTMLDivElement | null>(null);
-
-  const effectiveMinimized = isMinimized !== undefined ? isMinimized : internalMinimized;
-
-  const handleMinimize = useCallback(() => {
-    if (onMinimize) onMinimize();
-    else setInternalMinimized(true);
-  }, [onMinimize]);
-
-  const handleRestore = useCallback(() => {
-    if (onRestore) onRestore();
-    else setInternalMinimized(false);
-  }, [onRestore]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setInternalMinimized(false);
-    }
-  }, [isOpen]);
 
   const flushProgressImmediate = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -2092,15 +1825,12 @@ export function UploadDrawer({
     }
 
     const groupsMap = new Map<string, UploadFolderGroup>();
-    const rows: UploadDisplayRow[] = [];
+    const looseEntries: NormalizedUploadItem[] = [];
+    const folderEntries: UploadFolderGroup[] = [];
 
     for (const entry of topEntries) {
       if (entry.kind === 'loose_file') {
-        rows.push({
-          kind: 'loose_file',
-          key: entry.item.key,
-          item: entry.item,
-        });
+        looseEntries.push(entry.item);
         continue;
       }
 
@@ -2113,31 +1843,64 @@ export function UploadDrawer({
         totalBytes: entry.group.totalBytes,
       };
       groupsMap.set(finalizedGroup.key, finalizedGroup);
+      folderEntries.push(finalizedGroup);
+    }
+
+    const rows: UploadDisplayRow[] = [];
+    const totalFolderItems = folderEntries.length + standaloneEmptyFolders.length;
+
+    if (totalFolderItems > 0) {
       rows.push({
-        kind: 'folder_group',
-        key: finalizedGroup.key,
-        group: finalizedGroup,
+        kind: 'section_header',
+        key: 'section::folders',
+        title: 'Folders',
+        count: totalFolderItems,
       });
 
-      if (expandedFolders[finalizedGroup.key]) {
-        for (const child of finalizedGroup.items) {
-          rows.push({
-            kind: 'folder_child_file',
-            key: child.key,
-            item: child,
-            parentFolderPath: finalizedGroup.folderPath,
-          });
+      for (const finalizedGroup of folderEntries) {
+        rows.push({
+          kind: 'folder_group',
+          key: finalizedGroup.key,
+          group: finalizedGroup,
+        });
+
+        if (expandedFolders[finalizedGroup.key]) {
+          for (const child of finalizedGroup.items) {
+            rows.push({
+              kind: 'folder_child_file',
+              key: child.key,
+              item: child,
+              parentFolderPath: finalizedGroup.folderPath,
+            });
+          }
         }
+      }
+
+      for (const emptyEntry of standaloneEmptyFolders) {
+        rows.push({
+          kind: 'empty_folder',
+          key: emptyEntry.key,
+          name: emptyEntry.name,
+          folderPath: emptyEntry.folderPath,
+        });
       }
     }
 
-    for (const emptyEntry of standaloneEmptyFolders) {
+    if (looseEntries.length > 0) {
       rows.push({
-        kind: 'empty_folder',
-        key: emptyEntry.key,
-        name: emptyEntry.name,
-        folderPath: emptyEntry.folderPath,
+        kind: 'section_header',
+        key: 'section::files',
+        title: 'Files',
+        count: looseEntries.length,
       });
+
+      for (const item of looseEntries) {
+        rows.push({
+          kind: 'loose_file',
+          key: item.key,
+          item,
+        });
+      }
     }
 
     return { folderGroupByKey: groupsMap, displayRows: rows };
@@ -2228,21 +1991,13 @@ export function UploadDrawer({
     requestClose();
   }, [clearActiveXhrs, onClearFiles, onClose, requestClose]);
 
-  const handleEscapeOrBackdrop = useCallback(() => {
-    if (isUploading) {
-      handleMinimize();
-    } else {
-      requestClose();
-    }
-  }, [isUploading, handleMinimize, requestClose]);
-
   useBeforeUnload(isUploading);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
 
-    if (isOpen && !effectiveMinimized) {
+    if (isOpen) {
       isClosingRef.current = false;
       clearOnCloseRef.current = false;
       dialog.removeAttribute('data-closing');
@@ -2253,118 +2008,14 @@ export function UploadDrawer({
       dialog.removeAttribute('data-closing');
       dialog.close();
     }
-  }, [isOpen, effectiveMinimized]);
+  }, [isOpen]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     dialog.setAttribute('closedby', isUploading ? 'none' : 'any');
-  }, [isUploading, isOpen, effectiveMinimized]);
+  }, [isUploading, isOpen]);
 
-  if (!isOpen) return null;
-
-  if (effectiveMinimized) {
-    const totalCount = actionableItems.length;
-    const isDone = totalCount > 0 && overallProgress.completedCount === totalCount && !isUploading;
-
-    return (
-      <div
-        {...stylex.props(styles.pillContainer)}
-        role="region"
-        aria-label="Upload progress"
-      >
-        <div {...stylex.props(styles.pillMain)}>
-          <div {...stylex.props(styles.pillLeft)}>
-            <div
-              {...stylex.props(
-                styles.statusDot,
-                isUploading && styles.statusDotActive,
-                isDone && styles.statusDotComplete
-              )}
-            />
-            <div {...stylex.props(styles.pillTextGroup)}>
-              <span {...stylex.props(styles.pillTitle)}>
-                {isUploading
-                  ? `Uploading ${overallProgress.completedCount}/${totalCount}`
-                  : isDone
-                  ? `Uploaded ${totalCount} ${totalCount === 1 ? 'file' : 'files'}`
-                  : `Upload paused (${overallProgress.completedCount}/${totalCount})`}
-              </span>
-              <span {...stylex.props(styles.pillMeta)}>
-                {overallProgress.percent}% · {formatBytes(overallProgress.totalLoaded)} / {formatBytes(actionableBytes)}
-              </span>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            {...stylex.props(styles.pillExpandBtn)}
-            onClick={handleRestore}
-            aria-label="Expand upload drawer"
-          >
-            <IconChevronUp size={13} />
-            Expand
-          </button>
-        </div>
-
-        <div {...stylex.props(styles.progressBarContainer)}>
-          <div
-            {...stylex.props(
-              styles.progressBarFill,
-              isDone && styles.progressBarComplete
-            )}
-            style={{ transform: `scaleX(${Math.min(100, Math.max(0, overallProgress.percent)) / 100})` }}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  const isOutsideDialogBounds = (e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) => {
-    const rect = dialog.getBoundingClientRect();
-    return (
-      e.clientX < rect.left ||
-      e.clientX > rect.right ||
-      e.clientY < rect.top ||
-      e.clientY > rect.bottom
-    );
-  };
-
-  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.preventDefault();
-    handleEscapeOrBackdrop();
-  };
-
-  const handleDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.currentTarget.returnValue = '';
-    e.currentTarget.removeAttribute('data-closing');
-    isClosingRef.current = false;
-    if (clearOnCloseRef.current) {
-      clearOnCloseRef.current = false;
-      onClearFiles();
-    }
-    onClose();
-  };
-
-  const handleDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if ('closedBy' in HTMLDialogElement.prototype && !isUploading) return;
-    pointerDownOutsideRef.current = isOutsideDialogBounds(e, e.currentTarget);
-  };
-
-  const handleDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if ('closedBy' in HTMLDialogElement.prototype && !isUploading) return;
-    const startedOutside = pointerDownOutsideRef.current;
-    pointerDownOutsideRef.current = false;
-    if (!startedOutside) return;
-    if (isOutsideDialogBounds(e, e.currentTarget)) {
-      handleEscapeOrBackdrop();
-    }
-  };
-
-  const allActionableComplete =
-    actionableItems.length > 0 && overallProgress.completedCount === actionableItems.length;
-  const allConflictsSkipped =
-    !allRejected && actionableItems.length === 0 && conflictItems.length > 0;
   const batchConflictSelection = useMemo(() => {
     const editableConflicts = conflictItems.filter((it) => fileProgress[it.key]?.status !== 'complete');
     if (editableConflicts.length === 0) return null;
@@ -2380,6 +2031,62 @@ export function UploadDrawer({
     () => conflictItems.some((it) => fileProgress[it.key]?.status !== 'complete'),
     [conflictItems, fileProgress]
   );
+
+  if (!isOpen) return null;
+
+  const isOutsideDialogBounds = (e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) => {
+    const rect = dialog.getBoundingClientRect();
+    return (
+      e.clientX < rect.left ||
+      e.clientX > rect.right ||
+      e.clientY < rect.top ||
+      e.clientY > rect.bottom
+    );
+  };
+
+  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.preventDefault();
+    if (!isUploading) requestClose();
+  };
+
+  const handleDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.currentTarget.returnValue = '';
+    e.currentTarget.removeAttribute('data-closing');
+    isClosingRef.current = false;
+    if (clearOnCloseRef.current) {
+      clearOnCloseRef.current = false;
+      onClearFiles();
+    }
+    onClose();
+  };
+
+  const handleDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if (isUploading) {
+      pointerDownOutsideRef.current = false;
+      return;
+    }
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    pointerDownOutsideRef.current = isOutsideDialogBounds(e, e.currentTarget);
+  };
+
+  const handleDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if (isUploading) {
+      pointerDownOutsideRef.current = false;
+      return;
+    }
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    const startedOutside = pointerDownOutsideRef.current;
+    pointerDownOutsideRef.current = false;
+    if (!startedOutside) return;
+    if (isOutsideDialogBounds(e, e.currentTarget)) {
+      requestClose();
+    }
+  };
+
+  const allActionableComplete =
+    actionableItems.length > 0 && overallProgress.completedCount === actionableItems.length;
+  const allConflictsSkipped =
+    !allRejected && actionableItems.length === 0 && conflictItems.length > 0;
   const startUploadDisabled =
     (isPlanning && !unstartedActionableItems.every((it) => selectedAccounts[it.key])) ||
     allRejected ||
@@ -2395,6 +2102,10 @@ export function UploadDrawer({
     : undefined;
 
   const renderDisplayRow = (row: UploadDisplayRow) => {
+    if (row.kind === 'section_header') {
+      return <DrawerSectionHeader title={row.title} count={row.count} />;
+    }
+
     if (row.kind === 'folder_group') {
       return (
         <UploadFolderCard
@@ -2420,7 +2131,7 @@ export function UploadDrawer({
           <div {...stylex.props(styles.fileCardHeader)}>
             <div {...stylex.props(styles.fileInfoGroup)}>
               <span {...stylex.props(styles.poolFolderIcon)}>
-                <IconFolderFilled size={18} />
+                <IconFolderFilled size={16} />
               </span>
               <div {...stylex.props(styles.fileTitleCol)}>
                 <span {...stylex.props(styles.fileName)} title={row.folderPath}>
@@ -2479,31 +2190,18 @@ export function UploadDrawer({
       <div {...stylex.props(styles.drawerSurface)}>
         <div {...stylex.props(styles.drawerHeader)}>
           <div {...stylex.props(styles.titleGroup)}>
-            <IconUpload size={20} strokeWidth={2.5} />
+            <IconUpload size={16} strokeWidth={2.25} />
             <h2 {...stylex.props(styles.title)}>Upload & allocation</h2>
           </div>
-          <div {...stylex.props(styles.headerActions)}>
-            {isUploading && (
-              <button
-                type="button"
-                {...stylex.props(styles.closeBtn)}
-                onClick={handleMinimize}
-                aria-label="Minimize upload drawer"
-                title="Minimize to progress pill"
-              >
-                <IconMinus size={16} />
-              </button>
-            )}
-            <button
-              type="button"
-              {...stylex.props(styles.closeBtn)}
-              onClick={requestClose}
-              disabled={isUploading}
-              aria-label="Close upload drawer"
-            >
-              <IconClose size={16} />
-            </button>
-          </div>
+          <button
+            type="button"
+            {...stylex.props(styles.closeBtn)}
+            onClick={requestClose}
+            disabled={isUploading}
+            aria-label="Close upload drawer"
+          >
+            <IconClose size={16} />
+          </button>
         </div>
 
         <div {...stylex.props(styles.summaryBar)}>
@@ -2527,41 +2225,12 @@ export function UploadDrawer({
             </span>
           </div>
 
-          <div {...stylex.props(styles.summarySubRow)}>
-            <div {...stylex.props(styles.statusIndicator)}>
-              <div
-                {...stylex.props(
-                  styles.statusDot,
-                  (isUploading || isPlanning) && styles.statusDotActive,
-                  allActionableComplete && styles.statusDotComplete
-                )}
-              />
-              <span>
-                {isPlanning
-                  ? 'Calculating placement...'
-                  : isUploading
-                  ? `Uploading ${Math.min(overallProgress.completedCount + overallProgress.activeCount, actionableItems.length)} of ${actionableItems.length} (${overallProgress.percent}%)`
-                  : allActionableComplete
-                  ? skippedCount > 0
-                    ? `All ${actionableItems.length} transfers complete, ${skippedCount} skipped`
-                    : 'All transfers complete'
-                  : failedItems.length > 0
-                  ? `${failedItems.length} ${failedItems.length === 1 ? 'file' : 'files'} failed or cancelled`
-                  : allRejected
-                  ? 'All files exceed ceiling'
-                  : allConflictsSkipped
-                  ? 'All staged files already exist and are skipped'
-                  : 'Ready to upload'}
-              </span>
-            </div>
-          </div>
-
-          {(isUploading || (overallProgress.completedCount > 0 && allActionableComplete)) && (
+          {(isUploading || overallProgress.completedCount > 0) && (
             <div {...stylex.props(styles.progressBarContainer)}>
               <div
                 {...stylex.props(
                   styles.progressBarFill,
-                  allActionableComplete && styles.progressBarComplete
+                  allActionableComplete && !isUploading && styles.progressBarComplete
                 )}
                 style={{ transform: `scaleX(${Math.min(100, Math.max(0, overallProgress.percent)) / 100})` }}
               />
@@ -2574,10 +2243,14 @@ export function UploadDrawer({
             <div {...stylex.props(styles.conflictBannerTop)}>
               <IconAlertTriangle size={14} />
               <span>
-                {conflictItems.length} {conflictItems.length === 1 ? 'file already exists' : 'files already exist'} at the destination
+                {conflictItems.length} {conflictItems.length === 1 ? 'file already exists' : 'files already exist'}
               </span>
             </div>
-            <div {...stylex.props(styles.conflictBatchActions)}>
+            <div
+              {...stylex.props(styles.actionsRow)}
+              role="group"
+              aria-label="Apply conflict action to all conflicting files"
+            >
               {(
                 [
                   { value: 'skip', label: 'Skip all' },
@@ -2587,19 +2260,15 @@ export function UploadDrawer({
               ).map((opt) => {
                 const active = batchConflictSelection === opt.value;
                 return (
-                  <button
+                  <DrawerButton
                     key={opt.value}
-                    type="button"
+                    variant={active ? 'primary' : 'secondary'}
                     disabled={isUploading}
                     aria-pressed={active}
                     onClick={() => handleApplyBatchConflictAction(opt.value)}
-                    {...stylex.props(
-                      styles.conflictPillBtn,
-                      active && styles.conflictPillBtnActive
-                    )}
                   >
                     {opt.label}
-                  </button>
+                  </DrawerButton>
                 );
               })}
             </div>
@@ -2609,9 +2278,7 @@ export function UploadDrawer({
         <div ref={fileListRef} {...stylex.props(styles.fileList)}>
           {planError && (
             <div {...stylex.props(styles.planErrorBanner)}>
-              <span {...stylex.props(styles.planErrorNotice)}>
-                Placement calculation notice: {planError}
-              </span>
+              <span {...stylex.props(styles.planErrorNotice)}>{planError}</span>
             </div>
           )}
 
@@ -2648,23 +2315,14 @@ export function UploadDrawer({
 
         <div {...stylex.props(styles.footer)}>
           {isUploading ? (
-            <>
-              <button
-                type="button"
-                {...stylex.props(styles.dangerBtn)}
-                onClick={handleAbortUpload}
-              >
-                <IconClose size={14} />
-                Cancel upload
-              </button>
-              <button
-                type="button"
-                {...stylex.props(styles.secondaryBtn)}
-                onClick={handleMinimize}
-              >
-                Minimize
-              </button>
-            </>
+            <button
+              type="button"
+              {...stylex.props(styles.dangerBtn)}
+              onClick={handleAbortUpload}
+            >
+              <IconClose size={14} />
+              Cancel upload
+            </button>
           ) : (
             <>
               <button
