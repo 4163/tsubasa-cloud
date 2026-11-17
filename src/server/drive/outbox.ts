@@ -18,6 +18,7 @@ export type DriveOutboxOpType =
   | 'file_delete'
   | 'folder_rename_account'
   | 'folder_move_account'
+  | 'folder_merge_account'
   | 'folder_trash_account'
   | 'clear_share_account';
 
@@ -27,6 +28,7 @@ export interface FileMoveOutboxPayload {
   newVirtualPath: string;
   destFolder: string;
   wasTrashed: boolean;
+  newName?: string;
 }
 
 export interface FileRenameOutboxPayload {
@@ -65,6 +67,20 @@ export interface FolderMoveAccountOutboxPayload {
   newFolderPath: string;
   destFolder: string;
   files: Array<{ id: string; driveFileId: string; newVirtualPath: string }>;
+}
+
+export interface FolderMergeAccountOutboxPayload {
+  oldFolderPath: string;
+  sourceFolderPathsToPrune: string[];
+  ensuredFolderPaths: string[];
+  files: Array<{
+    id: string;
+    driveFileId: string;
+    newVirtualPath: string;
+    destFolder: string;
+    wasTrashed: boolean;
+    newName?: string;
+  }>;
 }
 
 export interface FolderTrashAccountOutboxPayload {
@@ -492,6 +508,7 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
           ...(prevParents ? { removeParents: prevParents } : {}),
           requestBody: {
             ...(p.wasTrashed ? { trashed: false } : {}),
+            ...(p.newName ? { name: p.newName } : {}),
             appProperties: {
               tsubasa_managed: 'true',
               tsubasa_virtual_path: p.newVirtualPath,
@@ -689,6 +706,69 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
           })
         );
       });
+      return;
+    }
+
+    case 'folder_merge_account': {
+      const p = payload as FolderMergeAccountOutboxPayload;
+      const rootFolderId = await getAccountRootFolderId(row.account_id);
+
+      await runBoundedConcurrency(p.files, ITEM_BATCH_CONCURRENCY, async (f) => {
+        if (!f.driveFileId) return;
+        const targetRemoteFolderId = await ensureRemoteFolderHierarchy(drive, rootFolderId, f.destFolder);
+        const fileRes = await withDriveRetry(() =>
+          drive.files.get({
+            fileId: f.driveFileId,
+            fields: 'parents',
+            supportsAllDrives: false,
+          })
+        );
+        const prevParents = (fileRes.data.parents || []).join(',');
+        await withDriveRetry(() =>
+          drive.files.update({
+            fileId: f.driveFileId,
+            addParents: targetRemoteFolderId,
+            ...(prevParents ? { removeParents: prevParents } : {}),
+            requestBody: {
+              ...(f.wasTrashed ? { trashed: false } : {}),
+              ...(f.newName ? { name: f.newName } : {}),
+              appProperties: {
+                tsubasa_managed: 'true',
+                tsubasa_virtual_path: f.newVirtualPath,
+                tsubasa_virtual_id: f.id,
+              },
+            },
+            supportsAllDrives: false,
+          })
+        );
+      });
+
+      for (const folderPath of p.ensuredFolderPaths) {
+        await ensureRemoteFolderHierarchy(drive, rootFolderId, folderPath);
+      }
+
+      if (p.sourceFolderPathsToPrune.length > 0) {
+        const tree = await resolveRemoteFolderTree(drive, rootFolderId);
+        // Prune deepest subfolders first so emptied parents can also be removed cleanly.
+        const sortedDesc = [...p.sourceFolderPathsToPrune].sort((a, b) => b.length - a.length);
+        for (const sourcePath of sortedDesc) {
+          const remoteFolderId = tree.folderIdByPath.get(sourcePath);
+          if (!remoteFolderId) continue;
+          const childRes = await withDriveRetry(() =>
+            drive.files.list({
+              q: `'${remoteFolderId}' in parents and trashed = false`,
+              fields: 'files(id)',
+              pageSize: 1,
+              spaces: 'drive',
+              supportsAllDrives: false,
+            })
+          );
+          if ((childRes.data.files || []).length === 0) {
+            await deleteDriveFileIgnoreNotFound(drive, remoteFolderId);
+          }
+        }
+        clearRemoteFolderCache(rootFolderId);
+      }
       return;
     }
 

@@ -6,6 +6,7 @@ import { eq, or, and } from 'drizzle-orm';
 import {
   getDriveClient,
   getAccountRootFolderId,
+  markAccountQuotaDecreased,
   runBoundedConcurrency,
   withDriveRetry,
 } from './client.js';
@@ -15,8 +16,10 @@ import { ensureLocalFolderPath, formatFolderId } from './sync.js';
 import {
   enqueueDriveOutbox,
   type EnqueueOutboxEntry,
+  type FileDeleteOutboxPayload,
   type FileMoveOutboxPayload,
   type FileRenameOutboxPayload,
+  type FolderMergeAccountOutboxPayload,
   type FolderMoveAccountOutboxPayload,
   type FolderRenameAccountOutboxPayload,
   type FolderTrashAccountOutboxPayload,
@@ -36,6 +39,9 @@ interface DescendantFileRow {
   name: string;
   account_id: string;
   drive_file_id: string;
+  size_bytes: number;
+  is_trashed: number;
+  updated_at: number;
 }
 
 interface ActiveDescendantFileRow extends DescendantFileRow {
@@ -55,12 +61,32 @@ type SqliteStmt = ReturnType<typeof sqlite.prepare<any[], any>>;
 export class ItemConflictError extends Error {}
 export class ItemNotFoundError extends Error {}
 
+export function validateItemName(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (
+    !trimmed ||
+    trimmed === '.' ||
+    trimmed === '..' ||
+    trimmed.includes('/') ||
+    trimmed.includes('\\') ||
+    /[\x00-\x1f\x7f]/.test(trimmed)
+  ) {
+    throw new Error('Invalid name: cannot be empty, ".", "..", or contain slashes or control characters');
+  }
+  return trimmed;
+}
+
 let cachedStmts: {
   selectPoolAccountsWithRoot: SqliteStmt;
   selectPoolAccountsForCopy: SqliteStmt;
   displaceTrashedFileAtPath: SqliteStmt;
   displaceAnyTrashedFileAtPath: SqliteStmt;
   updateMovedFile: SqliteStmt;
+  updateMovedOrRenamedFile: SqliteStmt;
+  deleteFileById: SqliteStmt;
+  decrementAccountQuotaUsed: SqliteStmt;
+  deleteFolderById: SqliteStmt;
+  countActiveFilesInSubtree: SqliteStmt;
   selectDescendantFiles: SqliteStmt;
   selectActiveDescendantFiles: SqliteStmt;
   selectDescendantFolders: SqliteStmt;
@@ -101,8 +127,19 @@ function getStmts() {
     updateMovedFile: sqlite.prepare(
       'UPDATE files SET virtual_path = ?, folder_id = ?, is_trashed = 0, trashed_at = NULL, updated_at = unixepoch() WHERE id = ?'
     ),
+    updateMovedOrRenamedFile: sqlite.prepare(
+      'UPDATE files SET name = ?, virtual_path = ?, folder_id = ?, is_trashed = 0, trashed_at = NULL, updated_at = unixepoch() WHERE id = ?'
+    ),
+    deleteFileById: sqlite.prepare('DELETE FROM files WHERE id = ?'),
+    decrementAccountQuotaUsed: sqlite.prepare(
+      'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
+    ),
+    deleteFolderById: sqlite.prepare('DELETE FROM folders WHERE id = ?'),
+    countActiveFilesInSubtree: sqlite.prepare(
+      'SELECT COUNT(*) as cnt FROM files WHERE pool_id = ? AND is_trashed = 0 AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
+    ),
     selectDescendantFiles: sqlite.prepare(
-      'SELECT id, virtual_path, name, account_id, drive_file_id FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
+      'SELECT id, virtual_path, name, account_id, drive_file_id, size_bytes, is_trashed, updated_at FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
     ),
     selectActiveDescendantFiles: sqlite.prepare(
       'SELECT id, virtual_path, name, size_bytes, mime_type, hash, account_id, drive_file_id FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?) AND is_trashed = 0'
@@ -171,6 +208,35 @@ function getRelevantPoolAccountIds(poolId: number, extraAccountIds: Iterable<str
   return accountIds;
 }
 
+export type MoveConflictMode = 'reject' | 'skip' | 'keep_both' | 'overwrite';
+
+export interface MoveConflictItem {
+  sourceFileId: string;
+  sourcePath: string;
+  sourceName: string;
+  sourceSizeBytes: number;
+  sourceUpdatedAt: number;
+  destPath: string;
+  existingFileId?: string;
+  existingSizeBytes?: number;
+  existingUpdatedAt?: number;
+}
+
+export class MoveConflictError extends Error {
+  readonly conflicts: MoveConflictItem[];
+  readonly cleanCount: number;
+
+  constructor(conflicts: MoveConflictItem[], cleanCount: number) {
+    super(
+      conflicts.length === 1
+        ? `"${conflicts[0].sourceName}" already exists in the destination folder`
+        : `${conflicts.length} files already exist in the destination folder`
+    );
+    this.conflicts = conflicts;
+    this.cleanCount = cleanCount;
+  }
+}
+
 export interface MoveItemInput {
   kind?: 'file' | 'folder';
   type?: 'file' | 'folder';
@@ -184,45 +250,111 @@ export interface MoveResult {
   oldPath: string;
   newPath: string;
   success: boolean;
+  skipped?: boolean;
   error?: string;
 }
 
-type PlannedMoveOp =
-  | {
-      kind: 'file';
-      fileId: string;
-      accountId: string;
-      driveFileId: string;
-      newVirtualPath: string;
-      folderId: string | null;
-      wasTrashed: boolean;
+interface PlannedFileMove {
+  kind: 'file';
+  fileId: string;
+  accountId: string;
+  driveFileId: string;
+  newName: string;
+  renameOnDrive: boolean;
+  newVirtualPath: string;
+  destFolder: string;
+  folderId: string | null;
+  wasTrashed: boolean;
+}
+
+interface PlannedFolderMove {
+  kind: 'folder';
+  folderId: string;
+  oldFolderPath: string;
+  newFolderPath: string;
+  parentId: string | null;
+  newFolderId: string;
+  descendantFolders: DescendantFolderRow[];
+  descendantFiles: DescendantFileRow[];
+}
+
+interface PlannedFolderMerge {
+  kind: 'folder_merge';
+  oldFolderPath: string;
+  newFolderPath: string;
+  sourceFolderIdsAndPaths: Array<{ id: string; oldPath: string; newPath: string }>;
+  destFolderPathsToEnsure: string[];
+  fileMoves: PlannedFileMove[];
+}
+
+type PlannedMoveOp = PlannedFileMove | PlannedFolderMove | PlannedFolderMerge;
+
+interface OverwriteTarget {
+  id: string;
+  accountId: string;
+  driveFileId: string;
+  sizeBytes: number;
+}
+
+function toEpochSeconds(value: Date | number | null | undefined): number {
+  if (value instanceof Date) return Math.floor(value.getTime() / 1000);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return 0;
+}
+
+async function allocateKeepBothMovePath(
+  poolId: number,
+  targetDir: string,
+  baseName: string,
+  claimedFilePaths: Set<string>,
+  claimedFolderPaths: Set<string>
+): Promise<string> {
+  const ext = path.posix.extname(baseName);
+  const stem = ext ? baseName.slice(0, -ext.length) : baseName;
+
+  for (let counter = 2; ; counter++) {
+    const candidateName = `${stem} (${counter})${ext}`;
+    const candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
+    if (claimedFilePaths.has(candidatePath) || claimedFolderPaths.has(candidatePath)) {
+      continue;
     }
-  | {
-      kind: 'folder';
-      folderId: string;
-      oldFolderPath: string;
-      newFolderPath: string;
-      parentId: string | null;
-      newFolderId: string;
-      descendantFolders: DescendantFolderRow[];
-      descendantFiles: DescendantFileRow[];
-    };
+
+    const existingFile = await db.query.files.findFirst({
+      where: and(
+        eq(files.poolId, poolId),
+        eq(files.virtualPath, candidatePath),
+        eq(files.isTrashed, false)
+      ),
+    });
+    if (existingFile) continue;
+
+    const existingFolder = await db.query.folders.findFirst({
+      where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, candidatePath)),
+    });
+    if (!existingFolder) {
+      return candidatePath;
+    }
+  }
+}
 
 export async function moveItems(
   items: MoveItemInput[],
   targetFolderPath: string,
-  poolId = 1
+  poolId = 1,
+  conflictMode: MoveConflictMode = 'reject'
 ): Promise<MoveResult[]> {
   const destFolder = normalizeVirtualPath(targetFolderPath);
-  if (destFolder !== '/') {
-    ensureLocalFolderPath(destFolder, poolId);
-  }
-
   const stmts = getStmts();
-  const results: MoveResult[] = [];
-  const plannedOps: PlannedMoveOp[] = [];
-  const claimedFilePaths = new Set<string>();
-  const claimedFolderPaths = new Set<string>();
+
+  type ResolvedInput =
+    | { kind: 'file'; file: typeof files.$inferSelect }
+    | { kind: 'folder'; folder: typeof folders.$inferSelect }
+    | { kind: 'missing'; item: MoveItemInput; resolvedKind: 'file' | 'folder' };
+
+  const resolvedInputs: ResolvedInput[] = [];
+  const selectedFolderPaths: string[] = [];
+  const selectedFileIds = new Set<string>();
+  const seenIds = new Set<string>();
 
   for (const item of items) {
     let resolvedKind = item.kind || item.type;
@@ -243,162 +375,341 @@ export async function moveItems(
           or(eq(files.id, item.id), eq(files.virtualPath, item.id))
         ),
       });
-
       if (!file) {
-        results.push({
-          id: item.id,
-          kind: 'file',
-          type: 'file',
-          oldPath: item.id,
-          newPath: '',
-          success: false,
-          error: 'File not found',
-        });
+        resolvedInputs.push({ kind: 'missing', item, resolvedKind: 'file' });
         continue;
       }
-
-      const wasTrashed = Boolean(file.isTrashed);
-      const newVirtualPath = normalizeVirtualPath(path.posix.join(destFolder, file.name));
-      if (newVirtualPath === file.virtualPath && !wasTrashed) {
-        results.push({
-          id: file.id,
-          kind: 'file',
-          type: 'file',
-          oldPath: file.virtualPath,
-          newPath: newVirtualPath,
-          success: true,
-        });
-        continue;
-      }
-
-      const existing = await db.query.files.findFirst({
-        where: and(
-          eq(files.poolId, poolId),
-          eq(files.virtualPath, newVirtualPath),
-          eq(files.isTrashed, false)
-        ),
-      });
-
-      if ((existing && existing.id !== file.id) || claimedFilePaths.has(newVirtualPath)) {
-        results.push({
-          id: file.id,
-          kind: 'file',
-          type: 'file',
-          oldPath: file.virtualPath,
-          newPath: newVirtualPath,
-          success: false,
-          error: `A file named "${file.name}" already exists in the destination folder`,
-        });
-        continue;
-      }
-
-      claimedFilePaths.add(newVirtualPath);
-
-      const parentDir = path.posix.dirname(newVirtualPath);
-      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
-      if (parentDir !== '/' && parentDir !== '.') {
-        ensureLocalFolderPath(parentDir, poolId);
-      }
-
-      plannedOps.push({
-        kind: 'file',
-        fileId: file.id,
-        accountId: file.accountId,
-        driveFileId: file.driveFileId,
-        newVirtualPath,
-        folderId,
-        wasTrashed,
-      });
-
-      results.push({
-        id: file.id,
-        kind: 'file',
-        type: 'file',
-        oldPath: file.virtualPath,
-        newPath: newVirtualPath,
-        success: true,
-      });
-    } else if (resolvedKind === 'folder') {
+      if (seenIds.has(file.id)) continue;
+      seenIds.add(file.id);
+      selectedFileIds.add(file.id);
+      resolvedInputs.push({ kind: 'file', file });
+    } else {
       const folder = await db.query.folders.findFirst({
         where: and(
           eq(folders.poolId, poolId),
           or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
         ),
       });
-
       if (!folder) {
-        results.push({
-          id: item.id,
-          kind: 'folder',
-          type: 'folder',
-          oldPath: item.id,
-          newPath: '',
-          success: false,
-          error: 'Folder not found',
-        });
+        resolvedInputs.push({ kind: 'missing', item, resolvedKind: 'folder' });
         continue;
       }
+      if (seenIds.has(folder.id)) continue;
+      seenIds.add(folder.id);
+      selectedFolderPaths.push(folder.virtualPath);
+      resolvedInputs.push({ kind: 'folder', folder });
+    }
+  }
 
-      const oldFolderPath = folder.virtualPath;
-      if (destFolder === oldFolderPath || destFolder.startsWith(`${oldFolderPath}/`)) {
-        results.push({
-          id: folder.id,
-          kind: 'folder',
-          type: 'folder',
-          oldPath: oldFolderPath,
-          newPath: '',
-          success: false,
-          error: 'Cannot move a folder into itself or a subfolder',
-        });
-        continue;
-      }
+  // Prune items whose ancestor folder is already included in this batch.
+  const prunedInputs = resolvedInputs.filter((entry) => {
+    if (entry.kind === 'missing') return true;
+    const itemPath = entry.kind === 'file' ? entry.file.virtualPath : entry.folder.virtualPath;
+    return !selectedFolderPaths.some(
+      (ancestorPath) => ancestorPath !== itemPath && itemPath.startsWith(`${ancestorPath}/`)
+    );
+  });
 
-      const newFolderPath = normalizeVirtualPath(path.posix.join(destFolder, folder.name));
-      if (newFolderPath === oldFolderPath) {
+  const results: MoveResult[] = [];
+  const plannedOps: PlannedMoveOp[] = [];
+  const claimedFilePaths = new Set<string>();
+  const claimedFolderPaths = new Set<string>();
+  const overwriteTargets = new Map<string, OverwriteTarget>();
+  const conflicts: MoveConflictItem[] = [];
+  let cleanCount = 0;
+
+  async function planSingleFileMove(source: {
+    id: string;
+    name: string;
+    virtualPath: string;
+    accountId: string;
+    driveFileId: string;
+    sizeBytes: number;
+    updatedAt: number;
+    isTrashed: boolean;
+  }, targetDir: string): Promise<{ status: 'noop' | 'move' | 'skip' | 'conflict' | 'error'; op?: PlannedFileMove; error?: string }> {
+    const desiredPath = normalizeVirtualPath(path.posix.join(targetDir, source.name));
+    if (desiredPath === source.virtualPath && !source.isTrashed) {
+      claimedFilePaths.add(desiredPath);
+      return { status: 'noop' };
+    }
+
+    const folderBlocking = claimedFolderPaths.has(desiredPath)
+      ? true
+      : Boolean(
+          await db.query.folders.findFirst({
+            where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, desiredPath)),
+          })
+        );
+
+    if (folderBlocking) {
+      return {
+        status: 'error',
+        error: `A folder named "${source.name}" already exists in the destination folder`,
+      };
+    }
+
+    const existingActive = await db.query.files.findFirst({
+      where: and(
+        eq(files.poolId, poolId),
+        eq(files.virtualPath, desiredPath),
+        eq(files.isTrashed, false)
+      ),
+    });
+
+    const isExistingCollision = Boolean(existingActive && existingActive.id !== source.id);
+    const isBatchCollision = claimedFilePaths.has(desiredPath);
+
+    if (!isExistingCollision && !isBatchCollision) {
+      claimedFilePaths.add(desiredPath);
+      cleanCount++;
+      const parentDir = path.posix.dirname(desiredPath);
+      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+      return {
+        status: 'move',
+        op: {
+          kind: 'file',
+          fileId: source.id,
+          accountId: source.accountId,
+          driveFileId: source.driveFileId,
+          newName: source.name,
+          renameOnDrive: false,
+          newVirtualPath: desiredPath,
+          destFolder: parentDir === '.' ? '/' : parentDir,
+          folderId,
+          wasTrashed: source.isTrashed,
+        },
+      };
+    }
+
+    if (conflictMode === 'reject') {
+      conflicts.push({
+        sourceFileId: source.id,
+        sourcePath: source.virtualPath,
+        sourceName: source.name,
+        sourceSizeBytes: source.sizeBytes,
+        sourceUpdatedAt: source.updatedAt,
+        destPath: desiredPath,
+        ...(existingActive && existingActive.id !== source.id
+          ? {
+              existingFileId: existingActive.id,
+              existingSizeBytes: existingActive.sizeBytes,
+              existingUpdatedAt: toEpochSeconds(existingActive.updatedAt),
+            }
+          : {}),
+      });
+      return { status: 'conflict' };
+    }
+
+    if (conflictMode === 'skip') {
+      return { status: 'skip' };
+    }
+
+    if (
+      conflictMode === 'overwrite' &&
+      existingActive &&
+      existingActive.id !== source.id &&
+      !selectedFileIds.has(existingActive.id) &&
+      !claimedFilePaths.has(desiredPath)
+    ) {
+      overwriteTargets.set(existingActive.id, {
+        id: existingActive.id,
+        accountId: existingActive.accountId,
+        driveFileId: existingActive.driveFileId,
+        sizeBytes: existingActive.sizeBytes,
+      });
+      claimedFilePaths.add(desiredPath);
+      const parentDir = path.posix.dirname(desiredPath);
+      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+      return {
+        status: 'move',
+        op: {
+          kind: 'file',
+          fileId: source.id,
+          accountId: source.accountId,
+          driveFileId: source.driveFileId,
+          newName: source.name,
+          renameOnDrive: false,
+          newVirtualPath: desiredPath,
+          destFolder: parentDir === '.' ? '/' : parentDir,
+          folderId,
+          wasTrashed: source.isTrashed,
+        },
+      };
+    }
+
+    // Keep both (or same-batch name collision during overwrite where no pre-existing target remains).
+    const keepBothPath = await allocateKeepBothMovePath(
+      poolId,
+      targetDir,
+      source.name,
+      claimedFilePaths,
+      claimedFolderPaths
+    );
+    claimedFilePaths.add(keepBothPath);
+    const keepBothName = path.posix.basename(keepBothPath);
+    const parentDir = path.posix.dirname(keepBothPath);
+    const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+    return {
+      status: 'move',
+      op: {
+        kind: 'file',
+        fileId: source.id,
+        accountId: source.accountId,
+        driveFileId: source.driveFileId,
+        newName: keepBothName,
+        renameOnDrive: keepBothName !== source.name,
+        newVirtualPath: keepBothPath,
+        destFolder: parentDir === '.' ? '/' : parentDir,
+        folderId,
+        wasTrashed: source.isTrashed,
+      },
+    };
+  }
+
+  for (const entry of prunedInputs) {
+    if (entry.kind === 'missing') {
+      results.push({
+        id: entry.item.id,
+        kind: entry.resolvedKind,
+        type: entry.resolvedKind,
+        oldPath: entry.item.id,
+        newPath: '',
+        success: false,
+        error: entry.resolvedKind === 'folder' ? 'Folder not found' : 'File not found',
+      });
+      continue;
+    }
+
+    if (entry.kind === 'file') {
+      const file = entry.file;
+      const plan = await planSingleFileMove(
+        {
+          id: file.id,
+          name: file.name,
+          virtualPath: file.virtualPath,
+          accountId: file.accountId,
+          driveFileId: file.driveFileId,
+          sizeBytes: file.sizeBytes,
+          updatedAt: toEpochSeconds(file.updatedAt),
+          isTrashed: Boolean(file.isTrashed),
+        },
+        destFolder
+      );
+
+      if (plan.status === 'noop') {
         results.push({
-          id: folder.id,
-          kind: 'folder',
-          type: 'folder',
-          oldPath: oldFolderPath,
-          newPath: newFolderPath,
+          id: file.id,
+          kind: 'file',
+          type: 'file',
+          oldPath: file.virtualPath,
+          newPath: file.virtualPath,
           success: true,
         });
-        continue;
-      }
-
-      const existingFolder = await db.query.folders.findFirst({
-        where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, newFolderPath)),
-      });
-
-      if ((existingFolder && existingFolder.id !== folder.id) || claimedFolderPaths.has(newFolderPath)) {
+      } else if (plan.status === 'move' && plan.op) {
+        plannedOps.push(plan.op);
         results.push({
-          id: folder.id,
-          kind: 'folder',
-          type: 'folder',
-          oldPath: oldFolderPath,
-          newPath: newFolderPath,
-          success: false,
-          error: `A folder named "${folder.name}" already exists in the destination folder`,
+          id: file.id,
+          kind: 'file',
+          type: 'file',
+          oldPath: file.virtualPath,
+          newPath: plan.op.newVirtualPath,
+          success: true,
         });
-        continue;
+      } else if (plan.status === 'skip') {
+        results.push({
+          id: file.id,
+          kind: 'file',
+          type: 'file',
+          oldPath: file.virtualPath,
+          newPath: file.virtualPath,
+          success: true,
+          skipped: true,
+        });
+      } else if (plan.status === 'error') {
+        results.push({
+          id: file.id,
+          kind: 'file',
+          type: 'file',
+          oldPath: file.virtualPath,
+          newPath: normalizeVirtualPath(path.posix.join(destFolder, file.name)),
+          success: false,
+          error: plan.error,
+        });
       }
+      continue;
+    }
 
+    const folder = entry.folder;
+    const oldFolderPath = folder.virtualPath;
+    if (destFolder === oldFolderPath || destFolder.startsWith(`${oldFolderPath}/`)) {
+      results.push({
+        id: folder.id,
+        kind: 'folder',
+        type: 'folder',
+        oldPath: oldFolderPath,
+        newPath: '',
+        success: false,
+        error: 'Cannot move a folder into itself or a subfolder',
+      });
+      continue;
+    }
+
+    const newFolderPath = normalizeVirtualPath(path.posix.join(destFolder, folder.name));
+    if (newFolderPath === oldFolderPath) {
+      results.push({
+        id: folder.id,
+        kind: 'folder',
+        type: 'folder',
+        oldPath: oldFolderPath,
+        newPath: newFolderPath,
+        success: true,
+      });
+      continue;
+    }
+
+    const activeFileAtFolderTarget = await db.query.files.findFirst({
+      where: and(
+        eq(files.poolId, poolId),
+        eq(files.virtualPath, newFolderPath),
+        eq(files.isTrashed, false)
+      ),
+    });
+    if (activeFileAtFolderTarget || claimedFilePaths.has(newFolderPath)) {
+      results.push({
+        id: folder.id,
+        kind: 'folder',
+        type: 'folder',
+        oldPath: oldFolderPath,
+        newPath: newFolderPath,
+        success: false,
+        error: `A file named "${folder.name}" already exists in the destination folder`,
+      });
+      continue;
+    }
+
+    const oldFolderBounds = buildDirectoryPrefixBounds(oldFolderPath);
+    const descendantFiles = stmts.selectDescendantFiles.all(
+      poolId,
+      oldFolderBounds.lower,
+      oldFolderBounds.upper,
+      formatFolderId(poolId, oldFolderPath)
+    ) as DescendantFileRow[];
+
+    const descendantFolders = stmts.selectDescendantFolders.all(
+      poolId,
+      oldFolderBounds.lower,
+      oldFolderBounds.upper
+    ) as DescendantFolderRow[];
+
+    const existingDestFolder = await db.query.folders.findFirst({
+      where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, newFolderPath)),
+    });
+    const isMerge = Boolean((existingDestFolder && existingDestFolder.id !== folder.id) || claimedFolderPaths.has(newFolderPath));
+
+    if (!isMerge) {
       claimedFolderPaths.add(newFolderPath);
-
-      const oldFolderBounds = buildDirectoryPrefixBounds(oldFolderPath);
-      const descendantFiles = stmts.selectDescendantFiles.all(
-        poolId,
-        oldFolderBounds.lower,
-        oldFolderBounds.upper,
-        formatFolderId(poolId, oldFolderPath)
-      ) as DescendantFileRow[];
-
-      const descendantFolders = stmts.selectDescendantFolders.all(
-        poolId,
-        oldFolderBounds.lower,
-        oldFolderBounds.upper
-      ) as DescendantFolderRow[];
-
+      cleanCount++;
       const parentId = destFolder === '/' ? null : formatFolderId(poolId, destFolder);
       const newFolderId = formatFolderId(poolId, newFolderPath);
 
@@ -421,34 +732,175 @@ export async function moveItems(
         newPath: newFolderPath,
         success: true,
       });
-    } else {
-      results.push({
-        id: item.id,
-        kind: 'file',
-        type: 'file',
-        oldPath: item.id,
-        newPath: '',
-        success: false,
-        error: `Item not found or invalid kind: ${item.id}`,
-      });
+      continue;
     }
+
+    // Destination folder already exists: plan a silent folder merge.
+    claimedFolderPaths.add(newFolderPath);
+    const destFolderPathsToEnsure: string[] = [newFolderPath];
+    const sourceFolderIdsAndPaths: Array<{ id: string; oldPath: string; newPath: string }> = [
+      { id: folder.id, oldPath: oldFolderPath, newPath: newFolderPath },
+    ];
+    let folderTypeMismatchError: string | null = null;
+
+    for (const sub of descendantFolders) {
+      const subDestPath = normalizeVirtualPath(newFolderPath + sub.virtual_path.slice(oldFolderPath.length));
+      const subFileBlocking = claimedFilePaths.has(subDestPath)
+        ? true
+        : Boolean(
+            await db.query.files.findFirst({
+              where: and(
+                eq(files.poolId, poolId),
+                eq(files.virtualPath, subDestPath),
+                eq(files.isTrashed, false)
+              ),
+            })
+          );
+      if (subFileBlocking) {
+        folderTypeMismatchError = `A file named "${sub.name}" already exists at "${subDestPath}"`;
+        break;
+      }
+      claimedFolderPaths.add(subDestPath);
+      destFolderPathsToEnsure.push(subDestPath);
+      sourceFolderIdsAndPaths.push({ id: sub.id, oldPath: sub.virtual_path, newPath: subDestPath });
+    }
+
+    if (folderTypeMismatchError) {
+      results.push({
+        id: folder.id,
+        kind: 'folder',
+        type: 'folder',
+        oldPath: oldFolderPath,
+        newPath: newFolderPath,
+        success: false,
+        error: folderTypeMismatchError,
+      });
+      continue;
+    }
+
+    const mergeFileMoves: PlannedFileMove[] = [];
+    let mergeFileTypeError: string | null = null;
+    let mergeSkippedCount = 0;
+
+    for (const f of descendantFiles) {
+      if (f.is_trashed) continue;
+      const relative = f.virtual_path.startsWith(oldFolderPath + '/')
+        ? f.virtual_path.slice(oldFolderPath.length)
+        : `/${f.name}`;
+      const targetFilePath = normalizeVirtualPath(newFolderPath + relative);
+      const targetFileDir = path.posix.dirname(targetFilePath);
+      const filePlan = await planSingleFileMove(
+        {
+          id: f.id,
+          name: f.name,
+          virtualPath: f.virtual_path,
+          accountId: f.account_id,
+          driveFileId: f.drive_file_id,
+          sizeBytes: f.size_bytes,
+          updatedAt: f.updated_at,
+          isTrashed: false,
+        },
+        targetFileDir === '.' ? '/' : targetFileDir
+      );
+
+      if (filePlan.status === 'move' && filePlan.op) {
+        mergeFileMoves.push(filePlan.op);
+      } else if (filePlan.status === 'skip') {
+        mergeSkippedCount++;
+      } else if (filePlan.status === 'error') {
+        mergeFileTypeError = filePlan.error || `Cannot move "${f.name}"`;
+        break;
+      }
+    }
+
+    if (mergeFileTypeError) {
+      results.push({
+        id: folder.id,
+        kind: 'folder',
+        type: 'folder',
+        oldPath: oldFolderPath,
+        newPath: newFolderPath,
+        success: false,
+        error: mergeFileTypeError,
+      });
+      continue;
+    }
+
+    if (descendantFiles.filter((f) => !f.is_trashed).length === 0) {
+      cleanCount++;
+    }
+
+    plannedOps.push({
+      kind: 'folder_merge',
+      oldFolderPath,
+      newFolderPath,
+      sourceFolderIdsAndPaths,
+      destFolderPathsToEnsure,
+      fileMoves: mergeFileMoves,
+    });
+
+    results.push({
+      id: folder.id,
+      kind: 'folder',
+      type: 'folder',
+      oldPath: oldFolderPath,
+      newPath: newFolderPath,
+      success: true,
+      ...(mergeSkippedCount > 0 ? { skipped: true } : {}),
+    });
   }
 
-  if (plannedOps.length > 0) {
+  if (conflictMode === 'reject' && conflicts.length > 0) {
+    throw new MoveConflictError(conflicts, cleanCount);
+  }
+
+  const hasDestFolderChanges =
+    plannedOps.length > 0 || overwriteTargets.size > 0;
+
+  if (hasDestFolderChanges) {
+    const accountsWithOverwrites = new Set<string>();
+
     sqlite.transaction(() => {
       sqlite.pragma('defer_foreign_keys = ON');
+      if (destFolder !== '/') {
+        ensureLocalFolderPath(destFolder, poolId);
+      }
+
       const outboxEntries: EnqueueOutboxEntry[] = [];
+
+      // Permanently delete overwritten destination files first so Drive deletes precede incoming moves.
+      for (const target of overwriteTargets.values()) {
+        stmts.deleteFileById.run(target.id);
+        stmts.decrementAccountQuotaUsed.run(target.sizeBytes, target.accountId);
+        accountsWithOverwrites.add(target.accountId);
+        outboxEntries.push({
+          accountId: target.accountId,
+          poolId,
+          opType: 'file_delete',
+          driveFileId: target.driveFileId,
+          payload: {
+            fileId: target.id,
+            driveFileId: target.driveFileId,
+          } satisfies FileDeleteOutboxPayload,
+        });
+      }
+
+      const commitFileMove = (op: PlannedFileMove) => {
+        if (op.destFolder !== '/' && op.destFolder !== '.') {
+          ensureLocalFolderPath(op.destFolder, poolId);
+        }
+        stmts.displaceTrashedFileAtPath.run(
+          `${op.newVirtualPath}.trashed-${Date.now()}`,
+          poolId,
+          op.newVirtualPath,
+          op.fileId
+        );
+        stmts.updateMovedOrRenamedFile.run(op.newName, op.newVirtualPath, op.folderId, op.fileId);
+      };
 
       for (const op of plannedOps) {
         if (op.kind === 'file') {
-          stmts.displaceTrashedFileAtPath.run(
-            `${op.newVirtualPath}.trashed-${Date.now()}`,
-            poolId,
-            op.newVirtualPath,
-            op.fileId
-          );
-          stmts.updateMovedFile.run(op.newVirtualPath, op.folderId, op.fileId);
-
+          commitFileMove(op);
           outboxEntries.push({
             accountId: op.accountId,
             poolId,
@@ -458,11 +910,12 @@ export async function moveItems(
               fileId: op.fileId,
               driveFileId: op.driveFileId,
               newVirtualPath: op.newVirtualPath,
-              destFolder,
+              destFolder: op.destFolder,
               wasTrashed: op.wasTrashed,
+              ...(op.renameOnDrive ? { newName: op.newName } : {}),
             } satisfies FileMoveOutboxPayload,
           });
-        } else {
+        } else if (op.kind === 'folder') {
           stmts.updateFolderMove.run(op.newFolderId, op.newFolderPath, op.parentId, op.folderId);
 
           for (const sub of op.descendantFolders) {
@@ -486,16 +939,18 @@ export async function moveItems(
             const fileParentId = fileParent === '/' ? null : formatFolderId(poolId, fileParent);
             stmts.updateDescendantFilePath.run(fileNewPath, fileParentId, f.id);
 
-            let list = filesByAccount.get(f.account_id);
-            if (!list) {
-              list = [];
-              filesByAccount.set(f.account_id, list);
+            if (!f.is_trashed) {
+              let list = filesByAccount.get(f.account_id);
+              if (!list) {
+                list = [];
+                filesByAccount.set(f.account_id, list);
+              }
+              list.push({
+                id: f.id,
+                driveFileId: f.drive_file_id,
+                newVirtualPath: fileNewPath,
+              });
             }
-            list.push({
-              id: f.id,
-              driveFileId: f.drive_file_id,
-              newVirtualPath: fileNewPath,
-            });
           }
 
           const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
@@ -512,12 +967,86 @@ export async function moveItems(
               } satisfies FolderMoveAccountOutboxPayload,
             });
           }
+        } else {
+          // Folder merge: ensure destination tree, move active files, and prune emptied source folders.
+          for (const destPath of op.destFolderPathsToEnsure) {
+            ensureLocalFolderPath(destPath, poolId);
+          }
+
+          const filesByAccount = new Map<
+            string,
+            Array<{
+              id: string;
+              driveFileId: string;
+              newVirtualPath: string;
+              destFolder: string;
+              wasTrashed: boolean;
+              newName?: string;
+            }>
+          >();
+
+          for (const fm of op.fileMoves) {
+            commitFileMove(fm);
+            let list = filesByAccount.get(fm.accountId);
+            if (!list) {
+              list = [];
+              filesByAccount.set(fm.accountId, list);
+            }
+            list.push({
+              id: fm.fileId,
+              driveFileId: fm.driveFileId,
+              newVirtualPath: fm.newVirtualPath,
+              destFolder: fm.destFolder,
+              wasTrashed: fm.wasTrashed,
+              ...(fm.renameOnDrive ? { newName: fm.newName } : {}),
+            });
+          }
+
+          // Delete source folders bottom-up only if zero active files remain under them.
+          const sortedSourceFolders = [...op.sourceFolderIdsAndPaths].sort(
+            (a, b) => b.oldPath.length - a.oldPath.length
+          );
+          const prunedSourcePaths: string[] = [];
+          for (const sf of sortedSourceFolders) {
+            const bounds = buildDirectoryPrefixBounds(sf.oldPath);
+            const row = stmts.countActiveFilesInSubtree.get(
+              poolId,
+              bounds.lower,
+              bounds.upper,
+              sf.id
+            ) as { cnt: number } | undefined;
+            if ((row?.cnt ?? 0) === 0) {
+              stmts.deleteFolderById.run(sf.id);
+              prunedSourcePaths.push(sf.oldPath);
+            }
+          }
+
+          const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
+          for (const accountId of relevantAccounts) {
+            outboxEntries.push({
+              accountId,
+              poolId,
+              opType: 'folder_merge_account',
+              payload: {
+                oldFolderPath: op.oldFolderPath,
+                sourceFolderPathsToPrune: prunedSourcePaths,
+                ensuredFolderPaths: op.destFolderPathsToEnsure,
+                files: filesByAccount.get(accountId) ?? [],
+              } satisfies FolderMergeAccountOutboxPayload,
+            });
+          }
         }
       }
 
       enqueueDriveOutbox(outboxEntries);
     }).immediate();
 
+    for (const accountId of accountsWithOverwrites) {
+      markAccountQuotaDecreased(accountId);
+    }
+    if (accountsWithOverwrites.size > 0) {
+      invalidatePooledStorageOverview(poolId);
+    }
     bumpPoolRevision(poolId);
   }
 
@@ -659,9 +1188,12 @@ export async function copyItems(
     }
   }
 
-  const results: CopyResult[] = new Array(items.length);
-  const fileCopyTasks: CopyFileTask[] = [];
-  const foldersToEnsure: string[] = [];
+  // Prune items whose ancestor folder is already included in this batch.
+  const copyFolderPaths: string[] = [];
+  const copySeenIds = new Set<string>();
+  const resolvedCopyKinds: Array<'file' | 'folder'> = new Array(items.length);
+  const resolvedCopyPaths: Array<string | null> = new Array(items.length).fill(null);
+  const duplicateInputIndices = new Set<number>();
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -675,6 +1207,65 @@ export async function copyItems(
       });
       resolvedKind = folderExists ? 'folder' : 'file';
     }
+    resolvedCopyKinds[i] = resolvedKind;
+    if (resolvedKind === 'folder') {
+      const f = await db.query.folders.findFirst({
+        where: and(
+          eq(folders.poolId, poolId),
+          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
+        ),
+      });
+      if (f) {
+        if (copySeenIds.has(f.id)) {
+          duplicateInputIndices.add(i);
+        } else {
+          copySeenIds.add(f.id);
+          copyFolderPaths.push(f.virtualPath);
+          resolvedCopyPaths[i] = f.virtualPath;
+        }
+      }
+    } else {
+      const f = await db.query.files.findFirst({
+        where: and(
+          eq(files.poolId, poolId),
+          or(eq(files.id, item.id), eq(files.virtualPath, item.id))
+        ),
+      });
+      if (f) {
+        if (copySeenIds.has(f.id)) {
+          duplicateInputIndices.add(i);
+        } else {
+          copySeenIds.add(f.id);
+          resolvedCopyPaths[i] = f.virtualPath;
+        }
+      }
+    }
+  }
+
+  const results: CopyResult[] = [];
+  const fileCopyTasks: CopyFileTask[] = [];
+  const foldersToEnsure: string[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    if (duplicateInputIndices.has(i)) continue;
+    const itemPath = resolvedCopyPaths[i];
+    if (
+      itemPath &&
+      copyFolderPaths.some((anc) => anc !== itemPath && itemPath.startsWith(`${anc}/`))
+    ) {
+      continue;
+    }
+    const item = items[i];
+    const resolvedKind = resolvedCopyKinds[i];
+    const resultIndex = results.length;
+    results.push({
+      id: item.id,
+      kind: resolvedKind,
+      type: resolvedKind,
+      sourcePath: item.id,
+      destPath: '',
+      success: false,
+    });
 
     if (resolvedKind === 'file') {
       const file = await db.query.files.findFirst({
@@ -685,7 +1276,7 @@ export async function copyItems(
       });
 
       if (!file) {
-        results[i] = {
+        results[resultIndex] = {
           id: item.id,
           kind: 'file',
           sourcePath: item.id,
@@ -700,7 +1291,7 @@ export async function copyItems(
       const destFileName = path.posix.basename(destVirtualPath);
 
       fileCopyTasks.push({
-        topLevelIndex: i,
+        topLevelIndex: resultIndex,
         isTopLevelFile: true,
         sourceFileId: file.id,
         sourceVirtualPath: file.virtualPath,
@@ -714,7 +1305,7 @@ export async function copyItems(
         destParentDir: destFolder,
       });
 
-      results[i] = {
+      results[resultIndex] = {
         id: file.id,
         kind: 'file',
         type: 'file',
@@ -731,7 +1322,7 @@ export async function copyItems(
       });
 
       if (!folder) {
-        results[i] = {
+        results[resultIndex] = {
           id: item.id,
           kind: 'folder',
           type: 'folder',
@@ -781,7 +1372,7 @@ export async function copyItems(
         existingFilePaths.add(destSubFilePath);
 
         fileCopyTasks.push({
-          topLevelIndex: i,
+          topLevelIndex: resultIndex,
           isTopLevelFile: false,
           sourceFileId: subFile.id,
           sourceVirtualPath: subFile.virtual_path,
@@ -796,7 +1387,7 @@ export async function copyItems(
         });
       }
 
-      results[i] = {
+      results[resultIndex] = {
         id: destVirtualPath,
         kind: 'folder',
         type: 'folder',
@@ -805,7 +1396,7 @@ export async function copyItems(
         success: true,
       };
     } else {
-      results[i] = {
+      results[resultIndex] = {
         id: item.id,
         kind: 'file',
         type: 'file',
@@ -1035,10 +1626,7 @@ export async function renameItem(
   rawNewName: string,
   poolId = 1
 ): Promise<{ success: boolean; oldPath: string; newPath: string }> {
-  const newName = rawNewName.trim();
-  if (!newName || newName.includes('/') || newName.includes('\\')) {
-    throw new Error('Invalid name: cannot be empty or contain slash characters');
-  }
+  const newName = validateItemName(rawNewName);
 
   const stmts = getStmts();
 
@@ -1073,6 +1661,13 @@ export async function renameItem(
       throw new ItemConflictError(`A file named "${newName}" already exists in this folder`);
     }
 
+    const collidingFolder = await db.query.folders.findFirst({
+      where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, newVirtualPath)),
+    });
+    if (collidingFolder) {
+      throw new ItemConflictError(`A folder named "${newName}" already exists in this directory`);
+    }
+
     const validParentId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
     if (parentDir !== '/' && parentDir !== '.') {
       ensureLocalFolderPath(parentDir, poolId);
@@ -1080,6 +1675,12 @@ export async function renameItem(
 
     sqlite.transaction(() => {
       sqlite.pragma('defer_foreign_keys = ON');
+      stmts.displaceTrashedFileAtPath.run(
+        `${newVirtualPath}.trashed-${Date.now()}`,
+        poolId,
+        newVirtualPath,
+        file.id
+      );
       stmts.renameSingleFile.run(newName, newVirtualPath, validParentId, file.id);
       enqueueDriveOutbox([
         {
@@ -1129,6 +1730,17 @@ export async function renameItem(
 
   if (existing && existing.id !== folder.id) {
     throw new ItemConflictError(`A folder named "${newName}" already exists in this directory`);
+  }
+
+  const collidingFile = await db.query.files.findFirst({
+    where: and(
+      eq(files.poolId, poolId),
+      eq(files.virtualPath, newFolderPath),
+      eq(files.isTrashed, false)
+    ),
+  });
+  if (collidingFile) {
+    throw new ItemConflictError(`A file named "${newName}" already exists in this directory`);
   }
 
   const oldFolderBounds = buildDirectoryPrefixBounds(oldFolderPath);

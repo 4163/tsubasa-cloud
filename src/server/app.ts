@@ -39,8 +39,11 @@ import {
   enableDriveAccount,
   removeDriveAccount,
   moveItems,
+  MoveConflictError,
+  type MoveConflictMode,
   copyItems,
   renameItem,
+  validateItemName,
   trashFolder,
   ensureLocalFolderPath,
   ItemConflictError,
@@ -1131,9 +1134,11 @@ const routes = app
       if (isSharePoolId(poolId)) {
         return c.json(sharePoolReadOnlyError('Creating folders directly in Share Pool is disabled'), 403);
       }
-      const trimmedName = name.trim();
-      if (!trimmedName || trimmedName.includes('/') || trimmedName.includes('\\')) {
-        return c.json({ error: 'Invalid folder name: cannot be empty or contain slashes' }, 400);
+      let trimmedName: string;
+      try {
+        trimmedName = validateItemName(name);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : 'Invalid folder name' }, 400);
       }
       const normalizedPath = normalizeVirtualPath(virtualPath);
       if (normalizedPath === '/') {
@@ -1151,6 +1156,22 @@ const routes = app
             {
               error: `A folder named "${trimmedName}" already exists in this directory`,
               code: 'FOLDER_EXISTS',
+            },
+            409
+          );
+        }
+        const collidingFile = await db.query.files.findFirst({
+          where: and(
+            eq(files.poolId, poolId),
+            eq(files.virtualPath, normalizedPath),
+            eq(files.isTrashed, false)
+          ),
+        });
+        if (collidingFile) {
+          return c.json(
+            {
+              error: `A file named "${trimmedName}" already exists in this directory`,
+              code: 'ITEM_EXISTS',
             },
             409
           );
@@ -1205,7 +1226,14 @@ const routes = app
       (
         value,
         c
-      ): { items: Array<{ kind: 'file' | 'folder'; id: string }>; targetFolderPath: string; poolId?: number } | Response => {
+      ):
+        | {
+            items: Array<{ kind: 'file' | 'folder'; id: string }>;
+            targetFolderPath: string;
+            poolId?: number;
+            conflictMode?: MoveConflictMode;
+          }
+        | Response => {
         const body = value as Record<string, unknown>;
         if (!Array.isArray(body?.items) || typeof body?.targetFolderPath !== 'string') {
           return c.json({ error: 'items (array) and targetFolderPath (string) are required' }, 400);
@@ -1214,22 +1242,49 @@ const routes = app
         if (!parsedPool.ok) {
           return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
         }
+        let conflictMode: MoveConflictMode | undefined;
+        if (body?.conflictMode !== undefined) {
+          if (
+            body.conflictMode !== 'reject' &&
+            body.conflictMode !== 'skip' &&
+            body.conflictMode !== 'keep_both' &&
+            body.conflictMode !== 'overwrite'
+          ) {
+            return c.json(
+              { error: 'Invalid conflictMode: must be reject, skip, keep_both, or overwrite' },
+              400
+            );
+          }
+          conflictMode = body.conflictMode;
+        }
         return {
           items: body.items as Array<{ kind: 'file' | 'folder'; id: string }>,
           targetFolderPath: body.targetFolderPath,
           poolId: parsedPool.poolId,
+          conflictMode,
         };
       }
     ),
     async (c) => {
-      const { items, targetFolderPath, poolId = 1 } = c.req.valid('json');
+      const { items, targetFolderPath, poolId = 1, conflictMode } = c.req.valid('json');
       if (isSharePoolId(poolId)) {
         return c.json(sharePoolReadOnlyError('Moving items inside Share Pool is disabled'), 403);
       }
       try {
-        const result = await moveItems(items, targetFolderPath, poolId);
+        const result = await moveItems(items, targetFolderPath, poolId, conflictMode ?? 'reject');
         return c.json(result);
       } catch (err) {
+        if (err instanceof MoveConflictError) {
+          return c.json(
+            {
+              error: err.message,
+              code: 'MOVE_CONFLICT',
+              conflicts: err.conflicts,
+              cleanCount: err.cleanCount,
+            },
+            409
+          );
+        }
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
     }
@@ -1308,11 +1363,14 @@ const routes = app
       if (isSharePoolId(poolId)) {
         return c.json(sharePoolReadOnlyError('Renaming items inside Share Pool is disabled'), 403);
       }
-      if (!name || name.includes('/') || name.includes('\\')) {
-        return c.json({ error: 'Invalid name: cannot be empty or contain slashes' }, 400);
+      let validatedName: string;
+      try {
+        validatedName = validateItemName(name);
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : 'Invalid name' }, 400);
       }
       try {
-        const result = await renameItem(kind, id, name, poolId);
+        const result = await renameItem(kind, id, validatedName, poolId);
         return c.json(result);
       } catch (err) {
         if (err instanceof ItemConflictError) {
