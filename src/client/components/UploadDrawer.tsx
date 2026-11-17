@@ -7,8 +7,7 @@ import { IconClose, IconUpload, FileTypeIcon, IconCheck, IconAlertTriangle, Icon
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { verifyFileMatchesHash, type FileContentVerification } from '../utils/fileHash.js';
 import { DAILY_UPLOAD_LIMIT_BYTES, evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
-import { useBeforeUnload } from '../utils/useBeforeUnload.js';
-import { DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
+import { DrawerSectionHeader, DrawerButton, DrawerSheet } from './DrawerPrimitives.js';
 import type { AccountItem } from './Sidebar.js';
 
 export type UploadConflictAction = 'skip' | 'replace' | 'keep_both';
@@ -33,7 +32,6 @@ export interface PlacementItemPreview {
   virtualPath: string;
   sizeBytes: number;
   targetAccountId?: string;
-  reason?: string;
   rejected?: boolean;
   rejectReason?: string;
 }
@@ -60,6 +58,25 @@ interface UploadFolderGroup {
   totalBytes: number;
 }
 
+interface UploadFolderSummary {
+  rejectedCount: number;
+  skippedCount: number;
+  completedCount: number;
+  uploadingCount: number;
+  errorCount: number;
+  identicalSkippedCount: number;
+  actionableCount: number;
+  actionableBytes: number;
+  replacedBytes: number;
+  loadedBytes: number;
+  editableConflictCount: number;
+  uniformFolderConflictAction: UploadConflictAction | null;
+  targetAccountCount: number;
+  singleTargetAccId: string | null;
+  folderCanFitReplace: boolean;
+  folderCanFitKeepBoth: boolean;
+}
+
 type UploadDisplayRow =
   | { kind: 'section_header'; key: string; title: string; count: number }
   | { kind: 'loose_file'; key: string; item: NormalizedUploadItem }
@@ -83,117 +100,9 @@ const CEILING_14_25_GB = 14.25 * 1024 * 1024 * 1024;
 const PROGRESS_THROTTLE_MS = 120;
 const MAX_CONCURRENT_UPLOADS = 3;
 const VIRTUALIZE_THRESHOLD = 30;
+const EMPTY_FOLDERS: string[] = [];
 
 const styles = stylex.create({
-  dialog: {
-    position: 'fixed',
-    inset: {
-      default: '0 0 0 auto',
-      '@media (max-width: 768px)': '0 0 auto 0',
-    },
-    margin: 0,
-    padding: 0,
-    borderWidth: '0px',
-    backgroundColor: 'transparent',
-    color: 'inherit',
-    outline: 'none',
-    overflow: 'hidden',
-    width: {
-      default: '460px',
-      '@media (max-width: 768px)': '100vw',
-    },
-    maxWidth: '100vw',
-    height: {
-      default: '100dvh',
-      '@media (max-width: 768px)': 'auto',
-    },
-    maxHeight: {
-      default: '100dvh',
-      '@media (max-width: 768px)': '92dvh',
-    },
-    '::backdrop': {
-      backgroundColor: colors.modalBackdrop,
-    },
-  },
-  drawerSurface: {
-    width: '100%',
-    height: '100%',
-    maxHeight: 'inherit',
-    backgroundColor: colors.surface,
-    borderLeftWidth: {
-      default: '1px',
-      '@media (max-width: 768px)': '0px',
-    },
-    borderLeftStyle: 'solid',
-    borderLeftColor: colors.borderSubtle,
-    display: 'flex',
-    flexDirection: 'column',
-    boxSizing: 'border-box',
-    overflow: 'hidden',
-    '@media (max-width: 768px)': {
-      borderBottomWidth: '1px',
-      borderBottomStyle: 'solid',
-      borderBottomColor: colors.border,
-    },
-  },
-  drawerHeader: {
-    height: layout.drawerHeaderHeight,
-    paddingLeft: spacing.space6,
-    paddingRight: spacing.space6,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexShrink: 0,
-    backgroundColor: colors.surface,
-  },
-  titleGroup: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-  },
-  title: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightTitle,
-    color: colors.primaryText,
-    margin: 0,
-  },
-  closeBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    cursor: 'pointer',
-    color: colors.secondaryText,
-    padding: spacing.space2,
-    borderRadius: radius.compact,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      color: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    ':disabled': {
-      opacity: 0.35,
-      cursor: 'not-allowed',
-      backgroundColor: 'transparent',
-      color: colors.secondaryText,
-    },
-    '@media (pointer: coarse)': {
-      minWidth: '44px',
-      minHeight: '44px',
-    },
-  },
   summaryBar: {
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
@@ -267,7 +176,7 @@ const styles = stylex.create({
     backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
     transformOrigin: 'left center',
-    transition: 'transform 0.2s ease',
+    transition: motion.transitionNormal,
   },
   progressBarComplete: {
     backgroundColor: colors.success,
@@ -344,7 +253,7 @@ const styles = stylex.create({
   fileName: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -355,7 +264,7 @@ const styles = stylex.create({
     fontSize: typography.fontSizeMeta,
     color: colors.primaryText,
     fontVariantNumeric: 'tabular-nums',
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     flexShrink: 0,
   },
   selectWrapper: {
@@ -484,7 +393,7 @@ const styles = stylex.create({
     backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
     transformOrigin: 'left center',
-    transition: 'transform 0.15s ease',
+    transition: motion.transitionFast,
   },
   footer: {
     paddingTop: spacing.space3,
@@ -587,6 +496,11 @@ const styles = stylex.create({
     borderBottomStyle: 'solid',
     borderBottomColor: colors.borderSubtle,
     backgroundColor: colors.dangerSurface,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space3,
+    flexWrap: 'wrap',
     '::after': {
       content: '""',
       position: 'absolute',
@@ -608,7 +522,7 @@ const styles = stylex.create({
   },
   planErrorNotice: {
     fontSize: typography.fontSizeMeta,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.danger,
   },
   conflictBanner: {
@@ -630,7 +544,7 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
     fontSize: typography.fontSizeMeta,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.warning,
   },
   actionsRow: {
@@ -708,7 +622,7 @@ const styles = stylex.create({
     borderColor: colors.dangerBorder,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     cursor: 'pointer',
     display: 'inline-flex',
     alignItems: 'center',
@@ -740,6 +654,7 @@ interface UploadFileCardProps {
   existingAcc?: AccountItem;
   contentMatch?: UploadContentMatchStatus;
   canHoldUpload: boolean;
+  canHoldReplace: boolean;
   conflictAction?: UploadConflictAction;
   selectedAccountId?: string;
   chosenAcc?: AccountItem;
@@ -759,6 +674,7 @@ const UploadFileCard = React.memo(function UploadFileCard({
   existingAcc,
   contentMatch,
   canHoldUpload,
+  canHoldReplace,
   conflictAction,
   selectedAccountId,
   chosenAcc,
@@ -852,6 +768,13 @@ const UploadFileCard = React.memo(function UploadFileCard({
         </div>
       )}
 
+      {!isRejected && progress?.status === 'error' && progress.error && progress.error !== 'Cancelled' && (
+        <div {...stylex.props(styles.fileCeilingWarning)}>
+          <IconAlertTriangle size={12} />
+          {progress.error}
+        </div>
+      )}
+
       {!isRejected && existingFile && !isComplete && (
         <span {...stylex.props(isSkipped ? styles.skippedNoticeText : styles.conflictHintText)}>
           Existing: {formatBytes(existingFile.sizeBytes)}
@@ -874,7 +797,12 @@ const UploadFileCard = React.memo(function UploadFileCard({
               ] as const
             ).map((opt) => {
               const active = effectiveConflictAction === opt.value;
-              const lacksCapacity = opt.value !== 'skip' && !canHoldUpload;
+              const lacksCapacity =
+                opt.value === 'replace'
+                  ? !canHoldReplace
+                  : opt.value === 'keep_both'
+                  ? !canHoldUpload
+                  : false;
               const disabledReason = lacksCapacity
                 ? `No drive has enough headroom or 24h transfer quota for ${formatBytes(item.file.size)}`
                 : undefined;
@@ -909,10 +837,15 @@ const UploadFileCard = React.memo(function UploadFileCard({
                     </option>
                   )}
                   {accounts.map((acc) => {
+                    const freedBytes =
+                      effectiveConflictAction === 'replace' && existingFile && acc.id === existingFile.accountId
+                        ? existingFile.sizeBytes
+                        : 0;
                     const { canHold, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
                       acc,
                       item.file.size,
                       {
+                        freedBytes,
                         isAutoSelected: acc.id === preview?.targetAccountId,
                         compactHeadroomLabel: true,
                       },
@@ -960,128 +893,48 @@ const UploadFileCard = React.memo(function UploadFileCard({
 
 interface UploadFolderCardProps {
   group: UploadFolderGroup;
+  summary: UploadFolderSummary;
+  singleTargetAcc?: AccountItem;
   isExpanded: boolean;
   isUploading: boolean;
   isPlanning: boolean;
-  previewByPath: Map<string, PlacementItemPreview>;
-  conflictsByPath: Record<string, ExistingPoolFile>;
-  contentMatchByKey: Record<string, UploadContentMatchStatus>;
-  conflictActions: Record<string, UploadConflictAction>;
-  selectedAccounts: Record<string, string>;
-  fileProgress: Record<string, FileProgressState>;
-  accountById: Map<string, AccountItem>;
-  canHoldFile: (sizeBytes: number) => boolean;
-  canFitTotalBytes: (totalBytes: number) => boolean;
   onToggleExpand: (groupKey: string) => void;
   onApplyFolderConflictAction: (groupKey: string, action: UploadConflictAction) => void;
 }
 
 const UploadFolderCard = React.memo(function UploadFolderCard({
   group,
+  summary,
+  singleTargetAcc,
   isExpanded,
   isUploading,
   isPlanning,
-  previewByPath,
-  conflictsByPath,
-  contentMatchByKey,
-  conflictActions,
-  selectedAccounts,
-  fileProgress,
-  accountById,
-  canHoldFile,
-  canFitTotalBytes,
   onToggleExpand,
   onApplyFolderConflictAction,
 }: UploadFolderCardProps) {
-  let rejectedCount = 0;
-  let skippedCount = 0;
-  let completedCount = 0;
-  let uploadingCount = 0;
-  let errorCount = 0;
-  let identicalSkippedCount = 0;
-  let actionableCount = 0;
-  let actionableBytes = 0;
-  let replacedBytes = 0;
-  let loadedBytes = 0;
-  let basePendingBytes = 0;
-  let editableConflictBytes = 0;
-
-  const editableConflicts: NormalizedUploadItem[] = [];
-  const targetAccountIds = new Set<string>();
-
-  for (const item of group.items) {
-    const preview = previewByPath.get(item.virtualPath);
-    const isRejected = item.file.size > CEILING_14_25_GB || Boolean(preview?.rejected);
-    if (isRejected) {
-      rejectedCount += 1;
-      continue;
-    }
-
-    const existingFile = conflictsByPath[item.virtualPath];
-    const effectiveAction: UploadConflictAction | undefined = existingFile
-      ? conflictActions[item.key] ?? 'skip'
-      : undefined;
-    const progress = fileProgress[item.key];
-    const isComplete = progress?.status === 'complete';
-
-    if (existingFile && !isComplete) {
-      editableConflicts.push(item);
-      editableConflictBytes += item.file.size;
-    } else if (!isComplete) {
-      basePendingBytes += item.file.size;
-    }
-
-    if (effectiveAction === 'skip') {
-      skippedCount += 1;
-      const match = contentMatchByKey[item.key];
-      if (match === 'identical') {
-        identicalSkippedCount += 1;
-      }
-      continue;
-    }
-
-    actionableCount += 1;
-    actionableBytes += item.file.size;
-    if (existingFile && effectiveAction === 'replace') {
-      replacedBytes += existingFile.sizeBytes;
-    }
-
-    const chosenAccountId = selectedAccounts[item.key] || preview?.targetAccountId;
-    if (chosenAccountId) {
-      targetAccountIds.add(chosenAccountId);
-    }
-
-    if (progress?.status === 'complete') {
-      completedCount += 1;
-      loadedBytes += item.file.size;
-    } else if (progress?.status === 'uploading') {
-      uploadingCount += 1;
-      loadedBytes += progress.loaded;
-    } else if (progress?.status === 'error') {
-      errorCount += 1;
-    }
-  }
+  const {
+    rejectedCount,
+    skippedCount,
+    completedCount,
+    uploadingCount,
+    errorCount,
+    identicalSkippedCount,
+    actionableCount,
+    actionableBytes,
+    replacedBytes,
+    loadedBytes,
+    editableConflictCount,
+    uniformFolderConflictAction,
+    targetAccountCount,
+    folderCanFitReplace,
+    folderCanFitKeepBoth,
+  } = summary;
 
   const allRejected = rejectedCount === group.items.length;
   const allComplete = actionableCount > 0 && completedCount === actionableCount;
   const allSkipped = !allRejected && actionableCount === 0 && skippedCount > 0;
   const pct = actionableBytes > 0 ? Math.round((loadedBytes / actionableBytes) * 100) : 0;
   const netDeltaBytes = actionableBytes - replacedBytes;
-  const folderCanFitConflicts =
-    editableConflicts.every((it) => canHoldFile(it.file.size)) &&
-    canFitTotalBytes(basePendingBytes + editableConflictBytes);
-
-  let uniformFolderConflictAction: UploadConflictAction | null = null;
-  if (editableConflicts.length > 0) {
-    const firstAction = conflictActions[editableConflicts[0].key] ?? 'skip';
-    const allMatch = editableConflicts.every(
-      (it) => (conflictActions[it.key] ?? 'skip') === firstAction
-    );
-    if (allMatch) uniformFolderConflictAction = firstAction;
-  }
-
-  const singleTargetAccId = targetAccountIds.size === 1 ? Array.from(targetAccountIds)[0] : null;
-  const singleTargetAcc = singleTargetAccId ? accountById.get(singleTargetAccId) : undefined;
 
   return (
     <div
@@ -1131,17 +984,17 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
           >
             {identicalSkippedCount === skippedCount ? 'Already uploaded' : 'Skipped'}
           </span>
-        ) : editableConflicts.length > 0 ? (
+        ) : editableConflictCount > 0 ? (
           <span {...stylex.props(styles.badge, styles.badgeWarning)}>
-            {editableConflicts.length} {editableConflicts.length === 1 ? 'conflict' : 'conflicts'}
+            {editableConflictCount} {editableConflictCount === 1 ? 'conflict' : 'conflicts'}
           </span>
         ) : singleTargetAcc ? (
           <span {...stylex.props(styles.badge)} title={singleTargetAcc.email || singleTargetAcc.id}>
             {singleTargetAcc.displayName || singleTargetAcc.id}
           </span>
-        ) : targetAccountIds.size > 1 ? (
+        ) : targetAccountCount > 1 ? (
           <span {...stylex.props(styles.badge)}>
-            {targetAccountIds.size} drives
+            {targetAccountCount} drives
           </span>
         ) : isPlanning ? (
           <span {...stylex.props(styles.badge)}>Calculating...</span>
@@ -1160,9 +1013,9 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
         {replacedBytes > 0 ? ` (${formatSignedBytes(netDeltaBytes)} net)` : ''}
       </div>
 
-      {!allRejected && editableConflicts.length > 0 && (
+      {!allRejected && editableConflictCount > 0 && (
         <span {...stylex.props(uniformFolderConflictAction === 'skip' ? styles.skippedNoticeText : styles.conflictHintText)}>
-          {editableConflicts.length} {editableConflicts.length === 1 ? 'file already exists' : 'files already exist'}
+          {editableConflictCount} {editableConflictCount === 1 ? 'file already exists' : 'files already exist'}
         </span>
       )}
 
@@ -1180,7 +1033,7 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
 
       <div {...stylex.props(styles.actionsRow)}>
         {!allRejected &&
-          editableConflicts.length > 0 &&
+          editableConflictCount > 0 &&
           (
             [
               { value: 'skip', label: 'Skip all' },
@@ -1189,7 +1042,12 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
             ] as const
           ).map((opt) => {
             const active = uniformFolderConflictAction === opt.value;
-            const lacksCapacity = opt.value !== 'skip' && !folderCanFitConflicts;
+            const lacksCapacity =
+              opt.value === 'replace'
+                ? !folderCanFitReplace
+                : opt.value === 'keep_both'
+                ? !folderCanFitKeepBoth
+                : false;
             return (
               <DrawerButton
                 key={opt.value}
@@ -1224,7 +1082,7 @@ export function UploadDrawer({
   isOpen,
   onClose,
   stagedFiles,
-  stagedEmptyFolders = [],
+  stagedEmptyFolders = EMPTY_FOLDERS,
   currentPath,
   accounts = [],
   poolId = 1,
@@ -1237,14 +1095,18 @@ export function UploadDrawer({
   const [conflictActions, setConflictActions] = useState<Record<string, UploadConflictAction>>({});
   const [isPlanning, setIsPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [planAttempt, setPlanAttempt] = useState(0);
   const [selectedAccounts, setSelectedAccounts] = useState<Record<string, string>>({});
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+  const [hasCreatedEmptyFolders, setHasCreatedEmptyFolders] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
   const [fileProgress, setFileProgress] = useState<Record<string, FileProgressState>>({});
 
   const progressRef = useRef<Record<string, FileProgressState>>({});
   const hasCreatedEmptyFoldersRef = useRef(false);
+  const verifiedHashCacheRef = useRef<Map<string, UploadContentMatchStatus>>(new Map());
+  const requestCloseRef = useRef<((afterClose?: () => void) => void) | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const lastFlushRef = useRef<number>(0);
   const xhrMapRef = useRef<Map<string, XMLHttpRequest>>(new Map());
@@ -1387,13 +1249,12 @@ export function UploadDrawer({
     };
   }, [normalizedItems, actionableItems, conflictsByPath, conflictActions]);
 
-  const { totalPoolHeadroom, totalPoolUploadBudget, canHoldFile, canFitTotalBytes } = useMemo(() => {
+  const { totalPoolHeadroom, totalPoolUploadBudget, canHoldFile } = useMemo(() => {
     if (accounts.length === 0) {
       return {
         totalPoolHeadroom: Infinity,
         totalPoolUploadBudget: Infinity,
         canHoldFile: () => true,
-        canFitTotalBytes: () => true,
       };
     }
 
@@ -1407,12 +1268,20 @@ export function UploadDrawer({
     return {
       totalPoolHeadroom: headroomSum,
       totalPoolUploadBudget: budgetSum,
-      canHoldFile: (sizeBytes: number) =>
-        activeEligible.some((acc) => evaluateAccountTransferCandidate(acc, sizeBytes).canHold),
-      canFitTotalBytes: (neededBytes: number) =>
-        neededBytes <= headroomSum && neededBytes <= budgetSum,
+      canHoldFile: (
+        sizeBytes: number,
+        existingFile?: Pick<ExistingPoolFile, 'accountId' | 'sizeBytes'>,
+      ) =>
+        activeEligible.some((acc) =>
+          evaluateAccountTransferCandidate(acc, sizeBytes, {
+            freedBytes:
+              existingFile && acc.id === existingFile.accountId ? existingFile.sizeBytes : 0,
+          }).canHold
+        ),
     };
   }, [accounts]);
+
+  const emptyFoldersKey = useMemo(() => stagedEmptyFolders.join('\0'), [stagedEmptyFolders]);
 
   // Reset per-session progress and conflict overrides whenever staged items change
   useEffect(() => {
@@ -1422,9 +1291,11 @@ export function UploadDrawer({
     setExpandedFolders({});
     progressRef.current = {};
     hasCreatedEmptyFoldersRef.current = false;
+    setHasCreatedEmptyFolders(false);
+    verifiedHashCacheRef.current.clear();
     setFileProgress({});
     setSelectedAccounts({});
-  }, [isOpen, normalizedItems, poolId]);
+  }, [isOpen, normalizedItems, emptyFoldersKey, poolId]);
 
   // Verify byte-for-byte identity only when a conflicting file shares the existing file's exact size
   useEffect(() => {
@@ -1436,18 +1307,26 @@ export function UploadDrawer({
     const controller = new AbortController();
     const { signal } = controller;
     const immediate: Record<string, UploadContentMatchStatus> = {};
-    const toVerify: Array<{ item: NormalizedUploadItem; existing: ExistingPoolFile }> = [];
+    const toVerify: Array<{
+      item: NormalizedUploadItem;
+      existing: ExistingPoolFile;
+      cacheKey: string;
+    }> = [];
 
     for (const item of conflictItems) {
       const existing = conflictsByPath[item.virtualPath];
       if (!existing) continue;
-      if (item.file.size !== existing.sizeBytes) {
+      const cacheKey = `${item.key}::${existing.id}::${existing.hash ?? ''}`;
+      const cached = verifiedHashCacheRef.current.get(cacheKey);
+      if (cached) {
+        immediate[item.key] = cached;
+      } else if (item.file.size !== existing.sizeBytes) {
         immediate[item.key] = 'different';
       } else if (!existing.hash) {
         immediate[item.key] = item.file.size === 0 ? 'identical' : 'unverified';
       } else {
         immediate[item.key] = 'checking';
-        toVerify.push({ item, existing });
+        toVerify.push({ item, existing, cacheKey });
       }
     }
 
@@ -1465,6 +1344,7 @@ export function UploadDrawer({
             signal
           );
           if (signal.aborted) break;
+          verifiedHashCacheRef.current.set(entry.cacheKey, result);
           setContentMatchByKey((prev) => ({ ...prev, [entry.item.key]: result }));
         } catch (err) {
           if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) break;
@@ -1545,7 +1425,7 @@ export function UploadDrawer({
         setConflictsByPath(nextConflicts);
 
         const decisions = Array.isArray(planData.decisions) ? planData.decisions : [];
-        const decisionByPath = new Map<string, { virtualPath: string; accountId?: string; reason?: string }>();
+        const decisionByPath = new Map<string, { virtualPath: string; accountId?: string }>();
         for (const d of decisions) {
           if (d && typeof d.virtualPath === 'string') {
             decisionByPath.set(d.virtualPath, d);
@@ -1555,17 +1435,9 @@ export function UploadDrawer({
         const mapped: PlacementItemPreview[] = items.map((orig) => {
           if (orig.rejected) return orig;
           const matched = decisionByPath.get(orig.virtualPath);
-          const reasonLabel =
-            matched?.reason === 'folder_affinity'
-              ? 'Path affinity'
-              : matched?.reason === 'best_fit'
-              ? 'Best fit'
-              : matched?.reason || 'Best fit';
-
           return {
             ...orig,
             targetAccountId: matched?.accountId,
-            reason: reasonLabel,
           };
         });
         setPreviews(mapped);
@@ -1582,7 +1454,7 @@ export function UploadDrawer({
     return () => {
       controller.abort();
     };
-  }, [isOpen, normalizedItems, poolId, conflictActions]);
+  }, [isOpen, normalizedItems, poolId, conflictActions, planAttempt]);
 
   const overallProgress = useMemo(() => {
     let totalLoaded = 0;
@@ -1607,214 +1479,267 @@ export function UploadDrawer({
 
   const runUploadQueue = useCallback(
     async (itemsToUpload: NormalizedUploadItem[], createEmptyFolders: boolean) => {
-      if (isUploading || itemsToUpload.length === 0) return;
+      const shouldCreateEmptyFolders = createEmptyFolders && stagedEmptyFolders.length > 0;
+      if (isUploading || (itemsToUpload.length === 0 && !shouldCreateEmptyFolders)) return;
 
       abortedRef.current = false;
       setIsUploading(true);
 
       let succeededCount = 0;
 
-      if (createEmptyFolders && stagedEmptyFolders && stagedEmptyFolders.length > 0) {
-        hasCreatedEmptyFoldersRef.current = true;
-        for (const folderPath of stagedEmptyFolders) {
-          if (abortedRef.current) break;
-          try {
-            const name = folderPath.split('/').filter(Boolean).pop() || folderPath;
-            await client.api.folders.$post({
-              json: { virtualPath: folderPath, name, poolId },
-            });
-            succeededCount += 1;
-          } catch {
-            // Continue if already exists
-          }
-        }
-      }
-
-      const nextProgress = { ...progressRef.current };
-      for (const it of itemsToUpload) {
-        nextProgress[it.key] = {
-          loaded: 0,
-          total: it.file.size,
-          status: it.file.size > CEILING_14_25_GB ? 'error' : 'pending',
-        };
-      }
-      progressRef.current = nextProgress;
-      flushProgressImmediate();
-
-      const eligibleQueue = itemsToUpload.filter((it) => {
-        if (it.file.size > CEILING_14_25_GB) return false;
-        if (conflictsByPath[it.virtualPath] && (conflictActions[it.key] ?? 'skip') === 'skip') {
-          return false;
-        }
-        return true;
-      });
-
-      // Group items by target accountId for per-account fairness across the concurrency-3 pool
-      const accountQueues = new Map<string, Array<{ item: NormalizedUploadItem; accountId?: string }>>();
-      for (const item of eligibleQueue) {
-        const chosenAccountId =
-          selectedAccounts[item.key] || previewByPath.get(item.virtualPath)?.targetAccountId;
-        const bucketKey = chosenAccountId || '__auto__';
-        let bucket = accountQueues.get(bucketKey);
-        if (!bucket) {
-          bucket = [];
-          accountQueues.set(bucketKey, bucket);
-        }
-        bucket.push({ item, accountId: chosenAccountId });
-      }
-
-      const accountKeys = Array.from(accountQueues.keys());
-      const activePerAccount = new Map<string, number>();
-      let roundRobinCursor = 0;
-
-      const dequeueNext = (): { bucketKey: string; item: NormalizedUploadItem; accountId?: string } | null => {
-        if (abortedRef.current || accountKeys.length === 0) return null;
-
-        let bestKey: string | null = null;
-        let bestActive = Infinity;
-
-        for (let offset = 0; offset < accountKeys.length; offset++) {
-          const idx = (roundRobinCursor + offset) % accountKeys.length;
-          const k = accountKeys[idx];
-          const q = accountQueues.get(k);
-          if (!q || q.length === 0) continue;
-          const active = activePerAccount.get(k) ?? 0;
-          if (active < bestActive) {
-            bestActive = active;
-            bestKey = k;
-            if (active === 0) break;
-          }
-        }
-
-        if (!bestKey) return null;
-        roundRobinCursor = (accountKeys.indexOf(bestKey) + 1) % accountKeys.length;
-        const q = accountQueues.get(bestKey)!;
-        const next = q.shift()!;
-        activePerAccount.set(bestKey, (activePerAccount.get(bestKey) ?? 0) + 1);
-        return { bucketKey: bestKey, item: next.item, accountId: next.accountId };
-      };
-
-      const uploadSingleItem = (item: NormalizedUploadItem, chosenAccountId?: string) => {
-        const accountParam = chosenAccountId ? `&accountId=${encodeURIComponent(chosenAccountId)}` : '';
-        const conflict = conflictsByPath[item.virtualPath];
-        const chosenAction = conflict ? conflictActions[item.key] ?? 'skip' : undefined;
-        const conflictMode =
-          chosenAction === 'replace'
-            ? 'replace'
-            : chosenAction === 'keep_both'
-            ? 'keep_both'
-            : 'reject';
-
-        progressRef.current[item.key] = {
-          loaded: 0,
-          total: item.file.size,
-          status: 'uploading',
-        };
-        flushProgressImmediate();
-
-        return new Promise<void>((resolve) => {
-          if (abortedRef.current) {
-            progressRef.current[item.key] = {
-              loaded: 0,
-              total: item.file.size,
-              status: 'error',
-              error: 'Cancelled',
-            };
-            flushProgressImmediate();
-            resolve();
-            return;
-          }
-
-          const xhr = new XMLHttpRequest();
-          xhrMapRef.current.set(item.key, xhr);
-
-          const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(item.virtualPath)}&sizeBytes=${item.file.size}&mimeType=${encodeURIComponent(item.file.type || 'application/octet-stream')}${accountParam}&poolId=${encodeURIComponent(String(poolId))}&conflictMode=${encodeURIComponent(conflictMode)}`;
-
-          xhr.open('POST', uploadUrl, true);
-          xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
-
-          xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-              progressRef.current[item.key] = {
-                loaded: e.loaded,
-                total: e.total,
-                status: 'uploading',
-              };
-              scheduleProgressFlush();
+      try {
+        if (shouldCreateEmptyFolders) {
+          setPlanError(null);
+          let folderError: string | null = null;
+          for (const folderPath of stagedEmptyFolders) {
+            if (abortedRef.current) break;
+            try {
+              const name = folderPath.split('/').filter(Boolean).pop() || folderPath;
+              const res = await client.api.folders.$post({
+                json: { virtualPath: folderPath, name, poolId },
+              });
+              if (res.ok || res.status === 409) {
+                succeededCount += 1;
+              } else {
+                let errMsg = `Failed to create folder "${folderPath}" (${res.status})`;
+                try {
+                  const errData = await res.json();
+                  if (
+                    errData &&
+                    typeof errData === 'object' &&
+                    'error' in errData &&
+                    typeof errData.error === 'string'
+                  ) {
+                    errMsg = errData.error;
+                  }
+                } catch {}
+                folderError = folderError ?? errMsg;
+              }
+            } catch (err) {
+              const errMsg =
+                err instanceof Error ? err.message : `Failed to create folder "${folderPath}"`;
+              folderError = folderError ?? errMsg;
             }
-          };
+          }
+          if (folderError) {
+            setPlanError(folderError);
+          }
+          if (!abortedRef.current && !folderError) {
+            hasCreatedEmptyFoldersRef.current = true;
+            setHasCreatedEmptyFolders(true);
+          }
+        }
 
-          xhr.onload = () => {
-            xhrMapRef.current.delete(item.key);
-            if (xhr.status >= 200 && xhr.status < 300) {
-              progressRef.current[item.key] = {
-                loaded: item.file.size,
-                total: item.file.size,
-                status: 'complete',
-              };
-              succeededCount += 1;
-            } else {
-              let errMsg = `Upload failed (${xhr.status})`;
-              try {
-                const parsed = JSON.parse(xhr.responseText);
-                if (parsed.error) errMsg = parsed.error;
-              } catch {}
+        if (itemsToUpload.length > 0) {
+          const wasAborted = abortedRef.current;
+          const nextProgress = { ...progressRef.current };
+          for (const it of itemsToUpload) {
+            nextProgress[it.key] = wasAborted
+              ? {
+                  loaded: 0,
+                  total: it.file.size,
+                  status: 'error',
+                  error: 'Cancelled',
+                }
+              : {
+                  loaded: 0,
+                  total: it.file.size,
+                  status: it.file.size > CEILING_14_25_GB ? 'error' : 'pending',
+                };
+          }
+          progressRef.current = nextProgress;
+          flushProgressImmediate();
+
+          if (!wasAborted) {
+            const eligibleQueue = itemsToUpload.filter((it) => {
+              if (it.file.size > CEILING_14_25_GB) return false;
+              if (conflictsByPath[it.virtualPath] && (conflictActions[it.key] ?? 'skip') === 'skip') {
+                return false;
+              }
+              return true;
+            });
+
+            // Group items by target accountId for per-account fairness across the concurrency-3 pool
+            const accountQueues = new Map<string, Array<{ item: NormalizedUploadItem; accountId?: string }>>();
+            for (const item of eligibleQueue) {
+              const chosenAccountId =
+                selectedAccounts[item.key] || previewByPath.get(item.virtualPath)?.targetAccountId;
+              const bucketKey = chosenAccountId || '__auto__';
+              let bucket = accountQueues.get(bucketKey);
+              if (!bucket) {
+                bucket = [];
+                accountQueues.set(bucketKey, bucket);
+              }
+              bucket.push({ item, accountId: chosenAccountId });
+            }
+
+            const accountKeys = Array.from(accountQueues.keys());
+            const activePerAccount = new Map<string, number>();
+            let roundRobinCursor = 0;
+
+            const dequeueNext = (): { bucketKey: string; item: NormalizedUploadItem; accountId?: string } | null => {
+              if (abortedRef.current || accountKeys.length === 0) return null;
+
+              let bestKey: string | null = null;
+              let bestActive = Infinity;
+
+              for (let offset = 0; offset < accountKeys.length; offset++) {
+                const idx = (roundRobinCursor + offset) % accountKeys.length;
+                const k = accountKeys[idx];
+                const q = accountQueues.get(k);
+                if (!q || q.length === 0) continue;
+                const active = activePerAccount.get(k) ?? 0;
+                if (active < bestActive) {
+                  bestActive = active;
+                  bestKey = k;
+                  if (active === 0) break;
+                }
+              }
+
+              if (!bestKey) return null;
+              roundRobinCursor = (accountKeys.indexOf(bestKey) + 1) % accountKeys.length;
+              const q = accountQueues.get(bestKey)!;
+              const next = q.shift()!;
+              activePerAccount.set(bestKey, (activePerAccount.get(bestKey) ?? 0) + 1);
+              return { bucketKey: bestKey, item: next.item, accountId: next.accountId };
+            };
+
+            const uploadSingleItem = (item: NormalizedUploadItem, chosenAccountId?: string) => {
+              const accountParam = chosenAccountId ? `&accountId=${encodeURIComponent(chosenAccountId)}` : '';
+              const conflict = conflictsByPath[item.virtualPath];
+              const chosenAction = conflict ? conflictActions[item.key] ?? 'skip' : undefined;
+              const conflictMode =
+                chosenAction === 'replace'
+                  ? 'replace'
+                  : chosenAction === 'keep_both'
+                  ? 'keep_both'
+                  : 'reject';
+
               progressRef.current[item.key] = {
                 loaded: 0,
                 total: item.file.size,
-                status: 'error',
-                error: errMsg,
+                status: 'uploading',
               };
-            }
-            flushProgressImmediate();
-            resolve();
-          };
+              flushProgressImmediate();
 
-          xhr.onerror = () => {
-            xhrMapRef.current.delete(item.key);
-            progressRef.current[item.key] = {
-              loaded: 0,
-              total: item.file.size,
-              status: 'error',
-              error: 'Network stream error',
+              return new Promise<void>((resolve) => {
+                if (abortedRef.current) {
+                  progressRef.current[item.key] = {
+                    loaded: 0,
+                    total: item.file.size,
+                    status: 'error',
+                    error: 'Cancelled',
+                  };
+                  flushProgressImmediate();
+                  resolve();
+                  return;
+                }
+
+                const xhr = new XMLHttpRequest();
+                xhrMapRef.current.set(item.key, xhr);
+
+                const uploadUrl = `/api/files/upload?virtualPath=${encodeURIComponent(item.virtualPath)}&sizeBytes=${item.file.size}&mimeType=${encodeURIComponent(item.file.type || 'application/octet-stream')}${accountParam}&poolId=${encodeURIComponent(String(poolId))}&conflictMode=${encodeURIComponent(conflictMode)}`;
+
+                xhr.upload.onprogress = (e) => {
+                  if (e.lengthComputable) {
+                    progressRef.current[item.key] = {
+                      loaded: e.loaded,
+                      total: e.total,
+                      status: 'uploading',
+                    };
+                    scheduleProgressFlush();
+                  }
+                };
+
+                xhr.onload = () => {
+                  xhrMapRef.current.delete(item.key);
+                  if (xhr.status >= 200 && xhr.status < 300) {
+                    progressRef.current[item.key] = {
+                      loaded: item.file.size,
+                      total: item.file.size,
+                      status: 'complete',
+                    };
+                    succeededCount += 1;
+                  } else {
+                    let errMsg = `Upload failed (${xhr.status})`;
+                    try {
+                      const parsed = JSON.parse(xhr.responseText);
+                      if (parsed.error) errMsg = parsed.error;
+                    } catch {}
+                    progressRef.current[item.key] = {
+                      loaded: 0,
+                      total: item.file.size,
+                      status: 'error',
+                      error: errMsg,
+                    };
+                  }
+                  flushProgressImmediate();
+                  resolve();
+                };
+
+                xhr.onerror = () => {
+                  xhrMapRef.current.delete(item.key);
+                  progressRef.current[item.key] = {
+                    loaded: 0,
+                    total: item.file.size,
+                    status: 'error',
+                    error: 'Network stream error',
+                  };
+                  flushProgressImmediate();
+                  resolve();
+                };
+
+                xhr.onabort = () => {
+                  xhrMapRef.current.delete(item.key);
+                  progressRef.current[item.key] = {
+                    loaded: 0,
+                    total: item.file.size,
+                    status: 'error',
+                    error: 'Cancelled',
+                  };
+                  flushProgressImmediate();
+                  resolve();
+                };
+
+                try {
+                  xhr.open('POST', uploadUrl, true);
+                  xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
+                  xhr.send(item.file);
+                } catch (err) {
+                  xhrMapRef.current.delete(item.key);
+                  progressRef.current[item.key] = {
+                    loaded: 0,
+                    total: item.file.size,
+                    status: 'error',
+                    error: err instanceof Error ? err.message : 'Failed to start upload',
+                  };
+                  flushProgressImmediate();
+                  resolve();
+                }
+              });
             };
-            flushProgressImmediate();
-            resolve();
-          };
 
-          xhr.onabort = () => {
-            xhrMapRef.current.delete(item.key);
-            progressRef.current[item.key] = {
-              loaded: 0,
-              total: item.file.size,
-              status: 'error',
-              error: 'Cancelled',
-            };
-            flushProgressImmediate();
-            resolve();
-          };
+            const workerCount = Math.min(MAX_CONCURRENT_UPLOADS, eligibleQueue.length);
+            const workers = Array.from({ length: workerCount }, async () => {
+              while (!abortedRef.current) {
+                const entry = dequeueNext();
+                if (!entry) break;
+                try {
+                  await uploadSingleItem(entry.item, entry.accountId);
+                } finally {
+                  activePerAccount.set(entry.bucketKey, Math.max(0, (activePerAccount.get(entry.bucketKey) ?? 1) - 1));
+                }
+              }
+            });
 
-          xhr.send(item.file);
-        });
-      };
-
-      const workerCount = Math.min(MAX_CONCURRENT_UPLOADS, eligibleQueue.length);
-      const workers = Array.from({ length: workerCount }, async () => {
-        while (!abortedRef.current) {
-          const entry = dequeueNext();
-          if (!entry) break;
-          try {
-            await uploadSingleItem(entry.item, entry.accountId);
-          } finally {
-            activePerAccount.set(entry.bucketKey, Math.max(0, (activePerAccount.get(entry.bucketKey) ?? 1) - 1));
+            await Promise.all(workers);
           }
         }
-      });
+      } finally {
+        xhrMapRef.current.clear();
+        setIsUploading(false);
+      }
 
-      await Promise.all(workers);
-
-      xhrMapRef.current.clear();
-      setIsUploading(false);
       if (succeededCount > 0) {
         await onUploadComplete();
       }
@@ -1834,9 +1759,10 @@ export function UploadDrawer({
   );
 
   const handleStartUpload = useCallback(() => {
-    if (unstartedActionableItems.length === 0) return;
-    void runUploadQueue(unstartedActionableItems, !hasCreatedEmptyFoldersRef.current);
-  }, [runUploadQueue, unstartedActionableItems]);
+    const shouldCreateEmpty = !hasCreatedEmptyFoldersRef.current && stagedEmptyFolders.length > 0;
+    if (unstartedActionableItems.length === 0 && !shouldCreateEmpty) return;
+    void runUploadQueue(unstartedActionableItems, shouldCreateEmpty);
+  }, [runUploadQueue, unstartedActionableItems, stagedEmptyFolders.length]);
 
   const handleRetryFailed = useCallback(() => {
     if (failedItems.length === 0) return;
@@ -1951,10 +1877,14 @@ export function UploadDrawer({
       }
     }
 
+    const seenEmptyPaths = new Set<string>();
     const standaloneEmptyFolders: Array<{ key: string; name: string; folderPath: string }> = [];
     for (const rawEmptyPath of stagedEmptyFolders) {
       const emptyPath = rawEmptyPath.startsWith('/') ? rawEmptyPath : `/${rawEmptyPath}`;
-      const { rel, base } = getRelAndBase(emptyPath);
+      const normalizedEmptyPath = emptyPath.replace(/\/+$/, '') || '/';
+      if (seenEmptyPaths.has(normalizedEmptyPath)) continue;
+      seenEmptyPaths.add(normalizedEmptyPath);
+      const { rel, base } = getRelAndBase(normalizedEmptyPath);
       const parts = rel.split('/').filter(Boolean);
       if (parts.length === 0) continue;
       const topFolderName = parts[0];
@@ -1967,9 +1897,9 @@ export function UploadDrawer({
       } else {
         const displayName = parts.join('/');
         standaloneEmptyFolders.push({
-          key: `empty::${emptyPath}`,
+          key: `empty::${normalizedEmptyPath}`,
           name: displayName,
-          folderPath: emptyPath,
+          folderPath: normalizedEmptyPath,
         });
       }
     }
@@ -2056,6 +1986,154 @@ export function UploadDrawer({
     return { folderGroupByKey: groupsMap, displayRows: rows };
   }, [normalizedItems, stagedEmptyFolders, currentPath, expandedFolders]);
 
+  const folderSummaryByKey = useMemo(() => {
+    const map = new Map<string, UploadFolderSummary>();
+    const isEligibleAccount = (accId: string) => {
+      if (accounts.length === 0) return true;
+      const acc = accountById.get(accId);
+      return Boolean(acc && !acc.isDisabled && acc.authorized);
+    };
+
+    for (const [groupKey, group] of folderGroupByKey.entries()) {
+      let rejectedCount = 0;
+      let skippedCount = 0;
+      let completedCount = 0;
+      let uploadingCount = 0;
+      let errorCount = 0;
+      let identicalSkippedCount = 0;
+      let actionableCount = 0;
+      let actionableBytes = 0;
+      let replacedBytes = 0;
+      let loadedBytes = 0;
+      let basePendingBytes = 0;
+      let editableConflictBytes = 0;
+      let editableConflictCount = 0;
+      let uniformAction: UploadConflictAction | null = null;
+      let uniformMismatch = false;
+      let canHoldAllReplace = true;
+      let canHoldAllKeepBoth = true;
+      let freedReplaceHeadroom = 0;
+      let firstTargetAccId: string | null = null;
+      let hasMultipleTargets = false;
+      const seenTargets = new Set<string>();
+
+      for (const item of group.items) {
+        const preview = previewByPath.get(item.virtualPath);
+        const isRejected = item.file.size > CEILING_14_25_GB || Boolean(preview?.rejected);
+        if (isRejected) {
+          rejectedCount += 1;
+          continue;
+        }
+
+        const existingFile = conflictsByPath[item.virtualPath];
+        const effectiveAction: UploadConflictAction | undefined = existingFile
+          ? conflictActions[item.key] ?? 'skip'
+          : undefined;
+        const progress = fileProgress[item.key];
+        const isComplete = progress?.status === 'complete';
+
+        if (existingFile && !isComplete) {
+          editableConflictCount += 1;
+          editableConflictBytes += item.file.size;
+          const actionChoice = conflictActions[item.key] ?? 'skip';
+          if (uniformAction === null) {
+            uniformAction = actionChoice;
+          } else if (uniformAction !== actionChoice) {
+            uniformMismatch = true;
+          }
+          if (canHoldAllReplace && !canHoldFile(item.file.size, existingFile)) {
+            canHoldAllReplace = false;
+          }
+          if (canHoldAllKeepBoth && !canHoldFile(item.file.size)) {
+            canHoldAllKeepBoth = false;
+          }
+          if (isEligibleAccount(existingFile.accountId)) {
+            freedReplaceHeadroom += existingFile.sizeBytes;
+          }
+        } else if (!isComplete) {
+          basePendingBytes += item.file.size;
+        }
+
+        if (effectiveAction === 'skip') {
+          skippedCount += 1;
+          if (contentMatchByKey[item.key] === 'identical') {
+            identicalSkippedCount += 1;
+          }
+          continue;
+        }
+
+        actionableCount += 1;
+        actionableBytes += item.file.size;
+        if (existingFile && effectiveAction === 'replace') {
+          replacedBytes += existingFile.sizeBytes;
+        }
+
+        const chosenAccountId = selectedAccounts[item.key] || preview?.targetAccountId;
+        if (chosenAccountId) {
+          if (firstTargetAccId === null) {
+            firstTargetAccId = chosenAccountId;
+          } else if (chosenAccountId !== firstTargetAccId) {
+            hasMultipleTargets = true;
+          }
+          seenTargets.add(chosenAccountId);
+        }
+
+        if (progress?.status === 'complete') {
+          completedCount += 1;
+          loadedBytes += item.file.size;
+        } else if (progress?.status === 'uploading') {
+          uploadingCount += 1;
+          loadedBytes += progress.loaded;
+        } else if (progress?.status === 'error') {
+          errorCount += 1;
+        }
+      }
+
+      const neededTransferBytes = basePendingBytes + editableConflictBytes;
+      const neededReplaceHeadroom = neededTransferBytes - freedReplaceHeadroom;
+
+      map.set(groupKey, {
+        rejectedCount,
+        skippedCount,
+        completedCount,
+        uploadingCount,
+        errorCount,
+        identicalSkippedCount,
+        actionableCount,
+        actionableBytes,
+        replacedBytes,
+        loadedBytes,
+        editableConflictCount,
+        uniformFolderConflictAction: uniformMismatch ? null : uniformAction,
+        targetAccountCount: seenTargets.size,
+        singleTargetAccId: !hasMultipleTargets ? firstTargetAccId : null,
+        folderCanFitReplace:
+          canHoldAllReplace &&
+          neededReplaceHeadroom <= totalPoolHeadroom &&
+          neededTransferBytes <= totalPoolUploadBudget,
+        folderCanFitKeepBoth:
+          canHoldAllKeepBoth &&
+          neededTransferBytes <= totalPoolHeadroom &&
+          neededTransferBytes <= totalPoolUploadBudget,
+      });
+    }
+
+    return map;
+  }, [
+    folderGroupByKey,
+    accounts.length,
+    accountById,
+    previewByPath,
+    conflictsByPath,
+    conflictActions,
+    fileProgress,
+    contentMatchByKey,
+    selectedAccounts,
+    canHoldFile,
+    totalPoolHeadroom,
+    totalPoolUploadBudget,
+  ]);
+
   const handleToggleFolderExpand = useCallback((groupKey: string) => {
     setExpandedFolders((prev) => ({
       ...prev,
@@ -2094,77 +2172,15 @@ export function UploadDrawer({
     overscan: 6,
   });
 
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const pointerDownOutsideRef = useRef(false);
-  const isClosingRef = useRef(false);
-  const clearOnCloseRef = useRef(false);
-
-  const requestClose = useCallback(() => {
-    if (isUploading || isClosingRef.current) return;
-    const dialog = dialogRef.current;
-    if (!dialog || !dialog.open) {
-      onClose();
-      return;
-    }
-
-    const skipExitAnimation =
-      document.body.classList.contains('resize-animation-stopper') ||
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    if (skipExitAnimation) {
-      dialog.removeAttribute('data-closing');
-      dialog.close();
-      return;
-    }
-
-    isClosingRef.current = true;
-    dialog.setAttribute('data-closing', '');
-    const animations = dialog.getAnimations();
-    Promise.all(animations.map((anim) => anim.finished.catch(() => {}))).then(() => {
-      if (!isClosingRef.current) return;
-      isClosingRef.current = false;
-      dialog.removeAttribute('data-closing');
-      if (dialog.open) {
-        dialog.close();
-      }
-    });
-  }, [isUploading, onClose]);
-
   const handleClearAndClose = useCallback(() => {
     clearActiveXhrs();
-    if (!dialogRef.current?.open) {
+    if (requestCloseRef.current) {
+      requestCloseRef.current(() => onClearFiles());
+    } else {
       onClearFiles();
       onClose();
-      return;
     }
-    clearOnCloseRef.current = true;
-    requestClose();
-  }, [clearActiveXhrs, onClearFiles, onClose, requestClose]);
-
-  useBeforeUnload(isUploading);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    if (isOpen) {
-      isClosingRef.current = false;
-      clearOnCloseRef.current = false;
-      dialog.removeAttribute('data-closing');
-      if (!dialog.open) {
-        dialog.showModal();
-      }
-    } else if (dialog.open) {
-      dialog.removeAttribute('data-closing');
-      dialog.close();
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    dialog.setAttribute('closedby', isUploading ? 'none' : 'any');
-  }, [isUploading, isOpen]);
+  }, [clearActiveXhrs, onClearFiles, onClose]);
 
   const batchConflictSelection = useMemo(() => {
     const editableConflicts = conflictItems.filter((it) => fileProgress[it.key]?.status !== 'complete');
@@ -2181,90 +2197,73 @@ export function UploadDrawer({
     () => conflictItems.some((it) => fileProgress[it.key]?.status !== 'complete'),
     [conflictItems, fileProgress]
   );
-  const batchCanFitConflicts = useMemo(() => {
-    let neededBytes = 0;
+  const { batchCanFitReplace, batchCanFitKeepBoth } = useMemo(() => {
+    let neededTransferBytes = 0;
+    let freedReplaceHeadroom = 0;
+    let canHoldAllReplace = true;
+    let canHoldAllKeepBoth = true;
+
     for (const it of normalizedItems) {
       if (it.file.size > CEILING_14_25_GB) continue;
       if (fileProgress[it.key]?.status === 'complete') continue;
-      const isConflict = Boolean(conflictsByPath[it.virtualPath]);
-      if (isConflict) {
-        if (!canHoldFile(it.file.size)) return false;
-        neededBytes += it.file.size;
-      } else {
-        neededBytes += it.file.size;
+      const existing = conflictsByPath[it.virtualPath];
+      if (existing) {
+        if (canHoldAllReplace && !canHoldFile(it.file.size, existing)) {
+          canHoldAllReplace = false;
+        }
+        if (canHoldAllKeepBoth && !canHoldFile(it.file.size)) {
+          canHoldAllKeepBoth = false;
+        }
+        const existingAccount = accounts.length === 0 ? null : accountById.get(existing.accountId);
+        if (accounts.length === 0 || (existingAccount && !existingAccount.isDisabled && existingAccount.authorized)) {
+          freedReplaceHeadroom += existing.sizeBytes;
+        }
       }
+      neededTransferBytes += it.file.size;
     }
-    return neededBytes <= totalPoolHeadroom && neededBytes <= totalPoolUploadBudget;
-  }, [normalizedItems, fileProgress, conflictsByPath, canHoldFile, totalPoolHeadroom, totalPoolUploadBudget]);
 
-  if (!isOpen) return null;
+    const neededReplaceHeadroom = neededTransferBytes - freedReplaceHeadroom;
+    return {
+      batchCanFitReplace:
+        canHoldAllReplace &&
+        neededReplaceHeadroom <= totalPoolHeadroom &&
+        neededTransferBytes <= totalPoolUploadBudget,
+      batchCanFitKeepBoth:
+        canHoldAllKeepBoth &&
+        neededTransferBytes <= totalPoolHeadroom &&
+        neededTransferBytes <= totalPoolUploadBudget,
+    };
+  }, [
+    normalizedItems,
+    fileProgress,
+    conflictsByPath,
+    canHoldFile,
+    accounts.length,
+    accountById,
+    totalPoolHeadroom,
+    totalPoolUploadBudget,
+  ]);
 
-  const isOutsideDialogBounds = (e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) => {
-    const rect = dialog.getBoundingClientRect();
-    return (
-      e.clientX < rect.left ||
-      e.clientX > rect.right ||
-      e.clientY < rect.top ||
-      e.clientY > rect.bottom
-    );
-  };
-
-  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.preventDefault();
-    if (!isUploading) requestClose();
-  };
-
-  const handleDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.currentTarget.returnValue = '';
-    e.currentTarget.removeAttribute('data-closing');
-    isClosingRef.current = false;
-    if (clearOnCloseRef.current) {
-      clearOnCloseRef.current = false;
-      onClearFiles();
-    }
-    onClose();
-  };
-
-  const handleDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if (isUploading) {
-      pointerDownOutsideRef.current = false;
-      return;
-    }
-    if ('closedBy' in HTMLDialogElement.prototype) return;
-    pointerDownOutsideRef.current = isOutsideDialogBounds(e, e.currentTarget);
-  };
-
-  const handleDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if (isUploading) {
-      pointerDownOutsideRef.current = false;
-      return;
-    }
-    if ('closedBy' in HTMLDialogElement.prototype) return;
-    const startedOutside = pointerDownOutsideRef.current;
-    pointerDownOutsideRef.current = false;
-    if (!startedOutside) return;
-    if (isOutsideDialogBounds(e, e.currentTarget)) {
-      requestClose();
-    }
-  };
-
+  const hasPendingEmptyFolders = !hasCreatedEmptyFolders && stagedEmptyFolders.length > 0;
   const allActionableComplete =
     actionableItems.length > 0 && overallProgress.completedCount === actionableItems.length;
   const allConflictsSkipped =
     !allRejected && actionableItems.length === 0 && conflictItems.length > 0;
   const startUploadDisabled =
-    (isPlanning && !unstartedActionableItems.every((it) => selectedAccounts[it.key])) ||
-    allRejected ||
-    normalizedItems.length === 0 ||
-    unstartedActionableItems.length === 0 ||
+    isUploading ||
+    (isPlanning &&
+      unstartedActionableItems.length > 0 &&
+      !unstartedActionableItems.every((it) => selectedAccounts[it.key])) ||
+    (unstartedActionableItems.length === 0 && !hasPendingEmptyFolders) ||
     hasUnallocatedFiles;
-  const startUploadTitle = allActionableComplete
-    ? 'All staged files are already uploaded'
-    : allConflictsSkipped
-    ? 'All staged files already exist in the destination'
-    : failedItems.length > 0 && unstartedActionableItems.length === 0
-    ? 'Use Retry failed to re-attempt failed uploads'
-    : undefined;
+  const startUploadTitle =
+    allActionableComplete && !hasPendingEmptyFolders
+      ? 'All staged files are already uploaded'
+      : allConflictsSkipped && !hasPendingEmptyFolders
+      ? 'All staged files already exist in the destination'
+      : failedItems.length > 0 && unstartedActionableItems.length === 0 && !hasPendingEmptyFolders
+      ? 'Use Retry failed to re-attempt failed uploads'
+      : undefined;
 
   const renderDisplayRow = (row: UploadDisplayRow) => {
     if (row.kind === 'section_header') {
@@ -2272,21 +2271,19 @@ export function UploadDrawer({
     }
 
     if (row.kind === 'folder_group') {
+      const summary = folderSummaryByKey.get(row.group.key);
+      if (!summary) return null;
+      const singleTargetAcc = summary.singleTargetAccId
+        ? accountById.get(summary.singleTargetAccId)
+        : undefined;
       return (
         <UploadFolderCard
           group={row.group}
+          summary={summary}
+          singleTargetAcc={singleTargetAcc}
           isExpanded={Boolean(expandedFolders[row.group.key])}
           isUploading={isUploading}
           isPlanning={isPlanning}
-          previewByPath={previewByPath}
-          conflictsByPath={conflictsByPath}
-          contentMatchByKey={contentMatchByKey}
-          conflictActions={conflictActions}
-          selectedAccounts={selectedAccounts}
-          fileProgress={fileProgress}
-          accountById={accountById}
-          canHoldFile={canHoldFile}
-          canFitTotalBytes={canFitTotalBytes}
           onToggleExpand={handleToggleFolderExpand}
           onApplyFolderConflictAction={handleApplyFolderConflictAction}
         />
@@ -2333,6 +2330,7 @@ export function UploadDrawer({
         existingAcc={existingAcc}
         contentMatch={contentMatchByKey[item.key]}
         canHoldUpload={canHoldFile(item.file.size)}
+        canHoldReplace={existingFile ? canHoldFile(item.file.size, existingFile) : canHoldFile(item.file.size)}
         conflictAction={conflictActions[item.key]}
         selectedAccountId={selectedAccountId}
         chosenAcc={chosenAcc}
@@ -2347,34 +2345,17 @@ export function UploadDrawer({
   };
 
   return (
-    <dialog
-      ref={dialogRef}
-      data-tsubasa-dialog="drawer-sheet"
-      aria-label="Upload files"
-      onCancel={handleDialogCancel}
-      onClose={handleDialogClose}
-      onPointerDown={handleDialogPointerDown}
-      onPointerUp={handleDialogPointerUp}
-      {...stylex.props(styles.dialog)}
+    <DrawerSheet
+      isOpen={isOpen}
+      isLocked={isUploading}
+      onClose={onClose}
+      ariaLabel="Upload files"
+      title="Upload & allocation"
+      icon={<IconUpload size={16} strokeWidth={2.25} />}
+      closeAriaLabel="Close upload drawer"
+      requestCloseRef={requestCloseRef}
     >
-      <div {...stylex.props(styles.drawerSurface)}>
-        <div {...stylex.props(styles.drawerHeader)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            <IconUpload size={16} strokeWidth={2.25} />
-            <h2 {...stylex.props(styles.title)}>Upload & allocation</h2>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={requestClose}
-            disabled={isUploading}
-            aria-label="Close upload drawer"
-          >
-            <IconClose size={16} />
-          </button>
-        </div>
-
-        <div {...stylex.props(styles.summaryBar)}>
+      <div {...stylex.props(styles.summaryBar)}>
           <div {...stylex.props(styles.summaryMainRow)}>
             <div {...stylex.props(styles.destinationGroup)}>
               <span {...stylex.props(styles.destinationLabel)}>Destination:</span>
@@ -2430,7 +2411,12 @@ export function UploadDrawer({
                 ] as const
               ).map((opt) => {
                 const active = batchConflictSelection === opt.value;
-                const lacksCapacity = opt.value !== 'skip' && !batchCanFitConflicts;
+                const lacksCapacity =
+                  opt.value === 'replace'
+                    ? !batchCanFitReplace
+                    : opt.value === 'keep_both'
+                    ? !batchCanFitKeepBoth
+                    : false;
                 return (
                   <DrawerButton
                     key={opt.value}
@@ -2456,6 +2442,11 @@ export function UploadDrawer({
           {planError && (
             <div {...stylex.props(styles.planErrorBanner)}>
               <span {...stylex.props(styles.planErrorNotice)}>{planError}</span>
+              {!isPlanning && (
+                <DrawerButton variant="secondary" onClick={() => setPlanAttempt((n) => n + 1)}>
+                  Retry allocation
+                </DrawerButton>
+              )}
             </div>
           )}
 
@@ -2533,8 +2524,7 @@ export function UploadDrawer({
             </>
           )}
         </div>
-      </div>
-    </dialog>
+    </DrawerSheet>
   );
 }
 

@@ -21,19 +21,21 @@ import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
 import {
   getParentDir,
+  normalizeVirtualPath,
+  markDropHandled,
   setActiveInternalDragPayload,
   rejectInvalidInternalDragOver,
   parseInternalDropItems,
 } from '../utils/virtualPath.js';
 import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { RedactedEmail } from './RedactedEmail.js';
+import type { FileRecord, FolderRecord } from '../api.js';
+import type { AccountItem } from './Sidebar.js';
 
 const TABLE_ROW_HEIGHT_DESKTOP = 36;
 const TABLE_ROW_HEIGHT_COARSE = 44;
 const TABLE_ROW_HEIGHT_MOBILE = 64;
 const DOUBLE_CLICK_MS = 500;
-import type { FileRecord, FolderRecord } from '../api.js';
-import type { AccountItem } from './Sidebar.js';
 
 export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'trashedAt'> & {
   createdAt: string | Date;
@@ -78,6 +80,7 @@ interface FileTableProps {
   accounts?: AccountItem[];
   onTransferFile?: (fileId: string, targetAccountId: string) => Promise<void>;
   transferringFileId?: string | null;
+  transferringFileIds?: ReadonlySet<string>;
   sortColumn?: SortColumn;
   sortDirection?: SortDirection;
   onSortChange?: (column: SortColumn, direction: SortDirection) => void;
@@ -114,6 +117,7 @@ const styles = stylex.create({
     borderLeftColor: 'transparent',
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
+    // Intentionally widened Account/Date/Actions columns vs docs/styling-guide.md for inline transfer selects and action buttons
     gridTemplateColumns: '16px 40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'stretch',
     paddingLeft: '0px',
@@ -378,7 +382,7 @@ const styles = stylex.create({
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.accentGold,
-    backgroundColor: 'rgba(222, 183, 108, 0.14)',
+    backgroundColor: colors.accentGoldMarqueeBg,
     borderRadius: radius.compact,
     pointerEvents: 'none',
     zIndex: 50,
@@ -658,7 +662,7 @@ const styles = stylex.create({
     borderWidth: '2px',
     borderStyle: 'dashed',
     borderColor: colors.accentGold,
-    backgroundColor: 'rgba(222, 183, 108, 0.10)',
+    backgroundColor: colors.accentGoldDropBg,
     pointerEvents: 'none',
     userSelect: 'none',
     padding: spacing.space6,
@@ -670,14 +674,14 @@ const styles = stylex.create({
     color: colors.primaryText,
     letterSpacing: '0.02em',
     margin: 0,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBrand,
   },
   dropSubtitle: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     margin: 0,
-    lineHeight: '1.4',
+    lineHeight: typography.lineHeightBody,
   },
   loadingSpinner: {
     position: 'relative',
@@ -775,12 +779,16 @@ export async function extractDataTransferEntries(
               resolve();
             },
             () => {
-              const match = rawFiles.find((rf) => rf.name === entry.name);
-              if (match) {
-                resultFiles.push({
-                  file: match,
-                  virtualPath: `${currentFolder}/${match.name}`.replace(/\/+/g, '/'),
-                });
+              if (currentFolder === cleanBase) {
+                const match = rawFiles.find(
+                  (rf) => rf.name === entry.name && !(rf as any).webkitRelativePath?.includes('/')
+                );
+                if (match) {
+                  resultFiles.push({
+                    file: match,
+                    virtualPath: `${currentFolder}/${match.name}`.replace(/\/+/g, '/'),
+                  });
+                }
               }
               resolve();
             }
@@ -793,6 +801,7 @@ export async function extractDataTransferEntries(
       const nextFolder = `${currentFolder}/${entry.name}`.replace(/\/+/g, '/');
       const dirReader = entry.createReader();
       const childEntries: any[] = [];
+      let readError = false;
 
       const readBatch = async (): Promise<void> => {
         return new Promise<void>((resolve) => {
@@ -804,7 +813,10 @@ export async function extractDataTransferEntries(
               }
               resolve();
             },
-            () => resolve()
+            () => {
+              readError = true;
+              resolve();
+            }
           );
         });
       };
@@ -812,7 +824,9 @@ export async function extractDataTransferEntries(
       await readBatch();
 
       if (childEntries.length === 0) {
-        resultEmptyFolders.push(nextFolder);
+        if (!readError) {
+          resultEmptyFolders.push(nextFolder);
+        }
       } else {
         for (const child of childEntries) {
           await traverse(child, nextFolder);
@@ -1025,7 +1039,7 @@ const MemoParentRow = React.memo(function MemoParentRow({
           if (isInternalItemDrag(e) && !parseInternalDropItems(e, path, isCopyDrag)) {
             e.preventDefault();
             e.stopPropagation();
-            (e.nativeEvent as any).__tsubasaHandled = true;
+            markDropHandled(e);
             setActiveInternalDragPayload(null);
             onSetDragOverRowId(null);
             return;
@@ -1177,7 +1191,7 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
           if (isInternalItemDrag(e) && !parseInternalDropItems(e, folder.virtualPath, isCopyDrag)) {
             e.preventDefault();
             e.stopPropagation();
-            (e.nativeEvent as any).__tsubasaHandled = true;
+            markDropHandled(e);
             setActiveInternalDragPayload(null);
             onSetDragOverRowId(null);
             return;
@@ -1395,6 +1409,7 @@ const MemoFileRow = React.memo(function MemoFileRow({
         }
         onDragOver={(e) => {
           if (!isTrashItem && (isTrashView || isSharePoolActive)) return;
+          if (!isInternalItemDrag(e)) return;
           e.preventDefault();
           e.stopPropagation();
           if (e.dataTransfer) {
@@ -1405,9 +1420,11 @@ const MemoFileRow = React.memo(function MemoFileRow({
           isTrashItem
             ? undefined
             : (e) => {
+                if (isTrashView || isSharePoolActive) return;
+                if (!isInternalItemDrag(e)) return;
                 e.preventDefault();
                 e.stopPropagation();
-                (e.nativeEvent as any).__tsubasaHandled = true;
+                markDropHandled(e);
               }
         }
         {...stylex.props(
@@ -1470,6 +1487,11 @@ const MemoFileRow = React.memo(function MemoFileRow({
                   }
                 }}
               >
+                {!fileAcc && (
+                  <option value={file.accountId} disabled>
+                    {file.accountId}
+                  </option>
+                )}
                 {accounts.map((acc) => {
                   const { isMuted, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
                     acc,
@@ -1611,6 +1633,7 @@ export function FileTable({
   accounts = [],
   onTransferFile,
   transferringFileId = null,
+  transferringFileIds,
   sortColumn: sortColumnProp,
   sortDirection: sortDirectionProp,
   onSortChange,
@@ -1627,6 +1650,7 @@ export function FileTable({
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const marqueeBoxRef = useRef<HTMLDivElement | null>(null);
   const marqueeRafRef = useRef<number | null>(null);
+  const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const justFinishedMarquee = useRef(false);
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
@@ -1659,6 +1683,8 @@ export function FileTable({
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
       if (marqueeRafRef.current !== null) cancelAnimationFrame(marqueeRafRef.current);
       if (typeAheadTimerRef.current !== null) window.clearTimeout(typeAheadTimerRef.current);
+      marqueeCleanupRef.current?.();
+      marqueeCleanupRef.current = null;
     };
   }, []);
 
@@ -1789,51 +1815,19 @@ export function FileTable({
     onSortChange?.(column, newDirection);
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
-    if (isTrashView || isSharePoolActive) return;
-    e.preventDefault();
-    e.stopPropagation();
-    (e.nativeEvent as any).__tsubasaHandled = true;
-    setActiveInternalDragPayload(null);
-    setIsDropZoneActive(false);
-    setDragOverRowId(null);
+  const cleanPath = normalizeVirtualPath(currentPath);
 
-    if (e.dataTransfer) {
-      if (isInternalItemDrag(e)) {
-        const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
-        const parsed = parseInternalDropItems(e, cleanPath, isCopyDrag);
-        if (parsed) {
-          if (isCopyDrag) {
-            onCopyItems?.(parsed, cleanPath);
-          } else {
-            onMoveItems?.(parsed, cleanPath);
-          }
-        }
-        return;
-      }
-
-      if (isExternalFileDrag(e)) {
-        if (onStageDroppedUpload) {
-          const extracted = await extractDataTransferEntries(e.dataTransfer, cleanPath);
-          if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
-            onStageDroppedUpload(extracted);
-          }
-        } else if (onDropFiles && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          onDropFiles(Array.from(e.dataTransfer.files));
-        }
-      }
-    }
-  };
-
-  const handleRowDrop = useCallback(
+  const processDropTarget = useCallback(
     async (e: React.DragEvent, targetVirtualPath: string) => {
       if (isTrashView || isSharePoolActive) return;
       e.preventDefault();
       e.stopPropagation();
-      (e.nativeEvent as any).__tsubasaHandled = true;
+      markDropHandled(e);
       setActiveInternalDragPayload(null);
       setIsDropZoneActive(false);
       setDragOverRowId(null);
+
+      if (!e.dataTransfer) return;
 
       if (isInternalItemDrag(e)) {
         const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
@@ -1862,7 +1856,15 @@ export function FileTable({
     [isTrashView, isSharePoolActive, onMoveItems, onCopyItems, onStageDroppedUpload, onDropFiles]
   );
 
-  const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => processDropTarget(e, cleanPath),
+    [processDropTarget, cleanPath]
+  );
+
+  const handleRowDrop = useCallback(
+    (e: React.DragEvent, targetVirtualPath: string) => processDropTarget(e, targetVirtualPath),
+    [processDropTarget]
+  );
 
   useEffect(() => {
     anchorIndexRef.current = -1;
@@ -2115,6 +2117,8 @@ export function FileTable({
     const viewport = parentRef.current;
     if (!viewport) return;
 
+    marqueeCleanupRef.current?.();
+
     let cachedViewportRect = viewport.getBoundingClientRect();
     let maxContentX = viewport.scrollWidth;
     let maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
@@ -2206,7 +2210,7 @@ export function FileTable({
       let endIdx = -2;
       if (curItems.length > 0) {
         const rawStart = Math.floor(top / rowHeight);
-        const rawEnd = Math.floor((top + height) / rowHeight);
+        const rawEnd = height > 0 ? Math.floor((top + height - 1) / rowHeight) : rawStart;
         if (rawEnd >= 0 && rawStart < curItems.length) {
           startIdx = Math.max(0, rawStart);
           endIdx = Math.min(curItems.length - 1, rawEnd);
@@ -2255,23 +2259,32 @@ export function FileTable({
       }
     };
 
-    const onMouseUp = () => {
+    const cleanupMarquee = () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('blur', onMouseUp);
       window.removeEventListener('resize', onViewportChange);
+      if (marqueeCleanupRef.current === cleanupMarquee) {
+        marqueeCleanupRef.current = null;
+      }
+      isDragging = false;
+      hideMarqueeBox();
+    };
 
+    const onMouseUp = () => {
       if (isDragging) {
         justFinishedMarquee.current = true;
         setTimeout(() => {
           justFinishedMarquee.current = false;
         }, 80);
       }
-      isDragging = false;
-      hideMarqueeBox();
+      cleanupMarquee();
     };
 
+    marqueeCleanupRef.current = cleanupMarquee;
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('blur', onMouseUp);
     window.addEventListener('resize', onViewportChange, { passive: true });
   };
 
@@ -2606,6 +2619,8 @@ export function FileTable({
   useEffect(() => {
     const viewport = parentRef.current;
     if (!viewport) return;
+
+    marqueeCleanupRef.current?.();
     const header = headerRef.current;
 
     const canScrollY = (el: HTMLElement, deltaY: number) => {
@@ -3009,7 +3024,7 @@ export function FileTable({
                     fileAcc={accountById.get(file.accountId)}
                     accounts={accounts}
                     canTransfer={canTransferFiles}
-                    isTransferring={transferringFileId === file.id}
+                    isTransferring={Boolean(transferringFileIds?.has(file.id) || transferringFileId === file.id)}
                     isTrashView={isTrashView}
                     isSharePoolActive={isSharePoolActive}
                     isSearching={isSearching}

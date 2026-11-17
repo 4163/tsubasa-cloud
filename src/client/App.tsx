@@ -3977,8 +3977,7 @@ export function App() {
                 clipboard={isSharePoolActive ? null : clipboard}
                 accounts={accountItems}
                 onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
-                // Slice G (G-5) will upgrade FileTable to transferringFileIds
-                transferringFileId={transferringFileIds.values().next().value ?? null}
+                transferringFileIds={transferringFileIds}
                 onShareItem={isSharePoolActive ? undefined : handleShareItem}
                 isSharePoolActive={isSharePoolActive}
                 shareLinksByBatch={isShareLinksReady ? shareLinksByBatch : undefined}
@@ -4018,8 +4017,7 @@ export function App() {
                 clipboard={null}
                 accounts={accountItems}
                 onTransferFile={undefined}
-                // Slice G (G-5) will upgrade FileTable to transferringFileIds
-                transferringFileId={transferringFileIds.values().next().value ?? null}
+                transferringFileIds={transferringFileIds}
                 onShareItem={undefined}
                 isSharePoolActive={isSharePoolActive}
                 shareLinksByBatch={undefined}

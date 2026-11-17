@@ -488,59 +488,59 @@
 ### Slice G: Virtualized file table and drawers
 **Files owned:** `src/client/components/FileTable.tsx`, `src/client/components/UploadDrawer.tsx`, `src/client/components/ExternalChangesDrawer.tsx`, `src/client/components/DrawerPrimitives.tsx`.
 
-- [ ] **G-1 `[Blocking]` Allow external OS file drops over `MemoFileRow` in `FileTable.tsx`**
+- [x] **G-1 `[Blocking]` Allow external OS file drops over `MemoFileRow` in `FileTable.tsx`**
   - **Locations.** `src/client/components/FileTable.tsx:1396-1412`.
   - **Failure mode.** `MemoFileRow.onDragOver` / `onDrop` sets `dropEffect = 'none'` and marks drops handled without checking `isInternalItemDrag(e)`. Whenever files fill the viewport above `emptyDropZone`, external OS drops over rows silently fail.
   - **Preserved UX.** Internal item drags over file rows keep `dropEffect = 'none'`; folder rows, Trash, and Share Pool behavior stay identical.
   - **Steps.** Add `if (!isInternalItemDrag(e)) return;` in `MemoFileRow.onDragOver` and `MemoFileRow.onDrop` (after the `isTrashView || isSharePoolActive` check) so external drags bubble to `scrollViewport` and `App.tsx`.
 
-- [ ] **G-2 `[Blocking]` Enable empty-folder-only uploads and surface folder creation errors in `UploadDrawer.tsx`**
+- [x] **G-2 `[Blocking]` Enable empty-folder-only uploads and surface folder creation errors in `UploadDrawer.tsx`**
   - **Locations.** `src/client/components/UploadDrawer.tsx:1610, 1617-1631, 1837, 2255-2260`.
   - **Failure mode.** Dropping empty folders with `stagedFiles = []` leaves "Start upload" permanently disabled; `runUploadQueue` also ignores `!res.ok` / thrown errors from `client.api.folders.$post` while incrementing `succeededCount`.
   - **Preserved UX.** Empty folder cards and upload controls stay visually unchanged; "Start upload" enables when actionable files or pending empty folders exist.
   - **Steps.** Include `hasPendingEmptyFolders` in `startUploadDisabled`, `handleStartUpload`, and `runUploadQueue`; check `res.ok || res.status === 409` on folder creation and surface failures inline via `setPlanError`.
 
-- [ ] **G-3 `[Blocking]` Render backend upload errors inline in `UploadFileCard` instead of hover-only `title`**
+- [x] **G-3 `[Blocking]` Render backend upload errors inline in `UploadFileCard` instead of hover-only `title`**
   - **Locations.** `src/client/components/UploadDrawer.tsx:835-853`.
   - **Failure mode.** Failed uploads store `progress.error` only in `title={progress.error}`, invisible on touchscreens and keyboard focus.
   - **Preserved UX.** Failed badge stays unchanged; error text renders inline only on non-cancelled errors using existing `styles.fileCeilingWarning` styling.
   - **Steps.** Render `progress.error` inside `styles.fileCeilingWarning` below the card header when `!isRejected && progress?.status === 'error' && progress.error && progress.error !== 'Cancelled'`.
 
-- [ ] **G-4 `[Blocking]` Wrap `runUploadQueue` / `xhr.send` in `try/finally` and handle abort during `createEmptyFolders`**
+- [x] **G-4 `[Blocking]` Wrap `runUploadQueue` / `xhr.send` in `try/finally` and handle abort during `createEmptyFolders`**
   - **Locations.** `src/client/components/UploadDrawer.tsx:1608-1821, 1846-1863`.
   - **Failure mode.** Synchronous `xhr.send` errors or rejected `onUploadComplete()` leave `isUploading = true`, permanently locking the drawer (`closedby="none"`). Aborting while `createEmptyFolders` awaits leaves queued items stuck in `'pending'`.
   - **Preserved UX.** Normal upload, cancel, and retry behavior stay identical.
   - **Steps.** Wrap `runUploadQueue` in `try { ... } finally { xhrMapRef.current.clear(); setIsUploading(false); }`; wrap `xhr.open`/`setRequestHeader`/`send` in `try/catch`; mark `itemsToUpload` `'Cancelled'` if `abortedRef.current` is set after `createEmptyFolders`.
 
-- [ ] **G-5 `[Warning]` Fix `FileTable.tsx` missing account `<option>`, `transferringFileIds`, `readEntries` error swallowing, and marquee listener leaks**
+- [x] **G-5 `[Warning]` Fix `FileTable.tsx` missing account `<option>`, `transferringFileIds`, `readEntries` error swallowing, and marquee listener leaks**
   - **Locations.** `src/client/components/FileTable.tsx:80, 777-820, 1452-1486, 1657-1663, 2097-2276, 3012`.
   - **Failure mode.** Missing `file.accountId` in `accounts` misattributes the row to `accounts[0]`; single `transferringFileId` re-enables concurrent transfers prematurely; `dirReader.readEntries` errors silently register empty folders; `rawFiles.find` matches nested files by bare name; marquee drag leaks `window` listeners on unmount/blur and has a `rawEnd` boundary off-by-one.
   - **Preserved UX.** Table rows, marquee box, and inline transfer selects look and behave identically.
   - **Steps.** Render fallback `<option value={file.accountId}>` when missing from `accounts`; support `transferringFileIds?: ReadonlySet<string>`; skip `resultEmptyFolders.push` on `readEntries` error and restrict `rawFiles.find` to root entries; clean up marquee listeners on blur/unmount and fix `rawEnd = height > 0 ? Math.floor((top + height - 1) / rowHeight) : rawStart`.
 
-- [ ] **G-6 `[Warning]` Cache verified hashes, honor Replace `freedBytes`, and add placement retry in `UploadDrawer.tsx`**
+- [x] **G-6 `[Warning]` Cache verified hashes, honor Replace `freedBytes`, and add placement retry in `UploadDrawer.tsx`**
   - **Locations.** `src/client/components/UploadDrawer.tsx:877, 912-919, 1410, 1430-1585, 2335, 2456-2460`.
   - **Failure mode.** Clicking any conflict button replaces `conflictsByPath` and restarts SHA-256/MD5 hashing from byte 0 for all conflicting files; Replace buttons and drive `<select>` ignore `freedBytes` of the file being replaced; failed `placement.batch` requests disable "Start upload" with no retry button.
   - **Preserved UX.** Keep existing `planErrorBanner` and conflict cards; add `"Retry allocation"` inside `planErrorBanner` only when `planError && !isPlanning`.
   - **Steps.** Memoize verified hashes in a `Map<string, UploadContentMatchStatus>` ref keyed by `${item.key}::${existing.id}::${existing.hash ?? ''}`; pass `freedBytes` for Replace options in `canHoldFile` and `UploadFileCard`; add a `planAttempt` retry trigger inside `planErrorBanner`.
 
-- [ ] **G-7 `[Warning]` Virtualize `ExternalChangesDrawer` discrepancy lists (TanStack Virtual)**
+- [x] **G-7 `[Warning]` Virtualize `ExternalChangesDrawer` discrepancy lists (TanStack Virtual)**
   - **Locations.** `src/client/components/ExternalChangesDrawer.tsx:1312, 1392, 1601, 1653, 1704`.
   - **Failure mode.** Unbounded discrepancy cards render directly into the DOM, violating `AGENTS.md` constant-time DOM rendering.
   - **Preserved UX.** Card layout, badges, and actions stay identical; virtualize past `VIRTUALIZE_THRESHOLD = 30` (matching `UploadDrawer.tsx`).
   - **Steps.** Flatten discrepancy sections into a discriminated row list and wrap `contentScroll` with `useVirtualizer` when `rows.length > 30`.
 
-- [ ] **G-8 `[Blocking]` Fix silent partial-failure and notice-wipe bugs in `ExternalChangesDrawer.tsx`**
+- [x] **G-8 `[Blocking]` Fix silent partial-failure and notice-wipe bugs in `ExternalChangesDrawer.tsx`**
   - **Locations.** `src/client/components/ExternalChangesDrawer.tsx:712-718, 852-905, 980-1008, 1051-1093, 1258-1296`.
   - **Failure mode.** `eject-all` clears `unindexed`/`modified` even when `failedCount > 0`; `conflicts-batch` ignores `res.json()` (`failedCount`/`results`) and removes failed conflicts; `handleAutoRebalance` counts failed results as migrated, wipes its own `statusNotice` inside `scanAccount`, and clears sidebar pending count on scan failure; `selectedAccount` stays stale when `accounts` empties, leaving "Rescan" enabled; `statusNoticeBanner` scrolls offscreen inside `contentScroll`.
   - **Preserved UX.** Successful items still clear immediately; failed items stay visible with inline `statusNoticeBanner` pinned above `contentScroll`.
   - **Steps.** Parse `results` / `failedCount` in `conflicts-batch` and `eject-all` (rescanning on `eject-all` partial failures); filter `data.results` by `r.success` in `handleAutoRebalance`, scan first then set `statusNotice`, and preserve `countDiscrepancies(report)` if re-scan fails; clear `selectedAccount` and disable Rescan when `accounts.length === 0`; move `statusNoticeBanner` above `contentScroll`.
 
-- [ ] **G-9 `[Warning]` Eliminate `UploadFolderCard` 120 ms hot-path scans and clean `UploadDrawer`/`FileTable` code quality**
+- [x] **G-9 `[Warning]` Eliminate `UploadFolderCard` 120 ms hot-path scans and clean `UploadDrawer`/`FileTable` code quality**
   - **Locations.** `src/client/components/UploadDrawer.tsx:36, 979-1221, 1558-1569, 1954-1975`; `src/client/components/FileTable.tsx:35-36, 117, 277, 1792-1865`; `src/client/components/ExternalChangesDrawer.tsx:1253-1256`.
   - **Steps.** Precompute static folder summaries outside `UploadFolderCard` and compute folder progress totals in one pass alongside `overallProgress`; remove dead `reason`/`reasonLabel` and deduplicate `stagedEmptyFolders` keys; unify `handleDrop`/`handleRowDrop`, normalize `cleanPath`, move `import type` to top, and add a brief comment on intentional `FileTable` column widths vs `docs/styling-guide.md`; use `currentAccount` directly in `ExternalChangesDrawer` `<select title>`.
 
-- [ ] **G-10 `[Warning]` Extract `DrawerSheet`, add `'danger'` `DrawerButton`, fix drawer pointer guards, and adopt tokens**
+- [x] **G-10 `[Warning]` Extract `DrawerSheet`, add `'danger'` `DrawerButton`, fix drawer pointer guards, and adopt tokens**
   - **Locations.** `src/client/components/DrawerPrimitives.tsx`, `UploadDrawer.tsx:102, 270, 487, 2097-2250`, `ExternalChangesDrawer.tsx:109, 525-560, 1096-1195`, `FileTable.tsx:381, 661`.
   - **Failure mode.** Both drawers duplicate `<dialog>` shell/lifecycle/styles, omit `e.target === e.currentTarget` and `typeof dialog.getAnimations === 'function'` guards, inline `btnDanger` (missing coarse-pointer 44px hit target), and hardcode `rgba(...)`, transitions, and `'460px'` width.
   - **Preserved UX.** Drawer widths, colors, transitions, and backdrop behavior remain identical.
