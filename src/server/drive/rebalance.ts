@@ -1,16 +1,18 @@
 import path from 'node:path';
-import { db, sqlite } from '../db/index.js';
+import { bumpPoolRevision, db, sqlite } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, inArray } from 'drizzle-orm';
 import { getDriveClient, runBoundedConcurrency, withDriveRetry } from './client.js';
-import { copyDriveFileCrossAccount, deleteDriveFileIgnoreNotFound } from './transfer.js';
-import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
+import { copyDriveFileCrossAccount } from './transfer.js';
+import { deleteRemoteFileIgnoreNotFound, enqueueDriveOutbox } from './outbox.js';
+import { clearRemoteFolderCache, ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
 import { authPool } from './auth.js';
 import { invalidateDiscrepancyCache } from './detector.js';
 import {
   calculateHeadroom,
+  calculateUsableLimit,
   getAccountTransferStats,
-  recordTransfer,
+  recordTransferSync,
   InsufficientStorageError,
   type AccountTransferStats,
 } from '../storage/index.js';
@@ -159,6 +161,7 @@ export async function rebalanceFilesBatch(
     );
   }
 
+  const driveSource = getDriveClient(sourceAccountId);
   const driveTarget = getDriveClient(targetAccountId);
   const targetRootFolderId = targetAccount.rootFolderId;
   const results: RebalanceOperationResult[] = [];
@@ -200,6 +203,15 @@ export async function rebalanceFilesBatch(
           );
         } catch (err) {
           console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
+          enqueueDriveOutbox([
+            {
+              accountId: targetAccountId,
+              poolId: targetAccount.poolId,
+              opType: 'file_trash',
+              driveFileId: newDriveFileId,
+              payload: { fileId: file.id, driveFileId: newDriveFileId },
+            },
+          ]);
         }
       }
 
@@ -208,13 +220,23 @@ export async function rebalanceFilesBatch(
         stmts.updateFile.run(targetAccountId, newDriveFileId, file.id);
         stmts.decrementSourceQuota.run(file.sizeBytes, sourceAccountId);
         stmts.incrementTargetQuota.run(file.sizeBytes, targetAccountId);
+        recordTransferSync(targetAccountId, 'upload', file.sizeBytes, Date.now(), sourceAccount.poolId);
       }).immediate();
 
-      await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
-
-      await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId).catch((err) =>
-        console.warn(`Failed to delete source Drive file ${file.driveFileId} after rebalance:`, err)
-      );
+      try {
+        await deleteRemoteFileIgnoreNotFound(driveSource, file.driveFileId);
+      } catch (err) {
+        console.warn(`Failed to delete source Drive file ${file.driveFileId} after rebalance:`, err);
+        enqueueDriveOutbox([
+          {
+            accountId: sourceAccountId,
+            poolId: sourceAccount.poolId,
+            opType: 'file_delete',
+            driveFileId: file.driveFileId,
+            payload: { fileId: file.id, driveFileId: file.driveFileId },
+          },
+        ]);
+      }
 
       totalBytesMoved += file.sizeBytes;
       results.push({
@@ -228,6 +250,7 @@ export async function rebalanceFilesBatch(
     });
   } finally {
     if (results.length > 0) {
+      bumpPoolRevision(sourceAccount.poolId);
       invalidateDiscrepancyCache(sourceAccountId);
       invalidateDiscrepancyCache(targetAccountId);
     }
@@ -253,7 +276,7 @@ export async function planAccountRebalance(
     throw new Error(`Account ${sourceAccountId} not found`);
   }
 
-  const usable = account.quotaLimitBytes - 750 * 1024 * 1024;
+  const usable = calculateUsableLimit(account.quotaLimitBytes);
   if (account.quotaUsedBytes <= usable) {
     return null;
   }
@@ -337,13 +360,25 @@ export async function executeAutoRebalance(
   }
 
   const results: RebalanceOperationResult[] = [];
+  const batchErrors: unknown[] = [];
   for (const [targetAccountId, fileIds] of groupedByTarget) {
     try {
       const batchResult = await rebalanceFilesBatch(fileIds, targetAccountId);
       results.push(...batchResult.results);
     } catch (err) {
       console.error(`Auto-rebalance failed for target ${targetAccountId}:`, err);
+      batchErrors.push(err);
     }
+  }
+
+  if (batchErrors.length > 0) {
+    if (batchErrors.length === 1) {
+      throw batchErrors[0];
+    }
+    throw new AggregateError(
+      batchErrors,
+      `Auto-rebalance failed for ${batchErrors.length} target account(s)`
+    );
   }
 
   return results;
@@ -606,8 +641,35 @@ export async function removeDriveAccount(
   };
 
   if (account) {
+    if (!account.isDisabled) {
+      await db
+        .update(accounts)
+        .set({
+          isDisabled: true,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId));
+    }
+
     evacuationResult = await evacuateAccountFiles(accountId);
-    await db.delete(accounts).where(eq(accounts.id, accountId));
+
+    const deleteAccountIfEmpty = sqlite.transaction(() => {
+      const row = sqlite
+        .prepare<[string], { cnt: number }>('SELECT COUNT(*) AS cnt FROM files WHERE account_id = ?')
+        .get(accountId);
+      const cnt = row?.cnt ?? 0;
+      if (cnt > 0) {
+        throw new Error(`Cannot remove account ${accountId}: ${cnt} file(s) still remain on account`);
+      }
+      sqlite.prepare<[string]>('DELETE FROM accounts WHERE id = ?').run(accountId);
+    });
+    deleteAccountIfEmpty.immediate();
+
+    bumpPoolRevision(account.poolId);
+    invalidateDiscrepancyCache(accountId);
+    if (account.rootFolderId) {
+      clearRemoteFolderCache(account.rootFolderId);
+    }
   }
 
   authPool.removeAccount(accountId);

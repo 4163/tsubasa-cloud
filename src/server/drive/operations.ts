@@ -1,14 +1,13 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { db, sqlite, buildDirectoryPrefixBounds, bumpPoolRevision } from '../db/index.js';
-import { accounts, files, folders } from '../db/schema.js';
+import { files, folders } from '../db/schema.js';
 import { eq, or, and } from 'drizzle-orm';
 import {
   getDriveClient,
   getAccountRootFolderId,
   markAccountQuotaDecreased,
   runBoundedConcurrency,
-  withDriveRetry,
   evaluateFileContentMatch,
   type FileContentMatchStatus,
 } from './client.js';
@@ -89,7 +88,9 @@ let cachedStmts: {
   deleteFileById: SqliteStmt;
   decrementAccountQuotaUsed: SqliteStmt;
   deleteFolderById: SqliteStmt;
-  countActiveFilesInSubtree: SqliteStmt;
+  countAllFilesInSubtree: SqliteStmt;
+  selectFileIdByPath: SqliteStmt;
+  selectActiveFileAtPath: SqliteStmt;
   selectDescendantFiles: SqliteStmt;
   selectActiveDescendantFiles: SqliteStmt;
   selectDescendantFolders: SqliteStmt;
@@ -138,8 +139,14 @@ function getStmts() {
       'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
     ),
     deleteFolderById: sqlite.prepare('DELETE FROM folders WHERE id = ?'),
-    countActiveFilesInSubtree: sqlite.prepare(
-      'SELECT COUNT(*) as cnt FROM files WHERE pool_id = ? AND is_trashed = 0 AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
+    countAllFilesInSubtree: sqlite.prepare(
+      'SELECT COUNT(*) as cnt FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
+    ),
+    selectFileIdByPath: sqlite.prepare(
+      'SELECT id FROM files WHERE pool_id = ? AND virtual_path = ?'
+    ),
+    selectActiveFileAtPath: sqlite.prepare(
+      'SELECT id, virtual_path FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0 LIMIT 1'
     ),
     selectDescendantFiles: sqlite.prepare(
       'SELECT id, virtual_path, name, account_id, drive_file_id, size_bytes, hash, is_trashed, updated_at FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
@@ -209,6 +216,48 @@ function getRelevantPoolAccountIds(poolId: number, extraAccountIds: Iterable<str
     }
   }
   return accountIds;
+}
+
+function enqueuePoolAccountOutbox<TFile, TPayload>(
+  poolId: number,
+  opType: EnqueueOutboxEntry['opType'],
+  filesByAccount: Map<string, TFile[]>,
+  buildPayload: (filesForAccount: TFile[]) => TPayload,
+  targetEntries?: EnqueueOutboxEntry[]
+): void {
+  const entries = targetEntries ?? [];
+  const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
+  for (const accountId of relevantAccounts) {
+    entries.push({
+      accountId,
+      poolId,
+      opType,
+      payload: buildPayload(filesByAccount.get(accountId) ?? []),
+    });
+  }
+  if (!targetEntries) {
+    enqueueDriveOutbox(entries);
+  }
+}
+
+function assertFolderPathNotOccupiedByFile(folderPath: string, poolId: number): void {
+  const normalized = normalizeVirtualPath(folderPath);
+  if (normalized === '/') return;
+
+  const stmts = getStmts();
+  const segments = normalized.split('/').filter(Boolean);
+  let current = '';
+  for (const segment of segments) {
+    current += `/${segment}`;
+    const existingFile = stmts.selectActiveFileAtPath.get(poolId, current) as
+      | { id: string; virtual_path: string }
+      | undefined;
+    if (existingFile) {
+      throw new ItemConflictError(
+        `Cannot use destination folder "${normalized}" because a file exists at "${current}"`
+      );
+    }
+  }
 }
 
 export type MoveConflictMode = 'reject' | 'skip' | 'keep_both' | 'overwrite';
@@ -283,6 +332,15 @@ interface PlannedFolderMove {
   descendantFiles: DescendantFileRow[];
 }
 
+interface PlannedTrashedFileMove {
+  fileId: string;
+  accountId: string;
+  driveFileId: string;
+  newVirtualPath: string;
+  destFolder: string;
+  folderId: string | null;
+}
+
 interface PlannedFolderMerge {
   kind: 'folder_merge';
   oldFolderPath: string;
@@ -290,6 +348,7 @@ interface PlannedFolderMerge {
   sourceFolderIdsAndPaths: Array<{ id: string; oldPath: string; newPath: string }>;
   destFolderPathsToEnsure: string[];
   fileMoves: PlannedFileMove[];
+  trashedFileMoves: PlannedTrashedFileMove[];
 }
 
 type PlannedMoveOp = PlannedFileMove | PlannedFolderMove | PlannedFolderMerge;
@@ -349,6 +408,7 @@ export async function moveItems(
   conflictMode: MoveConflictMode = 'reject'
 ): Promise<MoveResult[]> {
   const destFolder = normalizeVirtualPath(targetFolderPath);
+  assertFolderPathNotOccupiedByFile(destFolder, poolId);
   const stmts = getStmts();
 
   type ResolvedInput =
@@ -755,7 +815,168 @@ export async function moveItems(
     const isMerge = Boolean((existingDestFolder && existingDestFolder.id !== folder.id) || claimedFolderPaths.has(newFolderPath));
 
     if (!isMerge) {
+      const plannedSubFolderPaths: string[] = [];
+      let nonMergeTypeError: string | null = null;
+
+      for (const sub of descendantFolders) {
+        const subDestPath = normalizeVirtualPath(newFolderPath + sub.virtual_path.slice(oldFolderPath.length));
+        const subFileBlocking = claimedFilePaths.has(subDestPath)
+          ? true
+          : Boolean(
+              await db.query.files.findFirst({
+                where: and(
+                  eq(files.poolId, poolId),
+                  eq(files.virtualPath, subDestPath),
+                  eq(files.isTrashed, false)
+                ),
+              })
+            );
+        if (subFileBlocking) {
+          nonMergeTypeError = `A file named "${sub.name}" already exists at "${subDestPath}"`;
+          break;
+        }
+        plannedSubFolderPaths.push(subDestPath);
+      }
+
+      if (nonMergeTypeError) {
+        results.push({
+          id: folder.id,
+          kind: 'folder',
+          type: 'folder',
+          oldPath: oldFolderPath,
+          newPath: newFolderPath,
+          success: false,
+          error: nonMergeTypeError,
+        });
+        continue;
+      }
+
+      const plannedDescendantFiles: Array<{
+        path: string;
+        source: { id: string; sizeBytes: number; updatedAt: number; hash: string | null };
+      }> = [];
+      let hasFileConflict = false;
+
+      for (const f of descendantFiles) {
+        if (f.is_trashed) continue;
+        const relative = f.virtual_path.startsWith(oldFolderPath + '/')
+          ? f.virtual_path.slice(oldFolderPath.length)
+          : `/${f.name}`;
+        const fileDestPath = normalizeVirtualPath(newFolderPath + relative);
+
+        const folderBlocking =
+          claimedFolderPaths.has(fileDestPath) ||
+          plannedSubFolderPaths.includes(fileDestPath) ||
+          Boolean(
+            await db.query.folders.findFirst({
+              where: and(eq(folders.poolId, poolId), eq(folders.virtualPath, fileDestPath)),
+            })
+          );
+        if (folderBlocking) {
+          nonMergeTypeError = `A folder named "${f.name}" already exists at "${fileDestPath}"`;
+          break;
+        }
+
+        const existingActive = await db.query.files.findFirst({
+          where: and(
+            eq(files.poolId, poolId),
+            eq(files.virtualPath, fileDestPath),
+            eq(files.isTrashed, false)
+          ),
+        });
+        const isExistingCollision = Boolean(existingActive && existingActive.id !== f.id);
+        const isBatchCollision = claimedFilePaths.has(fileDestPath);
+
+        if (isExistingCollision || isBatchCollision) {
+          hasFileConflict = true;
+          const batchClaimed = isBatchCollision ? claimedSourceByPath.get(fileDestPath) : undefined;
+          const preExisting =
+            !isBatchCollision && existingActive && existingActive.id !== f.id ? existingActive : undefined;
+          const compareTarget = preExisting
+            ? {
+                id: preExisting.id,
+                sizeBytes: preExisting.sizeBytes,
+                updatedAt: toEpochSeconds(preExisting.updatedAt),
+                hash: preExisting.hash,
+              }
+            : batchClaimed;
+
+          const contentMatch: FileContentMatchStatus = compareTarget
+            ? evaluateFileContentMatch(
+                f.size_bytes,
+                [f.hash ?? null],
+                compareTarget.sizeBytes,
+                compareTarget.hash
+              )
+            : 'unverified';
+          const canOverwrite = Boolean(preExisting && !selectedFileIds.has(preExisting.id));
+
+          conflicts.push({
+            sourceFileId: f.id,
+            sourcePath: f.virtual_path,
+            sourceName: f.name,
+            sourceSizeBytes: f.size_bytes,
+            sourceUpdatedAt: f.updated_at,
+            destPath: fileDestPath,
+            ...(preExisting ? { existingFileId: preExisting.id } : {}),
+            ...(compareTarget
+              ? {
+                  existingSizeBytes: compareTarget.sizeBytes,
+                  existingUpdatedAt: compareTarget.updatedAt,
+                }
+              : {}),
+            contentMatch,
+            canOverwrite,
+          });
+          continue;
+        }
+
+        plannedDescendantFiles.push({
+          path: fileDestPath,
+          source: {
+            id: f.id,
+            sizeBytes: f.size_bytes,
+            updatedAt: f.updated_at,
+            hash: f.hash ?? null,
+          },
+        });
+      }
+
+      if (nonMergeTypeError) {
+        results.push({
+          id: folder.id,
+          kind: 'folder',
+          type: 'folder',
+          oldPath: oldFolderPath,
+          newPath: newFolderPath,
+          success: false,
+          error: nonMergeTypeError,
+        });
+        continue;
+      }
+
+      if (hasFileConflict) {
+        results.push({
+          id: folder.id,
+          kind: 'folder',
+          type: 'folder',
+          oldPath: oldFolderPath,
+          newPath: newFolderPath,
+          success: false,
+          error: 'Destination has conflicting files',
+        });
+        continue;
+      }
+
       claimedFolderPaths.add(newFolderPath);
+      for (const subDestPath of plannedSubFolderPaths) {
+        claimedFolderPaths.add(subDestPath);
+      }
+      for (const entry of plannedDescendantFiles) {
+        claimedFilePaths.add(entry.path);
+        claimedSourceByPath.set(entry.path, entry.source);
+      }
+
       cleanCount++;
       const parentId = destFolder === '/' ? null : formatFolderId(poolId, destFolder);
       const newFolderId = formatFolderId(poolId, newFolderPath);
@@ -826,16 +1047,32 @@ export async function moveItems(
     }
 
     const mergeFileMoves: PlannedFileMove[] = [];
+    const mergeTrashedFileMoves: PlannedTrashedFileMove[] = [];
     let mergeFileTypeError: string | null = null;
     let mergeSkippedCount = 0;
 
     for (const f of descendantFiles) {
-      if (f.is_trashed) continue;
       const relative = f.virtual_path.startsWith(oldFolderPath + '/')
         ? f.virtual_path.slice(oldFolderPath.length)
         : `/${f.name}`;
       const targetFilePath = normalizeVirtualPath(newFolderPath + relative);
       const targetFileDir = path.posix.dirname(targetFilePath);
+      const targetDirNormalized = targetFileDir === '.' ? '/' : targetFileDir;
+
+      if (f.is_trashed) {
+        const folderId =
+          targetDirNormalized === '/' ? null : formatFolderId(poolId, targetDirNormalized);
+        mergeTrashedFileMoves.push({
+          fileId: f.id,
+          accountId: f.account_id,
+          driveFileId: f.drive_file_id,
+          newVirtualPath: targetFilePath,
+          destFolder: targetDirNormalized,
+          folderId,
+        });
+        continue;
+      }
+
       const filePlan = await planSingleFileMove(
         {
           id: f.id,
@@ -848,7 +1085,7 @@ export async function moveItems(
           updatedAt: f.updated_at,
           isTrashed: false,
         },
-        targetFileDir === '.' ? '/' : targetFileDir
+        targetDirNormalized
       );
 
       if (filePlan.status === 'move' && filePlan.op) {
@@ -885,6 +1122,7 @@ export async function moveItems(
       sourceFolderIdsAndPaths,
       destFolderPathsToEnsure,
       fileMoves: mergeFileMoves,
+      trashedFileMoves: mergeTrashedFileMoves,
     });
 
     results.push({
@@ -935,6 +1173,7 @@ export async function moveItems(
 
       const commitFileMove = (op: PlannedFileMove) => {
         if (op.destFolder !== '/' && op.destFolder !== '.') {
+          assertFolderPathNotOccupiedByFile(op.destFolder, poolId);
           ensureLocalFolderPath(op.destFolder, poolId);
         }
         stmts.displaceTrashedFileAtPath.run(
@@ -985,6 +1224,12 @@ export async function moveItems(
               : path.posix.join(op.newFolderPath, f.name);
             const fileParent = path.posix.dirname(fileNewPath);
             const fileParentId = fileParent === '/' ? null : formatFolderId(poolId, fileParent);
+            stmts.displaceTrashedFileAtPath.run(
+              `${fileNewPath}.trashed-${Date.now()}`,
+              poolId,
+              fileNewPath,
+              f.id
+            );
             stmts.updateDescendantFilePath.run(fileNewPath, fileParentId, f.id);
 
             if (!f.is_trashed) {
@@ -1001,23 +1246,22 @@ export async function moveItems(
             }
           }
 
-          const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
-          for (const accountId of relevantAccounts) {
-            outboxEntries.push({
-              accountId,
-              poolId,
-              opType: 'folder_move_account',
-              payload: {
-                oldFolderPath: op.oldFolderPath,
-                newFolderPath: op.newFolderPath,
-                destFolder,
-                files: filesByAccount.get(accountId) ?? [],
-              } satisfies FolderMoveAccountOutboxPayload,
-            });
-          }
+          enqueuePoolAccountOutbox(
+            poolId,
+            'folder_move_account',
+            filesByAccount,
+            (filesForAccount): FolderMoveAccountOutboxPayload => ({
+              oldFolderPath: op.oldFolderPath,
+              newFolderPath: op.newFolderPath,
+              destFolder,
+              files: filesForAccount,
+            }),
+            outboxEntries
+          );
         } else {
-          // Folder merge: ensure destination tree, move active files, and prune emptied source folders.
+          // Folder merge: ensure destination tree, move active and trashed files, and prune emptied source folders.
           for (const destPath of op.destFolderPathsToEnsure) {
+            assertFolderPathNotOccupiedByFile(destPath, poolId);
             ensureLocalFolderPath(destPath, poolId);
           }
 
@@ -1050,14 +1294,42 @@ export async function moveItems(
             });
           }
 
-          // Delete source folders bottom-up only if zero active files remain under them.
+          for (const tf of op.trashedFileMoves) {
+            if (tf.destFolder !== '/' && tf.destFolder !== '.') {
+              assertFolderPathNotOccupiedByFile(tf.destFolder, poolId);
+              ensureLocalFolderPath(tf.destFolder, poolId);
+            }
+            let finalPath = tf.newVirtualPath;
+            const existing = stmts.selectFileIdByPath.get(poolId, finalPath) as
+              | { id: string }
+              | undefined;
+            if (existing && existing.id !== tf.fileId) {
+              finalPath = `${tf.newVirtualPath}.trashed-${Date.now()}-${tf.fileId.slice(0, 8)}`;
+            }
+            stmts.updateDescendantFilePath.run(finalPath, tf.folderId, tf.fileId);
+
+            let list = filesByAccount.get(tf.accountId);
+            if (!list) {
+              list = [];
+              filesByAccount.set(tf.accountId, list);
+            }
+            list.push({
+              id: tf.fileId,
+              driveFileId: tf.driveFileId,
+              newVirtualPath: finalPath,
+              destFolder: tf.destFolder,
+              wasTrashed: false,
+            });
+          }
+
+          // Delete source folders bottom-up only if zero files (active or trashed) remain under them.
           const sortedSourceFolders = [...op.sourceFolderIdsAndPaths].sort(
             (a, b) => b.oldPath.length - a.oldPath.length
           );
           const prunedSourcePaths: string[] = [];
           for (const sf of sortedSourceFolders) {
             const bounds = buildDirectoryPrefixBounds(sf.oldPath);
-            const row = stmts.countActiveFilesInSubtree.get(
+            const row = stmts.countAllFilesInSubtree.get(
               poolId,
               bounds.lower,
               bounds.upper,
@@ -1069,20 +1341,18 @@ export async function moveItems(
             }
           }
 
-          const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
-          for (const accountId of relevantAccounts) {
-            outboxEntries.push({
-              accountId,
-              poolId,
-              opType: 'folder_merge_account',
-              payload: {
-                oldFolderPath: op.oldFolderPath,
-                sourceFolderPathsToPrune: prunedSourcePaths,
-                ensuredFolderPaths: op.destFolderPathsToEnsure,
-                files: filesByAccount.get(accountId) ?? [],
-              } satisfies FolderMergeAccountOutboxPayload,
-            });
-          }
+          enqueuePoolAccountOutbox(
+            poolId,
+            'folder_merge_account',
+            filesByAccount,
+            (filesForAccount): FolderMergeAccountOutboxPayload => ({
+              oldFolderPath: op.oldFolderPath,
+              sourceFolderPathsToPrune: prunedSourcePaths,
+              ensuredFolderPaths: op.destFolderPathsToEnsure,
+              files: filesForAccount,
+            }),
+            outboxEntries
+          );
         }
       }
 
@@ -1111,15 +1381,25 @@ export interface CopyResult {
   error?: string;
 }
 
+export function formatCopyCandidateName(
+  baseName: string,
+  counter: number,
+  kind: 'file' | 'folder' = 'file'
+): string {
+  if (counter <= 0) {
+    return baseName;
+  }
+  const ext = kind === 'file' ? path.posix.extname(baseName) : '';
+  const stem = kind === 'file' ? path.posix.basename(baseName, ext) : baseName;
+  return counter === 1 ? `${stem} (copy)${ext}` : `${stem} (copy ${counter})${ext}`;
+}
+
 export async function getAvailableCopyPath(
   targetDir: string,
   baseName: string,
   kind: 'file' | 'folder',
   poolId = 1
 ): Promise<string> {
-  const ext = kind === 'file' ? path.extname(baseName) : '';
-  const stem = kind === 'file' ? path.basename(baseName, ext) : baseName;
-
   let candidateName = baseName;
   let candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
   let counter = 1;
@@ -1144,7 +1424,7 @@ export async function getAvailableCopyPath(
       if (!exists) return candidatePath;
     }
 
-    candidateName = counter === 1 ? `${stem} (copy)${ext}` : `${stem} (copy ${counter})${ext}`;
+    candidateName = formatCopyCandidateName(baseName, counter, kind);
     candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
     counter++;
   }
@@ -1156,15 +1436,12 @@ function allocateAvailableCopyPath(
   kind: 'file' | 'folder',
   occupiedPaths: Set<string>
 ): string {
-  const ext = kind === 'file' ? path.posix.extname(baseName) : '';
-  const stem = kind === 'file' ? path.posix.basename(baseName, ext) : baseName;
-
   let candidateName = baseName;
   let candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
   let counter = 1;
 
   while (occupiedPaths.has(candidatePath)) {
-    candidateName = counter === 1 ? `${stem} (copy)${ext}` : `${stem} (copy ${counter})${ext}`;
+    candidateName = formatCopyCandidateName(baseName, counter, kind);
     candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
     counter++;
   }
@@ -1199,6 +1476,7 @@ export async function copyItems(
 ): Promise<CopyResult[]> {
   const destFolder = normalizeVirtualPath(targetFolderPath);
   if (destFolder !== '/') {
+    assertFolderPathNotOccupiedByFile(destFolder, poolId);
     ensureLocalFolderPath(destFolder, poolId);
   }
 
@@ -1241,28 +1519,34 @@ export async function copyItems(
   const copySeenIds = new Set<string>();
   const resolvedCopyKinds: Array<'file' | 'folder'> = new Array(items.length);
   const resolvedCopyPaths: Array<string | null> = new Array(items.length).fill(null);
+  const resolvedFolders: Array<typeof folders.$inferSelect | undefined> = new Array(items.length);
+  const resolvedFiles: Array<typeof files.$inferSelect | undefined> = new Array(items.length);
   const duplicateInputIndices = new Set<number>();
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     let resolvedKind = item.kind || item.type;
+    let prefetchedFolder: typeof folders.$inferSelect | undefined;
     if (!resolvedKind) {
-      const folderExists = await db.query.folders.findFirst({
+      prefetchedFolder = await db.query.folders.findFirst({
         where: and(
           eq(folders.poolId, poolId),
           or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
         ),
       });
-      resolvedKind = folderExists ? 'folder' : 'file';
+      resolvedKind = prefetchedFolder ? 'folder' : 'file';
     }
     resolvedCopyKinds[i] = resolvedKind;
     if (resolvedKind === 'folder') {
-      const f = await db.query.folders.findFirst({
-        where: and(
-          eq(folders.poolId, poolId),
-          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
-        ),
-      });
+      const f =
+        prefetchedFolder ??
+        (await db.query.folders.findFirst({
+          where: and(
+            eq(folders.poolId, poolId),
+            or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
+          ),
+        }));
+      resolvedFolders[i] = f;
       if (f) {
         if (copySeenIds.has(f.id)) {
           duplicateInputIndices.add(i);
@@ -1279,6 +1563,7 @@ export async function copyItems(
           or(eq(files.id, item.id), eq(files.virtualPath, item.id))
         ),
       });
+      resolvedFiles[i] = f;
       if (f) {
         if (copySeenIds.has(f.id)) {
           duplicateInputIndices.add(i);
@@ -1316,12 +1601,7 @@ export async function copyItems(
     });
 
     if (resolvedKind === 'file') {
-      const file = await db.query.files.findFirst({
-        where: and(
-          eq(files.poolId, poolId),
-          or(eq(files.id, item.id), eq(files.virtualPath, item.id))
-        ),
-      });
+      const file = resolvedFiles[i];
 
       if (!file) {
         results[resultIndex] = {
@@ -1362,12 +1642,7 @@ export async function copyItems(
         success: false,
       };
     } else if (resolvedKind === 'folder') {
-      const folder = await db.query.folders.findFirst({
-        where: and(
-          eq(folders.poolId, poolId),
-          or(eq(folders.id, item.id), eq(folders.virtualPath, item.id))
-        ),
-      });
+      const folder = resolvedFolders[i];
 
       if (!folder) {
         results[resultIndex] = {
@@ -1457,6 +1732,7 @@ export async function copyItems(
   }
 
   for (const folderPath of foldersToEnsure) {
+    assertFolderPathNotOccupiedByFile(folderPath, poolId);
     ensureLocalFolderPath(folderPath, poolId);
   }
 
@@ -1568,23 +1844,21 @@ export async function copyItems(
         );
 
         const newFileId = randomUUID();
-        const newDriveFileId = await withDriveRetry(() =>
-          copyDriveFileCrossAccount({
-            sourceAccountId: task.sourceAccountId,
-            sourceDriveFileId: task.sourceDriveFileId,
-            targetAccountId,
-            targetAccountEmail: targetAccount.email,
-            targetRemoteFolderId,
-            destFileName: task.destFileName,
-            appProperties: {
-              tsubasa_managed: 'true',
-              tsubasa_virtual_path: task.destVirtualPath,
-              tsubasa_virtual_id: newFileId,
-              tsubasa_checksum: task.hash || '',
-            },
-            fields: 'id, name, size',
-          })
-        );
+        const newDriveFileId = await copyDriveFileCrossAccount({
+          sourceAccountId: task.sourceAccountId,
+          sourceDriveFileId: task.sourceDriveFileId,
+          targetAccountId,
+          targetAccountEmail: targetAccount.email,
+          targetRemoteFolderId,
+          destFileName: task.destFileName,
+          appProperties: {
+            tsubasa_managed: 'true',
+            tsubasa_virtual_path: task.destVirtualPath,
+            tsubasa_virtual_id: newFileId,
+            tsubasa_checksum: task.hash || '',
+          },
+          fields: 'id, name, size',
+        });
 
         task.newFileId = newFileId;
         task.newDriveFileId = newDriveFileId;
@@ -1831,6 +2105,12 @@ export async function renameItem(
         : path.posix.join(newFolderPath, f.name);
       const fileParent = path.posix.dirname(fileNewPath);
       const fileParentId = fileParent === '/' ? null : formatFolderId(poolId, fileParent);
+      stmts.displaceTrashedFileAtPath.run(
+        `${fileNewPath}.trashed-${Date.now()}`,
+        poolId,
+        fileNewPath,
+        f.id
+      );
       stmts.updateDescendantFilePath.run(fileNewPath, fileParentId, f.id);
 
       let list = filesByAccount.get(f.account_id);
@@ -1845,22 +2125,17 @@ export async function renameItem(
       });
     }
 
-    const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
-    const outboxEntries: EnqueueOutboxEntry[] = [];
-    for (const accountId of relevantAccounts) {
-      outboxEntries.push({
-        accountId,
-        poolId,
-        opType: 'folder_rename_account',
-        payload: {
-          oldFolderPath,
-          newFolderPath,
-          newName,
-          files: filesByAccount.get(accountId) ?? [],
-        } satisfies FolderRenameAccountOutboxPayload,
-      });
-    }
-    enqueueDriveOutbox(outboxEntries);
+    enqueuePoolAccountOutbox(
+      poolId,
+      'folder_rename_account',
+      filesByAccount,
+      (filesForAccount): FolderRenameAccountOutboxPayload => ({
+        oldFolderPath,
+        newFolderPath,
+        newName,
+        files: filesForAccount,
+      })
+    );
   }).immediate();
 
   bumpPoolRevision(poolId);
@@ -1901,20 +2176,15 @@ export async function trashFolder(
       });
     }
 
-    const relevantAccounts = getRelevantPoolAccountIds(poolId, filesByAccount.keys());
-    const outboxEntries: EnqueueOutboxEntry[] = [];
-    for (const accountId of relevantAccounts) {
-      outboxEntries.push({
-        accountId,
-        poolId,
-        opType: 'folder_trash_account',
-        payload: {
-          normPath,
-          files: filesByAccount.get(accountId) ?? [],
-        } satisfies FolderTrashAccountOutboxPayload,
-      });
-    }
-    enqueueDriveOutbox(outboxEntries);
+    enqueuePoolAccountOutbox(
+      poolId,
+      'folder_trash_account',
+      filesByAccount,
+      (filesForAccount): FolderTrashAccountOutboxPayload => ({
+        normPath,
+        files: filesForAccount,
+      })
+    );
   }).immediate();
 
   bumpPoolRevision(poolId);

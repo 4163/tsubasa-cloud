@@ -12,9 +12,10 @@ import {
   withDriveRetry,
   runBoundedConcurrency,
   evaluateFileContentMatch,
+  CLEARED_TSUBASA_APP_PROPERTIES,
 } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
-import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
+import { FileExceedsCeilingError, MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 import {
   ensureLocalParentFolders,
   insertFolderRecord,
@@ -23,7 +24,8 @@ import {
   upsertFileStmt,
   pendingAppPropertyDriveIds,
 } from './sync.js';
-import { getAvailableCopyPath } from './operations.js';
+import { formatCopyCandidateName, getAvailableCopyPath, ItemConflictError } from './operations.js';
+import { enqueueDriveOutbox, scheduleOutboxDrain } from './outbox.js';
 
 export type ConflictResolutionAction = 'keep_both' | 'deduplicate' | 'replace_existing' | 'eject';
 
@@ -122,8 +124,15 @@ function bumpScanGeneration(accountId?: string): void {
 export function invalidateDiscrepancyCache(accountId?: string): void {
   if (accountId) {
     discrepancyCache.delete(accountId);
+    const prefix = `${accountId}:`;
+    for (const key of driveFileParentsCache.keys()) {
+      if (key.startsWith(prefix)) {
+        driveFileParentsCache.delete(key);
+      }
+    }
   } else {
     discrepancyCache.clear();
+    driveFileParentsCache.clear();
   }
   bumpScanGeneration(accountId);
 }
@@ -165,6 +174,184 @@ function getMarkPendingDriveSyncFailedStmt() {
     `);
   }
   return _markPendingDriveSyncFailedStmt as any;
+}
+
+let _selectActiveByPathStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectActiveByPathStmt() {
+  if (!_selectActiveByPathStmt) {
+    _selectActiveByPathStmt = sqlite.prepare(
+      'SELECT id, account_id, drive_file_id FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0 LIMIT 1'
+    );
+  }
+  return _selectActiveByPathStmt as any;
+}
+
+let _selectIdByDriveIdStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectIdByDriveIdStmt() {
+  if (!_selectIdByDriveIdStmt) {
+    _selectIdByDriveIdStmt = sqlite.prepare(
+      'SELECT id FROM files WHERE drive_file_id = ? AND account_id = ? LIMIT 1'
+    );
+  }
+  return _selectIdByDriveIdStmt as any;
+}
+
+let _deleteByDriveIdStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getDeleteByDriveIdStmt() {
+  if (!_deleteByDriveIdStmt) {
+    _deleteByDriveIdStmt = sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?');
+  }
+  return _deleteByDriveIdStmt as any;
+}
+
+let _deleteByIdStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getDeleteByIdStmt() {
+  if (!_deleteByIdStmt) {
+    _deleteByIdStmt = sqlite.prepare('DELETE FROM files WHERE id = ?');
+  }
+  return _deleteByIdStmt as any;
+}
+
+let _moveAsideTrashedStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getMoveAsideTrashedStmt() {
+  if (!_moveAsideTrashedStmt) {
+    _moveAsideTrashedStmt = sqlite.prepare(
+      'UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1'
+    );
+  }
+  return _moveAsideTrashedStmt as any;
+}
+
+let _selectIdOwnerStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectIdOwnerStmt() {
+  if (!_selectIdOwnerStmt) {
+    _selectIdOwnerStmt = sqlite.prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1');
+  }
+  return _selectIdOwnerStmt as any;
+}
+
+interface CommitIndexedFileParams {
+  poolId: number;
+  accountId: string;
+  driveFileId: string;
+  virtualPath: string;
+  fileName?: string;
+  sizeBytes: number;
+  mimeType: string;
+  hash: string | null;
+  preferredFileId?: string;
+  resolvedFileId?: string;
+  trashSuffix?: string;
+  ensuredFolders?: Set<string>;
+  markPendingDriveSync?: boolean;
+  replacedActiveFile?: { id: string; accountId: string; driveFileId: string } | null;
+  enqueueTrashForReplaced?: boolean;
+}
+
+function upsertIndexedFileInCurrentTx(params: CommitIndexedFileParams): string {
+  const {
+    poolId,
+    accountId,
+    driveFileId,
+    virtualPath,
+    fileName,
+    sizeBytes,
+    mimeType,
+    hash,
+    preferredFileId,
+    resolvedFileId,
+    trashSuffix,
+    ensuredFolders,
+    markPendingDriveSync,
+    replacedActiveFile,
+    enqueueTrashForReplaced,
+  } = params;
+
+  if (replacedActiveFile && replacedActiveFile.driveFileId !== driveFileId) {
+    getDeleteByIdStmt().run(replacedActiveFile.id);
+    if (enqueueTrashForReplaced) {
+      enqueueDriveOutbox([
+        {
+          accountId: replacedActiveFile.accountId,
+          poolId,
+          opType: 'file_trash',
+          driveFileId: replacedActiveFile.driveFileId,
+          payload: { fileId: replacedActiveFile.id, driveFileId: replacedActiveFile.driveFileId },
+        },
+      ]);
+    }
+  }
+
+  const activeOccupant = getSelectActiveByPathStmt().get(poolId, virtualPath) as
+    | { id: string; account_id: string; drive_file_id: string }
+    | undefined;
+  if (
+    activeOccupant &&
+    (activeOccupant.account_id !== accountId || activeOccupant.drive_file_id !== driveFileId)
+  ) {
+    throw new ItemConflictError(`An active file already exists at "${virtualPath}"`);
+  }
+
+  const existingByDrive = resolvedFileId
+    ? undefined
+    : (getSelectIdByDriveIdStmt().get(driveFileId, accountId) as { id: string } | undefined);
+
+  getDeleteByDriveIdStmt().run(driveFileId, accountId);
+  getMoveAsideTrashedStmt().run(
+    `${virtualPath}${trashSuffix ?? `.trashed-${Date.now()}`}`,
+    poolId,
+    virtualPath
+  );
+
+  if (ensuredFolders) {
+    const folderPaths = extractFolderPaths(virtualPath);
+    for (let i = folderPaths.length - 1; i >= 0; i--) {
+      if (ensuredFolders.has(folderPaths[i])) continue;
+      insertFolderRecord(folderPaths[i], poolId);
+      ensuredFolders.add(folderPaths[i]);
+    }
+  } else {
+    ensureLocalParentFolders(virtualPath, poolId);
+  }
+
+  let fileId = resolvedFileId;
+  if (!fileId) {
+    const candidateId = preferredFileId || existingByDrive?.id || driveFileId;
+    const idCollision = getSelectIdOwnerStmt().get(candidateId) as
+      | { id: string; drive_file_id: string; account_id: string }
+      | undefined;
+    fileId =
+      idCollision && (idCollision.drive_file_id !== driveFileId || idCollision.account_id !== accountId)
+        ? randomUUID()
+        : candidateId;
+  }
+
+  const parentDir = path.posix.dirname(virtualPath);
+  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
+
+  upsertFileStmt.run(
+    fileId,
+    poolId,
+    virtualPath,
+    fileName ?? path.posix.basename(virtualPath),
+    sizeBytes,
+    mimeType,
+    hash,
+    accountId,
+    driveFileId,
+    folderId,
+    0
+  );
+
+  if (markPendingDriveSync) {
+    getUpsertPendingDriveSyncStmt().run(accountId, driveFileId, virtualPath, fileId);
+  }
+
+  return fileId;
+}
+
+function commitIndexedFileTx(params: CommitIndexedFileParams): string {
+  return sqlite.transaction(() => upsertIndexedFileInCurrentTx(params))();
 }
 
 function getCachedDiscrepancyReport(accountId: string): DiscrepancyReport | null {
@@ -407,8 +594,15 @@ export async function scanAccountDiscrepancies(
                   discrepancyType: 'unindexed',
                 });
               } else if (
-                (existing.sizeBytes !== sizeBytes || existing.virtualPath !== virtualPath) &&
-                !pendingDriveIdsForAccount.has(remote.id)
+                !pendingDriveIdsForAccount.has(remote.id) &&
+                (existing.sizeBytes !== sizeBytes ||
+                  existing.virtualPath !== virtualPath ||
+                  evaluateFileContentMatch(
+                    sizeBytes,
+                    [remote.appProperties?.tsubasa_checksum, remote.md5Checksum, remote.sha256Checksum],
+                    existing.sizeBytes,
+                    existing.hash
+                  ) === 'different')
               ) {
                 modified.push({
                   driveFileId: remote.id,
@@ -487,56 +681,25 @@ export async function acceptExternalFile(
   const fastSizeBytes = preScanned?.sizeBytes ?? cachedItem?.sizeBytes;
 
   if (fastVirtualPath && fastSizeBytes !== undefined && Number.isFinite(fastSizeBytes)) {
+    if (fastSizeBytes > MAX_SINGLE_FILE_BYTES) {
+      throw new FileExceedsCeilingError(fastSizeBytes);
+    }
     const virtualPath = normalizeVirtualPath(fastVirtualPath);
-    const fileName = preScanned?.name ? path.posix.basename(virtualPath) : path.posix.basename(virtualPath);
+    const fileName = path.posix.basename(virtualPath);
     const mimeType = preScanned?.mimeType ?? cachedItem?.mimeType ?? 'application/octet-stream';
     const hash = preScanned?.hash !== undefined ? preScanned.hash : (cachedItem?.hash ?? null);
 
-    let committedFileId = driveFileId;
-
-    sqlite.transaction(() => {
-      const existingByDrive = sqlite
-        .prepare('SELECT id FROM files WHERE drive_file_id = ? AND account_id = ? LIMIT 1')
-        .get(driveFileId, accountId) as { id: string } | undefined;
-
-      sqlite
-        .prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?')
-        .run(driveFileId, accountId);
-
-      sqlite
-        .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-        .run(`${virtualPath}.trashed-${Date.now()}`, poolId, virtualPath);
-
-      const candidateId = existingByDrive?.id ?? driveFileId;
-      const idCollision = sqlite
-        .prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1')
-        .get(candidateId) as { id: string; drive_file_id: string; account_id: string } | undefined;
-
-      committedFileId =
-        idCollision && (idCollision.drive_file_id !== driveFileId || idCollision.account_id !== accountId)
-          ? randomUUID()
-          : candidateId;
-
-      ensureLocalParentFolders(virtualPath, poolId);
-      const parentDir = path.posix.dirname(virtualPath);
-      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
-
-      upsertFileStmt.run(
-        committedFileId,
-        poolId,
-        virtualPath,
-        fileName,
-        fastSizeBytes,
-        mimeType,
-        hash,
-        accountId,
-        driveFileId,
-        folderId,
-        0
-      );
-
-      getUpsertPendingDriveSyncStmt().run(accountId, driveFileId, virtualPath, committedFileId);
-    })();
+    const committedFileId = commitIndexedFileTx({
+      poolId,
+      accountId,
+      driveFileId,
+      virtualPath,
+      fileName,
+      sizeBytes: fastSizeBytes,
+      mimeType,
+      hash,
+      markPendingDriveSync: true,
+    });
 
     pendingAppPropertyDriveIds.add(driveFileId);
     void stampAcceptedAppProperties(accountId, [
@@ -585,55 +748,26 @@ export async function acceptExternalFile(
   }
 
   const sizeBytes = Number(remote.size || 0);
+  if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+    throw new FileExceedsCeilingError(sizeBytes);
+  }
   const virtualPath = normalizeVirtualPath(finalVirtualPath);
   const fileName = path.posix.basename(virtualPath);
   const mimeType = remote.mimeType || 'application/octet-stream';
   const hash = remote.md5Checksum || null;
 
-  let committedFileId = remoteId;
-
-  sqlite.transaction(() => {
-    const existingByDrive = sqlite
-      .prepare('SELECT id FROM files WHERE drive_file_id = ? AND account_id = ? LIMIT 1')
-      .get(remoteId, accountId) as { id: string } | undefined;
-
-    sqlite
-      .prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?')
-      .run(remoteId, accountId);
-
-    sqlite
-      .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-      .run(`${virtualPath}.trashed-${Date.now()}`, poolId, virtualPath);
-
-    const candidateId = remote.appProperties?.tsubasa_virtual_id || existingByDrive?.id || remoteId;
-    const idCollision = sqlite
-      .prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1')
-      .get(candidateId) as { id: string; drive_file_id: string; account_id: string } | undefined;
-    committedFileId =
-      idCollision && (idCollision.drive_file_id !== remoteId || idCollision.account_id !== accountId)
-        ? randomUUID()
-        : candidateId;
-
-    ensureLocalParentFolders(virtualPath, poolId);
-    const parentDir = path.posix.dirname(virtualPath);
-    const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
-
-    upsertFileStmt.run(
-      committedFileId,
-      poolId,
-      virtualPath,
-      fileName,
-      sizeBytes,
-      mimeType,
-      hash,
-      accountId,
-      remoteId,
-      folderId,
-      0
-    );
-
-    getUpsertPendingDriveSyncStmt().run(accountId, remoteId, virtualPath, committedFileId);
-  })();
+  const committedFileId = commitIndexedFileTx({
+    poolId,
+    accountId,
+    driveFileId: remoteId,
+    virtualPath,
+    fileName,
+    sizeBytes,
+    mimeType,
+    hash,
+    preferredFileId: remote.appProperties?.tsubasa_virtual_id || undefined,
+    markPendingDriveSync: true,
+  });
 
   pendingAppPropertyDriveIds.add(remoteId);
   void stampAcceptedAppProperties(accountId, [{ driveFileId: remoteId, virtualPath, fileId: committedFileId }]);
@@ -657,6 +791,7 @@ const DRIVE_BATCH_CONCURRENCY = 10;
 const PENDING_SYNC_RETRY_DELAY_MS = 60_000;
 
 async function stampAcceptedAppProperties(accountId: string, stamps: AppPropertyStamp[]): Promise<void> {
+  let anyFailed = false;
   try {
     const drive = getDriveClient(accountId);
     await runBoundedConcurrency(stamps, DRIVE_BATCH_CONCURRENCY, async (stamp) => {
@@ -676,6 +811,7 @@ async function stampAcceptedAppProperties(accountId: string, stamps: AppProperty
         );
         getDeletePendingDriveSyncStmt().run(accountId, stamp.driveFileId);
       } catch (err) {
+        anyFailed = true;
         const message = err instanceof Error ? err.message : String(err);
         getMarkPendingDriveSyncFailedStmt().run(
           message,
@@ -688,6 +824,9 @@ async function stampAcceptedAppProperties(accountId: string, stamps: AppProperty
         pendingAppPropertyDriveIds.delete(stamp.driveFileId);
       }
     });
+    if (anyFailed) {
+      scheduleOutboxDrain(PENDING_SYNC_RETRY_DELAY_MS);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const nextRetryAt = Date.now() + PENDING_SYNC_RETRY_DELAY_MS;
@@ -695,6 +834,9 @@ async function stampAcceptedAppProperties(accountId: string, stamps: AppProperty
     for (const stamp of stamps) {
       getMarkPendingDriveSyncFailedStmt().run(message, nextRetryAt, accountId, stamp.driveFileId);
       pendingAppPropertyDriveIds.delete(stamp.driveFileId);
+    }
+    if (stamps.length > 0) {
+      scheduleOutboxDrain(PENDING_SYNC_RETRY_DELAY_MS);
     }
   }
 }
@@ -757,17 +899,14 @@ export async function acceptAllExternalFiles(
     return { acceptedCount: 0 };
   }
 
+  for (const item of items) {
+    if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
+      throw new FileExceedsCeilingError(item.sizeBytes);
+    }
+  }
+
   const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
   const poolId = account?.poolId ?? 1;
-
-  const selectIdByDriveIdStmt = sqlite.prepare(
-    'SELECT id FROM files WHERE drive_file_id = ? AND account_id = ? LIMIT 1'
-  );
-  const deleteByDriveIdStmt = sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?');
-  const moveAsideTrashedStmt = sqlite.prepare(
-    'UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1'
-  );
-  const selectIdOwnerStmt = sqlite.prepare('SELECT drive_file_id, account_id FROM files WHERE id = ? LIMIT 1');
 
   const stamps: AppPropertyStamp[] = [];
   const ensuredFolders = new Set<string>();
@@ -776,42 +915,19 @@ export async function acceptAllExternalFiles(
     const trashSuffix = `.trashed-${Date.now()}`;
     for (const item of items) {
       const virtualPath = normalizeVirtualPath(item.virtualPath);
-
-      const folderPaths = extractFolderPaths(virtualPath);
-      for (let i = folderPaths.length - 1; i >= 0; i--) {
-        if (ensuredFolders.has(folderPaths[i])) continue;
-        insertFolderRecord(folderPaths[i], poolId);
-        ensuredFolders.add(folderPaths[i]);
-      }
-
-      const existing = selectIdByDriveIdStmt.get(item.driveFileId, accountId) as { id: string } | undefined;
-      deleteByDriveIdStmt.run(item.driveFileId, accountId);
-      moveAsideTrashedStmt.run(`${virtualPath}${trashSuffix}`, poolId, virtualPath);
-
-      let fileId = existing?.id ?? item.driveFileId;
-      const owner = selectIdOwnerStmt.get(fileId) as { drive_file_id: string; account_id: string } | undefined;
-      if (owner && (owner.drive_file_id !== item.driveFileId || owner.account_id !== accountId)) {
-        fileId = randomUUID();
-      }
-
-      const parentDir = path.posix.dirname(virtualPath);
-      const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
-
-      upsertFileStmt.run(
-        fileId,
+      const fileId = upsertIndexedFileInCurrentTx({
         poolId,
-        virtualPath,
-        path.posix.basename(virtualPath),
-        item.sizeBytes,
-        item.mimeType,
-        item.hash,
         accountId,
-        item.driveFileId,
-        folderId,
-        0
-      );
+        driveFileId: item.driveFileId,
+        virtualPath,
+        sizeBytes: item.sizeBytes,
+        mimeType: item.mimeType,
+        hash: item.hash,
+        trashSuffix,
+        ensuredFolders,
+        markPendingDriveSync: true,
+      });
 
-      getUpsertPendingDriveSyncStmt().run(accountId, item.driveFileId, virtualPath, fileId);
       pendingAppPropertyDriveIds.add(item.driveFileId);
       stamps.push({ driveFileId: item.driveFileId, virtualPath, fileId });
     }
@@ -821,8 +937,12 @@ export async function acceptAllExternalFiles(
 
   const cachedReport = getCachedDiscrepancyReport(accountId);
   if (cachedReport) {
-    cachedReport.unindexed = [];
-    cachedReport.modified = [];
+    const acceptedSet = new Set(items.map((item) => item.driveFileId));
+    cachedReport.unindexed = cachedReport.unindexed.filter((item) => !acceptedSet.has(item.driveFileId));
+    cachedReport.modified = cachedReport.modified.filter((item) => !acceptedSet.has(item.driveFileId));
+    cachedReport.conflicts = cachedReport.conflicts.filter((item) => !acceptedSet.has(item.driveFileId));
+    cachedReport.overCeiling = cachedReport.overCeiling.filter((item) => !acceptedSet.has(item.driveFileId));
+    cachedReport.missingRemote = cachedReport.missingRemote.filter((item) => !acceptedSet.has(item.driveFileId));
   }
   bumpScanGeneration(accountId);
 
@@ -862,11 +982,7 @@ export async function resolvePathConflict(
         fileId: driveFileId,
         requestBody: {
           trashed: true,
-          appProperties: {
-            tsubasa_managed: null,
-            tsubasa_virtual_path: null,
-            tsubasa_virtual_id: null,
-          } as any,
+          appProperties: CLEARED_TSUBASA_APP_PROPERTIES as any,
         },
         supportsAllDrives: false,
       })
@@ -912,6 +1028,9 @@ export async function resolvePathConflict(
 
   const baseVirtualPath = normalizeVirtualPath(rawPath);
   const sizeBytes = Number(remote.size || 0);
+  if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+    throw new FileExceedsCeilingError(sizeBytes);
+  }
   const checksum = remote.appProperties?.tsubasa_checksum || remote.md5Checksum || remote.sha256Checksum || null;
   const mimeType = remote.mimeType || 'application/octet-stream';
 
@@ -950,30 +1069,17 @@ export async function resolvePathConflict(
       })
     );
 
-    const newParentDir = path.posix.dirname(newVirtualPath);
-    const folderId = newParentDir === '/' || newParentDir === '.' ? null : formatFolderId(poolId, newParentDir);
-
-    sqlite.transaction(() => {
-      sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?').run(remoteId, accountId);
-      ensureLocalParentFolders(newVirtualPath, poolId);
-      sqlite
-        .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-        .run(`${newVirtualPath}.trashed-${Date.now()}`, poolId, newVirtualPath);
-
-      upsertFileStmt.run(
-        fileId,
-        poolId,
-        newVirtualPath,
-        newFileName,
-        sizeBytes,
-        mimeType,
-        checksum,
-        accountId,
-        remoteId,
-        folderId,
-        0
-      );
-    })();
+    commitIndexedFileTx({
+      poolId,
+      accountId,
+      driveFileId: remoteId,
+      virtualPath: newVirtualPath,
+      fileName: newFileName,
+      sizeBytes,
+      mimeType,
+      hash: checksum,
+      resolvedFileId: fileId,
+    });
 
     removeDriveIdFromCachedReport(accountId, driveFileId);
     bumpScanGeneration(accountId);
@@ -992,6 +1098,7 @@ export async function resolvePathConflict(
     where: and(eq(files.poolId, poolId), eq(files.virtualPath, baseVirtualPath), eq(files.isTrashed, false)),
   });
 
+  let trashReplacedFailed = false;
   if (existingActive && existingActive.driveFileId !== remoteId) {
     try {
       const prevDrive = getDriveClient(existingActive.accountId);
@@ -1000,17 +1107,14 @@ export async function resolvePathConflict(
           fileId: existingActive.driveFileId,
           requestBody: {
             trashed: true,
-            appProperties: {
-              tsubasa_managed: null,
-              tsubasa_virtual_path: null,
-              tsubasa_virtual_id: null,
-            } as any,
+            appProperties: CLEARED_TSUBASA_APP_PROPERTIES as any,
           },
           supportsAllDrives: false,
         })
       );
       await refreshAccountLiveQuota(existingActive.accountId).catch(() => {});
     } catch (err) {
+      trashReplacedFailed = true;
       console.warn(
         `Failed to trash replaced Drive file ${existingActive.driveFileId} on ${existingActive.accountId}:`,
         err
@@ -1020,8 +1124,6 @@ export async function resolvePathConflict(
 
   const fileId = resolveNonCollidingFileId();
   const fileName = path.posix.basename(baseVirtualPath);
-  const parentDir = path.posix.dirname(baseVirtualPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
 
   await withDriveRetry(() =>
     drive.files.update({
@@ -1039,30 +1141,21 @@ export async function resolvePathConflict(
     })
   );
 
-  sqlite.transaction(() => {
-    if (existingActive && existingActive.driveFileId !== remoteId) {
-      sqlite.prepare('DELETE FROM files WHERE id = ?').run(existingActive.id);
-    }
-    sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?').run(remoteId, accountId);
-    sqlite
-      .prepare('UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-      .run(`${baseVirtualPath}.trashed-${Date.now()}`, poolId, baseVirtualPath);
-    ensureLocalParentFolders(baseVirtualPath, poolId);
-
-    upsertFileStmt.run(
-      fileId,
-      poolId,
-      baseVirtualPath,
-      fileName,
-      sizeBytes,
-      mimeType,
-      checksum,
-      accountId,
-      remoteId,
-      folderId,
-      0
-    );
-  })();
+  commitIndexedFileTx({
+    poolId,
+    accountId,
+    driveFileId: remoteId,
+    virtualPath: baseVirtualPath,
+    fileName,
+    sizeBytes,
+    mimeType,
+    hash: checksum,
+    resolvedFileId: fileId,
+    replacedActiveFile: existingActive
+      ? { id: existingActive.id, accountId: existingActive.accountId, driveFileId: existingActive.driveFileId }
+      : null,
+    enqueueTrashForReplaced: trashReplacedFailed,
+  });
 
   removeDriveIdFromCachedReport(accountId, driveFileId);
   bumpScanGeneration(accountId);
@@ -1077,15 +1170,12 @@ export async function resolvePathConflict(
 }
 
 function reserveAvailableCopyPath(targetDir: string, baseName: string, occupiedPaths: Set<string>): string {
-  const ext = path.extname(baseName);
-  const stem = path.basename(baseName, ext);
-
   let candidateName = baseName;
   let candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
   let counter = 1;
 
   while (occupiedPaths.has(candidatePath)) {
-    candidateName = counter === 1 ? `${stem} (copy)${ext}` : `${stem} (copy ${counter})${ext}`;
+    candidateName = formatCopyCandidateName(baseName, counter, 'file');
     candidatePath = normalizeVirtualPath(path.posix.join(targetDir, candidateName));
     counter++;
   }
@@ -1150,6 +1240,14 @@ export async function resolvePathConflictsBatch(
       const cached = findCachedDiscrepancyItem(accountId, item.driveFileId);
       const rawPath = item.targetVirtualPath || cached?.virtualPath;
       if (cached && rawPath) {
+        if (cached.sizeBytes > MAX_SINGLE_FILE_BYTES) {
+          results[i] = {
+            driveFileId: item.driveFileId,
+            success: false,
+            error: new FileExceedsCeilingError(cached.sizeBytes).message,
+          };
+          continue;
+        }
         resolvedMetas.push({
           index: i,
           driveFileId: item.driveFileId,
@@ -1195,11 +1293,16 @@ export async function resolvePathConflictsBatch(
             }
           }
 
+          const remoteSizeBytes = Number(remote.size || 0);
+          if (remoteSizeBytes > MAX_SINGLE_FILE_BYTES) {
+            throw new FileExceedsCeilingError(remoteSizeBytes);
+          }
+
           resolvedMetas.push({
             index: entry.index,
             driveFileId: remote.id,
             baseVirtualPath: normalizeVirtualPath(rawPath),
-            sizeBytes: Number(remote.size || 0),
+            sizeBytes: remoteSizeBytes,
             mimeType: remote.mimeType || 'application/octet-stream',
             checksum: remote.appProperties?.tsubasa_checksum || remote.md5Checksum || remote.sha256Checksum || null,
             candidateId: remote.appProperties?.tsubasa_virtual_id || undefined,
@@ -1297,49 +1400,47 @@ export async function resolvePathConflictsBatch(
     });
 
     if (succeededItems.length > 0) {
-      const deleteByDriveIdStmt = sqlite.prepare('DELETE FROM files WHERE drive_file_id = ? AND account_id = ?');
-      const moveAsideTrashedStmt = sqlite.prepare(
-        'UPDATE files SET virtual_path = ? WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1'
-      );
       const ensuredFolders = new Set<string>();
       const trashSuffix = `.trashed-${Date.now()}`;
+      const committedItems: PreparedKeepBothItem[] = [];
 
       sqlite.transaction(() => {
         for (const item of succeededItems) {
-          deleteByDriveIdStmt.run(item.driveFileId, accountId);
-
-          const folderPaths = extractFolderPaths(item.newVirtualPath);
-          for (let i = folderPaths.length - 1; i >= 0; i--) {
-            if (ensuredFolders.has(folderPaths[i])) continue;
-            insertFolderRecord(folderPaths[i], poolId);
-            ensuredFolders.add(folderPaths[i]);
+          try {
+            upsertIndexedFileInCurrentTx({
+              poolId,
+              accountId,
+              driveFileId: item.driveFileId,
+              virtualPath: item.newVirtualPath,
+              fileName: item.newFileName,
+              sizeBytes: item.sizeBytes,
+              mimeType: item.mimeType,
+              hash: item.checksum,
+              resolvedFileId: item.fileId,
+              trashSuffix,
+              ensuredFolders,
+            });
+            committedItems.push(item);
+          } catch (err) {
+            if (err instanceof ItemConflictError) {
+              results[item.index] = {
+                driveFileId: item.driveFileId,
+                success: false,
+                error: err.message,
+              };
+              continue;
+            }
+            throw err;
           }
-
-          moveAsideTrashedStmt.run(`${item.newVirtualPath}${trashSuffix}`, poolId, item.newVirtualPath);
-
-          const parentDir = path.posix.dirname(item.newVirtualPath);
-          const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
-
-          upsertFileStmt.run(
-            item.fileId,
-            poolId,
-            item.newVirtualPath,
-            item.newFileName,
-            item.sizeBytes,
-            item.mimeType,
-            item.checksum,
-            accountId,
-            item.driveFileId,
-            folderId,
-            0
-          );
         }
       })();
 
-      for (const item of succeededItems) {
+      for (const item of committedItems) {
         removeDriveIdFromCachedReport(accountId, item.driveFileId);
       }
-      bumpScanGeneration(accountId);
+      if (committedItems.length > 0) {
+        bumpScanGeneration(accountId);
+      }
     }
   } else {
     const indexedItems = items.map((item, index) => ({ index, driveFileId: item.driveFileId }));
@@ -1352,11 +1453,7 @@ export async function resolvePathConflictsBatch(
             fileId: driveFileId,
             requestBody: {
               trashed: true,
-              appProperties: {
-                tsubasa_managed: null,
-                tsubasa_virtual_path: null,
-                tsubasa_virtual_id: null,
-              } as any,
+              appProperties: CLEARED_TSUBASA_APP_PROPERTIES as any,
             },
             supportsAllDrives: false,
           })
@@ -1431,11 +1528,7 @@ export async function ejectFileToDriveRoot(accountId: string, driveFileId: strin
       addParents: 'root',
       removeParents: parentsToRemove || account.rootFolderId!,
       requestBody: {
-        appProperties: {
-          tsubasa_managed: null,
-          tsubasa_virtual_path: null,
-          tsubasa_virtual_id: null,
-        } as any,
+        appProperties: CLEARED_TSUBASA_APP_PROPERTIES as any,
       },
       supportsAllDrives: false,
     })
@@ -1457,11 +1550,7 @@ export async function removeMissingFile(accountId: string, driveFileId: string):
       drive.files.update({
         fileId: driveFileId,
         requestBody: {
-          appProperties: {
-            tsubasa_managed: null,
-            tsubasa_virtual_path: null,
-            tsubasa_virtual_id: null,
-          } as any,
+          appProperties: CLEARED_TSUBASA_APP_PROPERTIES as any,
         },
         supportsAllDrives: false,
       })

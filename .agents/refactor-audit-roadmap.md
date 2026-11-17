@@ -239,73 +239,73 @@
 ### Slice C: External detector, rebalance, outbox, and operations
 **Files owned:** `src/server/drive/detector.ts`, `src/server/drive/rebalance.ts`, `src/server/drive/outbox.ts`, `src/server/drive/operations.ts`.
 
-- [ ] **C-1 `[Blocking]` Retry `pending_drive_sync` entries so failed `appProperties` stamps heal automatically**
+- [x] **C-1 `[Blocking]` Retry `pending_drive_sync` entries so failed `appProperties` stamps heal automatically**
   - **Locations.** `src/server/drive/detector.ts:131-168, 538-544, 635-700, 814-830`, `src/server/drive/sync.ts:435-447`, `src/server/drive/outbox.ts`.
   - **Failure mode.** Failed background `stampAcceptedAppProperties` calls set `next_retry_at` in `pending_drive_sync`, but no startup or periodic worker ever drains `pending_drive_sync`, permanently blocking cold-sync pruning and diverging Drive metadata.
   - **Preserved UX.** Immediate SQLite commit on external accept remains instant.
   - **Steps.** Drain `pending_drive_sync WHERE next_retry_at <= now` inside `startOutboxWorker()` (or migrate stamps into `drive_outbox`) and delete the `pending_drive_sync` row on Drive `404`.
 
-- [ ] **C-2 `[Blocking]` Block active-path overwrites and `> 14.25 GB` acceptance in `detector.ts`**
+- [x] **C-2 `[Blocking]` Block active-path overwrites and `> 14.25 GB` acceptance in `detector.ts`**
   - **Locations.** `src/server/drive/detector.ts:476-648, 730-833, 930-1399`.
   - **Failure mode.** `acceptExternalFile` / `acceptAllExternalFiles` silently overwrite active colliding files via `ON CONFLICT(pool_id, virtual_path) DO UPDATE`, stranding the old Drive file. They and conflict resolvers also lack the `MAX_SINGLE_FILE_BYTES` check.
   - **Preserved UX.** Updating an existing active file with matching `(account_id, drive_file_id)` works unchanged; over-ceiling files remain isolated in `overCeiling`.
   - **Steps.** Check for active path collisions with differing `(account_id, drive_file_id)` inside the commit transaction and abort with conflict error (HTTP 409); reject `sizeBytes > MAX_SINGLE_FILE_BYTES` with `FileExceedsCeilingError` (or per-item failure in batch mode).
 
-- [ ] **C-3 `[Warning]` Evict `driveFileParentsCache`, fix partial `cachedReport` clear, detect same-size hash edits, and guard `replace_existing` Drive trash**
+- [x] **C-3 `[Warning]` Evict `driveFileParentsCache`, fix partial `cachedReport` clear, detect same-size hash edits, and guard `replace_existing` Drive trash**
   - **Locations.** `src/server/drive/detector.ts:105, 331, 409-423, 822-826, 995-1019, 1412-1446`.
   - **Failure mode.** `driveFileParentsCache` leaks memory; `acceptAllExternalFiles` wipes `cachedReport` even on subset `preScannedItems`; `scanAccountDiscrepancies` misses same-size hash modifications; `replace_existing` deletes the old SQLite row even if trashing the old Drive file fails, causing re-conflict on next cold sync.
   - **Preserved UX.** Conflict resolution flows and 30s cache TTL stay identical.
   - **Steps.** Clear `driveFileParentsCache` per `accountId` in `invalidateDiscrepancyCache`; filter only accepted `driveFileId`s in `acceptAllExternalFiles`; flag `'different'` checksums in `scanAccountDiscrepancies`; enqueue `file_trash` / unmark fallback in `drive_outbox` if `replace_existing` fails to update the old Drive file. Extract shared `commitIndexedFileTx` across the 6 duplicated commit blocks in `detector.ts`.
 
-- [ ] **C-4 `[Blocking]` Enforce per-target FIFO ordering and 404 no-op handling in `drive_outbox`**
+- [x] **C-4 `[Blocking]` Enforce per-target FIFO ordering and 404 no-op handling in `drive_outbox`**
   - **Locations.** `src/server/drive/outbox.ts:202-206, 410-437, 492-571, 602-708, 905-909`.
   - **Failure mode.** When an earlier op enters `failed` backoff (`next_retry_at > now`), `selectNextReadyForAccount` lets newer `pending` ops jump ahead (e.g. `file_delete` before `file_move`, `file_restore` before `file_trash`). `file_move` / `file_rename` / `file_restore` spin 8 times into `dead` on 404. `getPendingOutboxDriveIds` omits `folder_merge_account`, allowing sync to revert merged files.
   - **Preserved UX.** Instant SQLite mutations and background Drive sync behavior remain identical.
   - **Steps.** Block later ops targeting the same `drive_file_id` or overlapping folder paths while an earlier `failed` op is in backoff; treat `isDriveNotFoundError` (404) as completed in `file_move`, `file_rename`, and `file_restore`; fail-fast permanent 400/401/missing-auth errors; include `folder_merge_account` in `getPendingOutboxDriveIds`; extract shared `syncDescendantFolderAndFilePaths` between `folder_rename_account` and `folder_move_account`.
 
-- [ ] **C-5 `[Warning]` Restore remote parent folder on `file_restore` and report `dead` outbox / failed background jobs**
+- [x] **C-5 `[Warning]` Restore remote parent folder on `file_restore` and report `dead` outbox / failed background jobs**
   - **Locations.** `src/server/drive/outbox.ts:283-295, 421-436, 549-571, 841-880, 998-1029`, `src/server/drive/transfer.ts:782-847`.
   - **Failure mode.** Restoring a file after `trashFolder` untracks `trashed: true` on the file only, leaving its Drive parent folder trashed so the next sync orphans it. `markDead` and failed `startBackgroundJob` jobs log nothing via `console.error`, and `drainOutboxForAccount` resolves silently when items become `dead`.
   - **Preserved UX.** Local Trash restore and background job polling interfaces stay identical.
-  - **Steps.** Include `restoredPath` in `FileRestoreOutboxPayload`, call `ensureRemoteFolderHierarchy` and re-parent if needed in `file_restore`; log `console.error` on `dead` transitions and failed background jobs; make `drainOutboxForAccount` reject if any item for that account hit `dead`.
+  - **Steps.** Include `restoredPath` in `FileRestoreOutboxPayload`, call `ensureRemoteFolderHierarchy` and re-parent if needed in `file_restore`; log `console.error` on `dead` transitions and failed background jobs; make `drainOutboxForAccount` reject if any item for that account hit `dead`. *(Note: `outbox.ts` falls back to `files.virtual_path` when `restoredPath`/`newVirtualPath` is omitted; `transfer.ts` explicit `restoredPath` payload remains in Slice D.)*
 
-- [ ] **C-6 `[Blocking]` Disable account before `removeDriveAccount` evacuation and fix rebalance quota/error handling**
+- [x] **C-6 `[Blocking]` Disable account before `removeDriveAccount` evacuation and fix rebalance quota/error handling**
   - **Locations.** `src/server/drive/rebalance.ts:192-217, 256, 340-347, 594-619`, `src/server/db/schema.ts:52`.
   - **Failure mode.** `removeDriveAccount` evacuates before setting `isDisabled = true`, allowing concurrent uploads to land on the evacuating account and get cascade-deleted when `db.delete(accounts)` runs. `planAccountRebalance` hardcodes 750 MB instead of `calculateUsableLimit`; `rebalanceFilesBatch` fails to bump pool revision and swallows `isTrashed` preservation errors; `executeAutoRebalance` catches batch exceptions and returns empty/partial results without erroring.
   - **Preserved UX.** Evacuation flow and rebalance results shape stay unchanged.
   - **Steps.** Set `isDisabled = true` before `evacuateAccountFiles`, re-verify `COUNT(*) FROM files WHERE account_id = ?` in a transaction before `db.delete(accounts)`, call `bumpPoolRevision`, `invalidateDiscrepancyCache`, and `clearRemoteFolderCache` after delete, use `calculateUsableLimit`, enqueue `file_trash` if preserving `trashed: true` fails, and surface batch failures from `executeAutoRebalance`.
 
-- [ ] **C-7 `[Warning]` Consolidate `deleteDriveFileIgnoreNotFound` and enqueue delete fallback on rebalance cleanup failure**
+- [x] **C-7 `[Warning]` Consolidate `deleteDriveFileIgnoreNotFound` and enqueue delete fallback on rebalance cleanup failure**
   - **Locations.** `src/server/drive/transfer.ts:163-183`, `src/server/drive/outbox.ts:277-281, 450-466`, `src/server/drive/rebalance.ts:215-217`, `src/server/drive/client.ts`.
   - **Failure mode.** Two conflicting `deleteDriveFileIgnoreNotFound` helpers exist; `rebalance.ts:215` has a dead `.catch` and leaves `tsubasa_managed = 'true'` on source Drive files when delete fails.
-  - **Steps.** Export `isDriveNotFoundError` from `client.ts`, consolidate `deleteDriveFileIgnoreNotFound` with `withDriveRetry` (rethrowing non-404), and enqueue a `file_delete` outbox item in `rebalanceFilesBatch` if immediate source deletion fails.
+  - **Steps.** Export `isDriveNotFoundError` from `client.ts`, consolidate `deleteDriveFileIgnoreNotFound` with `withDriveRetry` (rethrowing non-404), and enqueue a `file_delete` outbox item in `rebalanceFilesBatch` if immediate source deletion fails. *(Note: `outbox.ts` exports `deleteRemoteFileIgnoreNotFound` and `rebalance.ts` uses it; duplicate `deleteDriveFileIgnoreNotFound` cleanup in `transfer.ts` belongs to Slice D.)*
 
-- [ ] **C-8 `[Blocking]` Preserve trashed children during `folder_merge_account` and prevent remote folder deletion data loss**
+- [x] **C-8 `[Blocking]` Preserve trashed children during `folder_merge_account` and prevent remote folder deletion data loss**
   - **Locations.** `src/server/drive/operations.ts:832-833, 1053-1070`, `src/server/drive/outbox.ts:750-771`.
   - **Failure mode.** `folder_merge_account` ignores trashed files, deletes the SQLite source folder (setting `folder_id = NULL`), and checks `trashed = false` in `outbox.ts:759` before calling `drive.files.delete` on the source folder, permanently destroying trashed Drive items inside it.
   - **Preserved UX.** Active folder merge and empty folder pruning remain identical.
   - **Steps.** Move trashed descendant files under the merged destination folder (matching non-merge folder moves) and drop `and trashed = false` in `outbox.ts:759` (or trash rather than permanently delete non-empty source folders).
 
-- [ ] **C-9 `[Blocking]` Fix `moveItems` same-named folder collisions and trashed-file `UNIQUE` crashes on folder move/rename**
+- [x] **C-9 `[Blocking]` Fix `moveItems` same-named folder collisions and trashed-file `UNIQUE` crashes on folder move/rename**
   - **Locations.** `src/server/drive/operations.ts:752-783, 982-989, 1828-1834`.
   - **Failure mode.** Moving two same-named folders registers only the first folder's root path, causing unhandled `SQLITE_CONSTRAINT_UNIQUE` (HTTP 500) on colliding descendants instead of `MoveConflictError` (409). Folder move and folder rename also update descendant file paths without calling `displaceTrashedFileAtPath` first.
   - **Preserved UX.** Conflict modal flow and folder move/rename UX stay identical.
   - **Steps.** Register mapped descendant folder and file paths in `claimedFolderPaths` / `claimedFilePaths` / `claimedSourceByPath` during non-merge folder planning, and call `stmts.displaceTrashedFileAtPath` before `updateDescendantFilePath` at lines 988 and 1834.
 
-- [ ] **C-10 `[Warning]` Guard `ensureLocalFolderPath` against active file collisions in `moveItems` and `copyItems`**
+- [x] **C-10 `[Warning]` Guard `ensureLocalFolderPath` against active file collisions in `moveItems` and `copyItems`**
   - **Locations.** `src/server/drive/operations.ts:351, 914, 1200-1203`.
   - **Failure mode.** Moving or copying into a `destFolder` whose path (or ancestor) is occupied by an active file creates a `folders` row colliding with a `files` row.
   - **Steps.** Check for active files at `destFolder` and its ancestors before `ensureLocalFolderPath` and throw `ItemConflictError` (`409`) if present.
 
-- [ ] **C-11 `[Warning]` Remove outer `withDriveRetry` around `copyDriveFileCrossAccount` in `copyItems`**
+- [x] **C-11 `[Warning]` Remove outer `withDriveRetry` around `copyDriveFileCrossAccount` in `copyItems`**
   - **Locations.** `src/server/drive/operations.ts:1571-1587`.
   - **Steps.** Call `copyDriveFileCrossAccount` directly (it already wraps internal Drive calls with `withDriveRetry`).
 
-- [ ] **C-12 `[Warning]` Extract shared helpers in `operations.ts` and `mirror.ts`**
+- [x] **C-12 `[Warning]` Extract shared helpers in `operations.ts` and `mirror.ts`**
   - **Locations.** `src/server/drive/operations.ts:1004-1085, 1114-1150, 1848-1917`, `src/server/drive/detector.ts:1079-1095`.
   - **Steps.** Extract `enqueuePoolAccountOutbox` in `operations.ts` (replacing 4 repeated fanout loops) and share `formatCopyCandidateName(baseName, counter)` between `getAvailableCopyPath` and `reserveAvailableCopyPath`.
 
-- [ ] **C-13 `[Nit]` Dead code cleanup in `detector.ts` and `operations.ts`**
+- [x] **C-13 `[Nit]` Dead code cleanup in `detector.ts` and `operations.ts`**
   - **Locations.** `src/server/drive/detector.ts:491`, `src/server/drive/operations.ts:4, 1320`, `src/server/drive/outbox.ts:1031`.
   - **Steps.** Simplify identical ternary in `detector.ts:491`, remove unused `accounts` import in `operations.ts:4`, reuse cached file lookups in `copyItems` lines 1319/1365, and remove or wire `getBackgroundJob` (`outbox.ts:1031`).
 
