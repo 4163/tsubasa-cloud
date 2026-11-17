@@ -82,14 +82,11 @@ dialog:modal::after {
 
 ::-webkit-scrollbar-thumb {
   background-color: #8ea194;
-  background-clip: padding-box;
-  border-right: 2px solid transparent;
-  border-radius: 3px;
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background-color: #2d453b;
-  background-clip: padding-box;
 }
 
 :root[data-theme='dark'] ::-webkit-scrollbar-thumb,
