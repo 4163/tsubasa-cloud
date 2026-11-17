@@ -938,5 +938,53 @@ export async function switchAccountPool(
   return { accountId, poolId: targetPoolId, rootFolderId: resolvedRootFolderId };
 }
 
+export type FileContentMatchStatus = 'identical' | 'different' | 'unverified';
+
+export function normalizeContentHash(raw?: string | null): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().toLowerCase().replace(/^(sha256-|md5-)/, '');
+  return cleaned || null;
+}
+
+/**
+ * Compares file sizes and normalized hashes of matching digest length.
+ * Returns 'unverified' when sizes match but no comparable hash pair is present.
+ */
+export function evaluateFileContentMatch(
+  sizeA: number,
+  hashesA: Array<string | null | undefined>,
+  sizeB: number,
+  hashB: string | null | undefined
+): FileContentMatchStatus {
+  if (sizeA !== sizeB) return 'different';
+
+  const setA = new Set<string>();
+  for (const h of hashesA) {
+    const nh = normalizeContentHash(h);
+    if (nh) setA.add(nh);
+  }
+  const normB = normalizeContentHash(hashB);
+
+  if (sizeA === 0 && setA.size === 0 && !normB) {
+    return 'identical';
+  }
+  if (setA.size === 0 || !normB) {
+    return 'unverified';
+  }
+
+  let hasSameLengthCandidate = false;
+  for (const cand of setA) {
+    if (cand.length === normB.length) {
+      hasSameLengthCandidate = true;
+      if (cand === normB) {
+        return 'identical';
+      }
+    }
+  }
+
+  return hasSameLengthCandidate ? 'different' : 'unverified';
+}
+
+
 
 

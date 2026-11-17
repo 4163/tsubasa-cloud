@@ -278,21 +278,11 @@ async function prepareUploadTarget(
   try {
     let accountId: string;
     if (options.targetAccountId) {
-      const freedBytes =
-        conflictMode === 'replace' && existingActive && existingActive.account_id === options.targetAccountId
-          ? existingActive.size_bytes
-          : 0;
-      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), options.poolId, freedBytes);
+      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), options.poolId);
       accountId = options.targetAccountId;
     } else if (conflictMode === 'replace' && existingActive) {
       try {
-        await validateTargetPlacement(
-          existingActive.account_id,
-          sizeBytes,
-          Date.now(),
-          poolId,
-          existingActive.size_bytes
-        );
+        await validateTargetPlacement(existingActive.account_id, sizeBytes, Date.now(), poolId);
         accountId = existingActive.account_id;
       } catch {
         const decision = await selectPlacementForFile(
@@ -358,7 +348,7 @@ async function createResumableSession(
   signal?: AbortSignal
 ): Promise<string> {
   const initRes = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,md5Checksum',
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,md5Checksum,sha256Checksum',
     {
       method: 'POST',
       signal,
@@ -461,7 +451,7 @@ export async function executeStreamingUpload(
       ]);
 
       uploadRes = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,md5Checksum',
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,md5Checksum,sha256Checksum',
         {
           method: 'POST',
           signal,
@@ -504,10 +494,11 @@ export async function executeStreamingUpload(
       name: string;
       size?: string;
       md5Checksum?: string;
+      sha256Checksum?: string;
     };
 
     const finalBytes = bodyStream ? actualBytes : 0;
-    const resolvedHash = options.hash || driveData.md5Checksum || null;
+    const resolvedHash = options.hash || driveData.md5Checksum || driveData.sha256Checksum || null;
     const parentDir = path.posix.dirname(target.virtualPath);
     const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(target.poolId, parentDir);
 

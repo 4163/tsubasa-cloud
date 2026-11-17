@@ -65,11 +65,14 @@ export interface ExistingPoolFileSummary {
   virtualPath: string;
   name: string;
   sizeBytes: number;
+  hash: string | null;
   accountId: string;
   updatedAt: number;
 }
 
 export interface UploadBatchPlacementPlan extends BatchPlacementPlan {
+  replacedBytes: number;
+  netStorageDeltaBytes: number;
   conflicts: Record<string, ExistingPoolFileSummary>;
 }
 
@@ -590,6 +593,7 @@ export async function findExistingActiveFilesByPaths(
         virtualPath: files.virtualPath,
         name: files.name,
         sizeBytes: files.sizeBytes,
+        hash: files.hash,
         accountId: files.accountId,
         updatedAt: files.updatedAt,
       })
@@ -604,6 +608,7 @@ export async function findExistingActiveFilesByPaths(
         virtualPath: row.virtualPath,
         name: row.name,
         sizeBytes: row.sizeBytes,
+        hash: row.hash,
         accountId: row.accountId,
         updatedAt: Number.isFinite(updatedMs) ? updatedMs : 0,
       });
@@ -615,7 +620,7 @@ export async function findExistingActiveFilesByPaths(
 
 /**
  * Detects path collisions against active pool files and plans placement
- * for non-skipped items, crediting freed bytes on accounts being overwritten.
+ * for non-skipped items against real in-flight headroom, while reporting net storage delta.
  */
 export async function planUploadBatchWithConflicts(
   items: UploadPlacementRequestItem[],
@@ -629,7 +634,7 @@ export async function planUploadBatchWithConflicts(
 
   const conflicts: Record<string, ExistingPoolFileSummary> = {};
   const itemsToPlace: PlacementItem[] = [];
-  const freedBytesByAccount = new Map<string, number>();
+  let replacedBytes = 0;
 
   for (const item of items) {
     const normPath = normalizeVirtualPath(item.virtualPath);
@@ -638,10 +643,7 @@ export async function planUploadBatchWithConflicts(
     if (existing) {
       conflicts[normPath] = existing;
       if (item.conflictAction === 'replace') {
-        freedBytesByAccount.set(
-          existing.accountId,
-          (freedBytesByAccount.get(existing.accountId) ?? 0) + existing.sizeBytes
-        );
+        replacedBytes += existing.sizeBytes;
         itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
       } else if (item.conflictAction === 'keep_both') {
         itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
@@ -657,6 +659,8 @@ export async function planUploadBatchWithConflicts(
     return {
       totalFiles: 0,
       totalBytes: 0,
+      replacedBytes: 0,
+      netStorageDeltaBytes: 0,
       decisions: [],
       accountAllocations: {},
       conflicts,
@@ -664,37 +668,11 @@ export async function planUploadBatchWithConflicts(
   }
 
   const candidates = await getEligibleAccounts(poolId, nowMs);
-  if (freedBytesByAccount.size > 0) {
-    const accountQuotaRows = await db
-      .select({
-        id: accounts.id,
-        quotaLimitBytes: accounts.quotaLimitBytes,
-        quotaUsedBytes: accounts.quotaUsedBytes,
-      })
-      .from(accounts)
-      .where(
-        and(eq(accounts.poolId, poolId), inArray(accounts.id, Array.from(freedBytesByAccount.keys())))
-      );
-    const quotaById = new Map(accountQuotaRows.map((r) => [r.id, r]));
-
-    for (const cand of candidates) {
-      const freed = freedBytesByAccount.get(cand.id) ?? 0;
-      if (freed <= 0) continue;
-      const quota = quotaById.get(cand.id);
-      if (quota) {
-        cand.headroomBytes = calculateHeadroom(
-          quota.quotaLimitBytes,
-          Math.max(0, quota.quotaUsedBytes - freed)
-        );
-      } else {
-        cand.headroomBytes += freed;
-      }
-    }
-  }
-
   const plan = await simulateBatchPlacement(itemsToPlace, candidates, poolId);
   return {
     ...plan,
+    replacedBytes,
+    netStorageDeltaBytes: plan.totalBytes - replacedBytes,
     conflicts,
   };
 }

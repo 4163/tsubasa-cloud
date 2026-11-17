@@ -11,6 +11,7 @@ import {
   resolvePoolDriveFolderName,
   withDriveRetry,
   runBoundedConcurrency,
+  evaluateFileContentMatch,
 } from './client.js';
 import { normalizeVirtualPath } from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
@@ -78,38 +79,6 @@ export interface DiscrepancyReport {
   modified: ExternalFileDiscrepancy[];
   overCeiling: ExternalFileDiscrepancy[];
   missingRemote: MissingFileDiscrepancy[];
-}
-
-function normalizeHash(raw?: string | null): string | null {
-  if (!raw) return null;
-  const cleaned = raw.trim().toLowerCase().replace(/^(sha256-|md5-)/, '');
-  return cleaned || null;
-}
-
-function isExactDuplicateMatch(
-  remoteSize: number,
-  remoteHashes: Array<string | null | undefined>,
-  localSize: number,
-  localHash: string | null
-): boolean {
-  if (remoteSize !== localSize) return false;
-
-  const normLocal = normalizeHash(localHash);
-  const remoteSet = new Set<string>();
-  for (const h of remoteHashes) {
-    const nh = normalizeHash(h);
-    if (nh) remoteSet.add(nh);
-  }
-
-  if (remoteSize === 0 && !normLocal && remoteSet.size === 0) {
-    return true;
-  }
-
-  if (normLocal && remoteSet.has(normLocal)) {
-    return true;
-  }
-
-  return false;
 }
 
 export interface PreScannedExternalFile {
@@ -390,12 +359,13 @@ export async function scanAccountDiscrepancies(
               const occupantAtPath = activeFileByPath.get(virtualPath);
               if (occupantAtPath && occupantAtPath.driveFileId !== remote.id) {
                 const ownerAcc = accountMap.get(occupantAtPath.accountId);
-                const isExactDuplicate = isExactDuplicateMatch(
-                  sizeBytes,
-                  [remote.appProperties?.tsubasa_checksum, remote.md5Checksum, remote.sha256Checksum],
-                  occupantAtPath.sizeBytes,
-                  occupantAtPath.hash
-                );
+                const isExactDuplicate =
+                  evaluateFileContentMatch(
+                    sizeBytes,
+                    [remote.appProperties?.tsubasa_checksum, remote.md5Checksum, remote.sha256Checksum],
+                    occupantAtPath.sizeBytes,
+                    occupantAtPath.hash
+                  ) === 'identical';
 
                 conflicts.push({
                   driveFileId: remote.id,

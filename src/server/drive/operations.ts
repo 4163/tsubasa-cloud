@@ -9,6 +9,8 @@ import {
   markAccountQuotaDecreased,
   runBoundedConcurrency,
   withDriveRetry,
+  evaluateFileContentMatch,
+  type FileContentMatchStatus,
 } from './client.js';
 import { copyDriveFileCrossAccount } from './transfer.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
@@ -40,6 +42,7 @@ interface DescendantFileRow {
   account_id: string;
   drive_file_id: string;
   size_bytes: number;
+  hash: string | null;
   is_trashed: number;
   updated_at: number;
 }
@@ -139,7 +142,7 @@ function getStmts() {
       'SELECT COUNT(*) as cnt FROM files WHERE pool_id = ? AND is_trashed = 0 AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
     ),
     selectDescendantFiles: sqlite.prepare(
-      'SELECT id, virtual_path, name, account_id, drive_file_id, size_bytes, is_trashed, updated_at FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
+      'SELECT id, virtual_path, name, account_id, drive_file_id, size_bytes, hash, is_trashed, updated_at FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?)'
     ),
     selectActiveDescendantFiles: sqlite.prepare(
       'SELECT id, virtual_path, name, size_bytes, mime_type, hash, account_id, drive_file_id FROM files WHERE pool_id = ? AND ((virtual_path >= ? AND virtual_path < ?) OR folder_id = ?) AND is_trashed = 0'
@@ -220,6 +223,8 @@ export interface MoveConflictItem {
   existingFileId?: string;
   existingSizeBytes?: number;
   existingUpdatedAt?: number;
+  contentMatch?: FileContentMatchStatus;
+  canOverwrite?: boolean;
 }
 
 export class MoveConflictError extends Error {
@@ -413,6 +418,10 @@ export async function moveItems(
   const results: MoveResult[] = [];
   const plannedOps: PlannedMoveOp[] = [];
   const claimedFilePaths = new Set<string>();
+  const claimedSourceByPath = new Map<
+    string,
+    { id: string; sizeBytes: number; updatedAt: number; hash: string | null }
+  >();
   const claimedFolderPaths = new Set<string>();
   const overwriteTargets = new Map<string, OverwriteTarget>();
   const conflicts: MoveConflictItem[] = [];
@@ -425,12 +434,19 @@ export async function moveItems(
     accountId: string;
     driveFileId: string;
     sizeBytes: number;
+    hash: string | null;
     updatedAt: number;
     isTrashed: boolean;
   }, targetDir: string): Promise<{ status: 'noop' | 'move' | 'skip' | 'conflict' | 'error'; op?: PlannedFileMove; error?: string }> {
     const desiredPath = normalizeVirtualPath(path.posix.join(targetDir, source.name));
     if (desiredPath === source.virtualPath && !source.isTrashed) {
       claimedFilePaths.add(desiredPath);
+      claimedSourceByPath.set(desiredPath, {
+        id: source.id,
+        sizeBytes: source.sizeBytes,
+        updatedAt: source.updatedAt,
+        hash: source.hash,
+      });
       return { status: 'noop' };
     }
 
@@ -462,6 +478,12 @@ export async function moveItems(
 
     if (!isExistingCollision && !isBatchCollision) {
       claimedFilePaths.add(desiredPath);
+      claimedSourceByPath.set(desiredPath, {
+        id: source.id,
+        sizeBytes: source.sizeBytes,
+        updatedAt: source.updatedAt,
+        hash: source.hash,
+      });
       cleanCount++;
       const parentDir = path.posix.dirname(desiredPath);
       const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(poolId, parentDir);
@@ -483,6 +505,28 @@ export async function moveItems(
     }
 
     if (conflictMode === 'reject') {
+      const batchClaimed = isBatchCollision ? claimedSourceByPath.get(desiredPath) : undefined;
+      const preExisting =
+        !isBatchCollision && existingActive && existingActive.id !== source.id ? existingActive : undefined;
+      const compareTarget = preExisting
+        ? {
+            id: preExisting.id,
+            sizeBytes: preExisting.sizeBytes,
+            updatedAt: toEpochSeconds(preExisting.updatedAt),
+            hash: preExisting.hash,
+          }
+        : batchClaimed;
+
+      const contentMatch: FileContentMatchStatus = compareTarget
+        ? evaluateFileContentMatch(
+            source.sizeBytes,
+            [source.hash],
+            compareTarget.sizeBytes,
+            compareTarget.hash
+          )
+        : 'unverified';
+      const canOverwrite = Boolean(preExisting && !selectedFileIds.has(preExisting.id));
+
       conflicts.push({
         sourceFileId: source.id,
         sourcePath: source.virtualPath,
@@ -490,13 +534,15 @@ export async function moveItems(
         sourceSizeBytes: source.sizeBytes,
         sourceUpdatedAt: source.updatedAt,
         destPath: desiredPath,
-        ...(existingActive && existingActive.id !== source.id
+        ...(preExisting ? { existingFileId: preExisting.id } : {}),
+        ...(compareTarget
           ? {
-              existingFileId: existingActive.id,
-              existingSizeBytes: existingActive.sizeBytes,
-              existingUpdatedAt: toEpochSeconds(existingActive.updatedAt),
+              existingSizeBytes: compareTarget.sizeBytes,
+              existingUpdatedAt: compareTarget.updatedAt,
             }
           : {}),
+        contentMatch,
+        canOverwrite,
       });
       return { status: 'conflict' };
     }
@@ -591,6 +637,7 @@ export async function moveItems(
           accountId: file.accountId,
           driveFileId: file.driveFileId,
           sizeBytes: file.sizeBytes,
+          hash: file.hash ?? null,
           updatedAt: toEpochSeconds(file.updatedAt),
           isTrashed: Boolean(file.isTrashed),
         },
@@ -797,6 +844,7 @@ export async function moveItems(
           accountId: f.account_id,
           driveFileId: f.drive_file_id,
           sizeBytes: f.size_bytes,
+          hash: f.hash ?? null,
           updatedAt: f.updated_at,
           isTrashed: false,
         },
