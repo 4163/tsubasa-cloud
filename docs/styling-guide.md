@@ -61,8 +61,8 @@ The desktop interface uses a fixed, non-scrolling outer frame with isolated inte
 - **Action portal (`#tsubasa-actions`):**
   - Height: `48px`.
   - Border bottom: `1px solid var(--border-subtle)`.
-  - Left: Interactive breadcrumbs with path affinity badges.
-  - Right: Action pills ("Upload", "New folder", "Sync pool").
+  - Left: Interactive breadcrumbs with drop targets.
+  - Right: Primary workspace actions ("Upload file", "Upload folder", "New folder", "Fetch Drive changes") alongside selection-scoped commands ("Rename", "Cut", "Copy", "Share", "Delete", "Restore", "Paste", and account-grouped transfer badges).
 - **Content canvas (`#tsubasa-canvas`):**
   - Layout: `display: flex`, `flex-direction: column`, `flex: 1`, `overflow: hidden`.
   - Contains the virtualized TanStack table.
@@ -72,11 +72,11 @@ Mobile adapts MEGA mobile contracts to preserve vertical screen space.
 
 - **Top header:** `56px` height. Hamburger drawer button on left, title in center, avatar/status on right.
 - **List items:** `64px` height touch rows.
-  - Column 1: `40px` leading icon or thumbnail.
-  - Column 2: `1fr` file name and subtitle metadata.
-  - Column 3: `40px` context menu trigger (three vertical dots).
+  - Column 1: `36px` selection checkbox.
+  - Column 2: `1fr` leading icon, file name, and subtitle metadata.
+  - Column 3: Inline row action buttons (download, share, copy link, restore, delete).
 - **Navigation drawer:** Off-canvas sliding panel (`300px` width) for account quotas and folder trees.
-- **Bottom sheet:** Slides up from bottom for file actions, `16px` top border radius, `56px` touch target per row.
+- **Bottom sheet:** Slides up from bottom for staged drawers and dialogs, `16px` top border radius, `56px` touch target per row.
 
 ---
 
@@ -90,17 +90,17 @@ The color palette fuses Hanekawa's cool monochrome slate with QuiviT's sage-mint
 | :--- | :--- | :--- | :--- | :--- |
 | **Canvas background** | `#eef2ec` | `#0b1412` | - | Cool sage-gray base canvas. |
 | **Surface container** | `#f7faf5` | `#12211d` | - | Primary card and table background. |
-| **Surface elevated** | `#ffffff` | `#28443b` | - | Modals, context menus, and tooltips. |
+| **Surface elevated** | `#ffffff` | `#28443b` | - | Modals, drawers, and tooltips. |
 | **Primary text** | `#111d18` | `#e5f2eb` | 14.8:1 (Light) / 13.9:1 (Dark) | Exceeds 7:1 AAA standard. |
 | **Secondary text** | `#2d453b` | `#9bb8ab` | 8.2:1 (Light) / 7.2:1 (Dark) | Meets 7:1 AAA standard. |
-| **Border stroke** | `#8ea194` | `#2d453b` | - | Crisp 1px structural separators. |
-| **Border subtle** | `#c2d1c7` | `#1e302a` | - | Row dividers and nested outlines. |
+| **Border stroke** | `#8ea194` | `#456659` | - | Crisp 1px structural separators. |
+| **Border subtle** | `#c2d1c7` | `#294138` | - | Row dividers and nested outlines. |
 | **Brand gold accent** | `#deb76c` | `#d4a13c` | 11.1:1 (with black text) | Selection borders, focus rings, badges. |
 | **Selection background** | `#dcebe2` | `#1b3b32` | - | Highlighted table row background. |
 | **Hover background** | `#e4ede7` | `#162d26` | - | Interactive row and button hover state. |
 | **Success / status** | `#116329` | `#2dd4bf` | 7.8:1 (Light) / 7.85:1 (Dark) | Operational status and active badges. Dark tone sits on the cyan/teal side of green to prevent harsh neon cast. |
 | **Danger red** | `#82071e` | `#ff9492` | 7.4:1 (Light) / 8.6:1 (Dark) | 750 MB buffer breach, errors, purge. |
-| **Warning amber** | `#7a4400` | `#facc15` | 7.1:1 (Light) / 10.4:1 (Dark) | Sync pending, quota nearing limit. |
+| **Warning amber** | `#6b3e00` | `#f7d154` | 8.6:1 (Light) / 10.9:1 (Dark) | Sync pending, quota nearing limit. |
 
 ### Golden highlight usage rule
 Gold (`#deb76c` / `#d4a13c`) must never be used as raw text on white or light surfaces, as its contrast ratio is only 1.88:1. Gold is applied strictly as:
@@ -127,7 +127,7 @@ Gold (`#deb76c` / `#d4a13c`) must never be used as raw text on white or light su
 | **Brand wordmark** | Pixelify Sans | `20px` | `600` | `1.2` | `0.02em` | Sidebar logo header. |
 | **Page title** | Montserrat | `18px` | `600` | `1.3` | `-0.01em` | Current folder name in action bar. |
 | **Section heading** | Montserrat | `13px` | `600` | `1.4` | `0.04em` | Sidebar category headers (uppercase). |
-| **Body / Table row** | Montserrat | `13px` | `400` | `1.4` | `0` | File names, paths, menu options. |
+| **Body / Table row** | Montserrat | `13px` | `400` | `1.4` | `0` | File names, paths, dialog controls. |
 | **Table header** | Montserrat | `11px` | `600` | `1.3` | `0.05em` | Column headers (Name, Size, Modified). |
 | **Metadata / Subtitle** | Montserrat | `11px` | `400` | `1.3` | `0` | File size, date modified, account tag. |
 | **Status badge** | Montserrat | `10px` | `600` | `1.2` | `0.02em` | Quota alerts, sync states, tags. |
@@ -164,7 +164,7 @@ To separate major layout sections without relying on drop-shadows or thick divid
 
 ### Border radius scale
 - **Square / Sharp (`0px`):** Table rows, sidebar primary navigation rows, canvas dividers, and viewport borders. Navigation rows span the full container width with flat vertical left-edge indicators to prevent curved crescent borders.
-- **Compact (`4px`):** Context menu items, text inputs, status badges, and checkboxes.
+- **Compact (`4px`):** Text inputs, inline selects, status badges, and checkboxes.
 - **Button pills (`8px` to `12px`):** Dropbox-inspired action buttons ("Upload", "New folder").
 - **Avatars and circular indicators (`9999px`):** Account avatar icons and connection indicators.
 
@@ -214,6 +214,11 @@ Buttons use Dropbox-style pill geometry with high contrast.
 - **Account cards:** Stacked list displaying account identity, remaining write headroom, overall Google Drive usage, and 24-hour upload ledger tally.
 - **Email privacy masking:** Account emails use character-preserving 1:1 dot redactions (`arg•••••••••••ra@gmail.com`) rendered in monospace to guarantee zero layout shift on hover while retaining native text selection. Redaction applies strictly to primary workspace surfaces (sidebar and file table); modals and drawers display full unredacted email addresses.
 - **Buffer breach banner:** High-priority crimson alert (`#82071e` / `#ff9492`) triggered if an account enters over-ceiling mode (>14.25 GB).
+
+### Direct action and in-place feedback contract
+- **No right-click or overflow context menus:** Custom right-click menus and row kebab popovers are forbidden. The Action Portal (`#tsubasa-actions`) and inline row buttons already expose every single-item and batch command ("Rename", "Cut", "Copy", "Paste", "Share", "Delete", "Restore", and account moves). Duplicating those actions into floating menus adds focus, positioning, and viewport-clipping complexity without adding capability.
+- **No toast notifications:** Floating toast stacks and snackbars are forbidden. Transient popups detach status from the control that triggered it and introduce timer and z-index management overhead. All feedback happens in place on the surface itself: buttons swap to inline confirmation states (`Copied`, `Fetching...`, disabled/busy spinners), rows reflect optimistic mutations and cut/transfer states directly, upload and sync drawers render live progress and per-item badges, and modals reserve inline status banners for errors.
+- **No undo stack or `Ctrl+Z` history:** Application-level undo queues and `Ctrl+Z` reversal shortcuts are forbidden. Tracking inverse operation state across local SQLite and asynchronous Google Drive writes adds brittle synchronization complexity for actions that are already reversible through standard controls. Trashed items are recovered through the Trash view's "Restore" action, and renames or moves are reversed directly by renaming or moving the item back.
 
 ---
 
