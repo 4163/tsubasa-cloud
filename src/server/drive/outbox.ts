@@ -96,6 +96,8 @@ export interface FolderTrashAccountOutboxPayload {
 export interface ClearShareAccountOutboxPayload {
   sharePoolId: number;
   rootFolderId: string | null;
+  batchFolderIds?: string[];
+  batchFolderNames?: string[];
 }
 
 export interface EnqueueOutboxEntry {
@@ -1135,8 +1137,11 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
     case 'clear_share_account': {
       const p = payload as ClearShareAccountOutboxPayload;
       const rootFolderId = p.rootFolderId || (await getAccountRootFolderId(row.account_id).catch(() => null));
+      const isScoped = p.batchFolderIds !== undefined || p.batchFolderNames !== undefined;
+      const idSet = new Set(p.batchFolderIds ?? []);
+      const nameSet = new Set(p.batchFolderNames ?? []);
 
-      if (rootFolderId) {
+      if (rootFolderId && (!isScoped || idSet.size > 0 || nameSet.size > 0)) {
         const itemIds: string[] = [];
         let pageToken: string | undefined = undefined;
 
@@ -1144,7 +1149,7 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
           const listRes: any = await withDriveRetry(() =>
             drive.files.list({
               q: `'${rootFolderId}' in parents`,
-              fields: 'nextPageToken, files(id)',
+              fields: isScoped ? 'nextPageToken, files(id, name)' : 'nextPageToken, files(id)',
               pageSize: 100,
               pageToken,
               spaces: 'drive',
@@ -1153,7 +1158,8 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
           );
 
           for (const item of listRes.data.files || []) {
-            if (item.id) {
+            if (!item.id) continue;
+            if (!isScoped || idSet.has(item.id) || (item.name && nameSet.has(item.name))) {
               itemIds.push(item.id);
             }
           }

@@ -312,55 +312,55 @@
 ---
 
 ### Slice D: Streaming transfers, sharing, and Hono API routes
-**Files owned:** `src/server/drive/transfer.ts`, `src/server/drive/share.ts`, `src/server/app.ts`.
+**Files owned:** `src/server/drive/transfer.ts`, `src/server/drive/share.ts`, `src/server/app.ts` (plus `src/server/drive/outbox.ts` `ClearShareAccountOutboxPayload` scoping for `D-6`).
 
-- [ ] **D-1 `[Blocking]` Enforce `actualBytes <= target.sizeBytes` inside upload stream to uphold `< 50 MB` RAM ceiling**
+- [x] **D-1 `[Blocking]` Enforce `actualBytes <= target.sizeBytes` inside upload stream to uphold `< 50 MB` RAM ceiling**
   - **Locations.** `src/server/drive/transfer.ts:420-465`, `src/server/app.ts:1461`.
   - **Failure mode.** Understating `?sizeBytes` (`<= 5 MB`) enters the buffered multipart branch (`readStreamToBuffer`) where `countingStream` allows up to 14.25 GB in heap RAM and bypasses placement/24h quota checks.
   - **Preserved UX.** Accurate uploads behave identically; mismatched streams fail fast with a 400 error.
   - **Steps.** Abort `countingStream` immediately when `actualBytes > target.sizeBytes`, reject non-empty bodies when `target.sizeBytes === 0`, and verify `actualBytes === target.sizeBytes` before SQLite commit.
 
-- [ ] **D-2 `[Blocking]` Wire `reserveAccountCapacity` and lock concurrent `conflictMode='reject'` uploads in `transfer.ts`**
+- [x] **D-2 `[Blocking]` Wire `reserveAccountCapacity` and lock concurrent `conflictMode='reject'` uploads in `transfer.ts`**
   - **Locations.** `src/server/drive/transfer.ts:187, 251-306, 538-555, 602` (depends on `A-6`).
   - **Failure mode.** Parallel uploads race on headroom/24h quota (`A-6`) and on `inFlightUploadPaths` (`Set` allows two simultaneous `reject` uploads to the same path, overwriting and deleting the first). `conflictMode='replace'` also leaves `oldActiveRow.id` mismatched with Drive `tsubasa_virtual_id`.
   - **Preserved UX.** Concurrent uploads to distinct paths continue running in parallel; conflicts still return `409 ITEM_EXISTS`.
   - **Steps.** Reserve account capacity in `prepareUploadTarget` and release in `executeStreamingUpload`'s `finally` after SQLite commit; change `inFlightUploadPaths` to a token `Map<string, string>` and throw `UploadConflictError` when `conflictMode === 'reject'` collides with an active key; align `tsubasa_virtual_id` on `replace`.
 
-- [ ] **D-3 `[Blocking]` Enforce Share Pool read-only check after resolving `poolId` from `targetAccountId`**
+- [x] **D-3 `[Blocking]` Enforce Share Pool read-only check after resolving `poolId` from `targetAccountId`**
   - **Locations.** `src/server/app.ts:1439`, `src/server/drive/transfer.ts:243-282`.
   - **Failure mode.** `/api/files/upload/session` checks `payload.poolId ?? 1` before `prepareUploadTarget` overrides `poolId` from `accRow.poolId`, allowing uploads into Share Pool `1_000_000`.
   - **Preserved UX.** Standard-pool uploads with or without `targetAccountId` behave identically.
   - **Steps.** Check `if (isSharePoolId(poolId))` right after resolving `accRow.poolId` in `prepareUploadTarget`, throw a 403-mapped `SharePoolReadOnlyError`, and pass resolved `poolId` to `validateTargetPlacement`.
 
-- [ ] **D-4 `[Warning]` Transactional `transfer_logs`, download error mapping, Trash TOCTOU, and `permissions.delete` await**
+- [x] **D-4 `[Warning]` Transactional `transfer_logs`, download error mapping, Trash TOCTOU, and `permissions.delete` await**
   - **Locations.** `src/server/drive/transfer.ts:149-160, 237, 314, 466-590, 630-658, 720-941`; `src/server/drive/share.ts:1094-1102`; `src/server/app.ts:1460, 1488-1491, 1564-1569`.
   - **Failure mode.** `transfer_logs` writes outside tx in `transfer.ts` and `share.ts`; `GET /api/files/:id/download` turns 401/403/500 into `404`; `emptyTrash`/trash/restore/purge read rows before `sqlite.transaction(...).immediate()`; `copyDriveFileCrossAccount` leaves `permissions.delete` unawaited in `finally`; aborted resumable uploads omit transferred bytes from `transfer_logs`; upload path lacks `/` and segment `validateItemName` guards.
   - **Preserved UX.** Same status codes (`404` missing file, `416` bad range) and streaming behavior.
   - **Steps.** Use `recordTransferSync` (`A-5`) inside SQLite transactions; throw `ItemNotFoundError` on missing download file (`404`) and map upstream errors to `502`/`500` (preserving `401`/`403`); re-read/verify row state inside `sqlite.transaction` in Trash ops; `await` `permissions.delete` (with non-masking `.catch`) in `finally`; best-effort log aborted resumable bytes; require `Number.isSafeInteger(sizeBytes) && sizeBytes >= 0`, reject `virtualPath === '/'`, and validate segments in `prepareUploadTarget`.
 
-- [ ] **D-5 `[Blocking]` Add `Cache-Control: no-transform` to `GET /api/files/:id/download`**
+- [x] **D-5 `[Blocking]` Add `Cache-Control: no-transform` to `GET /api/files/:id/download`**
   - **Locations.** `src/server/app.ts:288`, `src/server/app.ts:1550-1563`.
   - **Failure mode.** Global `compress()` compresses `200` `.txt`/`.json`/`.csv`/`.svg` downloads and strips `Content-Length`.
   - **Preserved UX.** JSON API compression and download headers (`Accept-Ranges`, `Content-Disposition`, `200`/`206`) remain intact.
   - **Steps.** Set `'Cache-Control': 'no-cache, no-transform'` at `src/server/app.ts:1555`.
 
-- [ ] **D-6 `[Blocking]` Fix `clear_share_account` vs `executeShare` race and `share.ts` silent/orphan failures**
+- [x] **D-6 `[Blocking]` Fix `clear_share_account` vs `executeShare` race and `share.ts` silent/orphan failures**
   - **Locations.** `src/server/drive/share.ts:266-282, 850-1094, 1117-1202`; `src/server/drive/outbox.ts:799-838`.
   - **Failure mode.** `clear_share_account` deletes every child of `rootFolderId`, wiping a subsequent `executeShare` batch created before the outbox drains. `clearSharePool` drops unauthorized accounts silently with `warnings: []`. `executeShare` can collide on concurrent `batchFolderName`, leave orphaned Drive files on mid-share failure, and skip `share_links` when `webViewLink` is absent.
   - **Preserved UX.** `ClearSharePoolResult` already includes `warnings: string[]`; `ExecuteShareResult` shape stays identical.
   - **Steps.** Scope `ClearShareAccountOutboxPayload` to specific `batchFolderIds`/`batchFolderNames` (or drain pending `clear_share_account` before `executeShare`); push warnings for skipped unauthorized Share Pool accounts; reserve `batchFolderName` in-memory; clean up created Drive batch folders on mid-share error; fall back to `https://drive.google.com/drive/folders/${batchFolderId}` if `webViewLink` is missing.
 
-- [ ] **D-7 `[Blocking]` Reject root `/` on `DELETE /api/folders` and tighten `app.ts` input/concurrency guards**
+- [x] **D-7 `[Blocking]` Reject root `/` on `DELETE /api/folders` and tighten `app.ts` input/concurrency guards**
   - **Locations.** `src/server/app.ts:493-505, 789-807, 881-892, 1116-1314, 2014-2031`.
   - **Failure mode.** `DELETE /api/folders?virtualPath=/` wipes the entire pool; `?id=...` builds `/1:/Docs` without looking up folder path; `POST /api/pools` races `MAX(id) + 1`; `DELETE /api/accounts/:id` skips pool capacity/quota pre-check and allows duplicate concurrent `account_evacuate` jobs; `POST /api/accounts/oauth/import` returns `201` even if `hydrateAccount` fails; `POST /api/folders` ignores `name` vs `basename(path)` mismatch; `/api/items/move`, `/api/items/copy`, and `/api/sync/rebalance/batch` lack item-element validation and SQL `IN` chunking.
   - **Preserved UX.** Valid inputs keep identical payloads and HTTP responses.
   - **Steps.** Normalize path (resolving `?id` from `folders`) and return `400` on `'/'` in `DELETE /api/folders`; wrap `POST /api/pools` ID allocation in `sqlite.transaction(...).immediate()`; verify remaining pool headroom + 24h budget and deduplicate active evacuation jobs in `DELETE /api/accounts/:id`; propagate `hydrateAccount` failure in `oauth/import`; validate array elements and chunk `rebalance/batch` SQL queries.
 
-- [ ] **D-8 `[Warning]` Deduplicate `parseStrictPoolId`, `conflictMode`, ETag checks, and error mapping in `app.ts`**
+- [x] **D-8 `[Warning]` Deduplicate `parseStrictPoolId`, `conflictMode`, ETag checks, and error mapping in `app.ts`**
   - **Locations.** `src/server/app.ts:85, 664-2210`.
   - **Steps.** Use `parseStrictPoolId` at lines `834` and `2194`, and extract `parseConflictMode`, `checkPoolEtag`, and `mapDomainErrorToResponse` while preserving exact JSON `{ error, code }` payloads.
 
-- [ ] **D-9 `[Nit]` Clean up dead code and document intentional async OAuth counters in `app.ts`**
+- [x] **D-9 `[Nit]` Clean up dead code and document intentional async OAuth counters in `app.ts`**
   - **Locations.** `src/server/app.ts:7-8, 761-763, 879-880, 937, 1324-1326, 1387-1458`.
   - **Steps.** Remove unused `pools`, `asc`, `sql` imports and unreachable `InsufficientStorageError` checks (`761`, `1324`); add brief comments at `879` and `937` explaining why `filesIndexed` / `conflictsCount` return `0` (async cold sync); verify whether `/api/files/upload/session` (`1387-1458`) should be removed or explicitly documented as unmounted/internal.
 

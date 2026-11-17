@@ -9,22 +9,28 @@ import {
   getAccountRootFolderId,
   withDriveRetry,
   markAccountQuotaDecreased,
+  isSharePoolId,
 } from './client.js';
 import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
 import { ensureLocalParentFolders, formatFolderId } from './sync.js';
 import { enqueueDriveOutbox } from './outbox.js';
+import { ItemNotFoundError, validateItemName } from './operations.js';
 import {
   selectPlacementForFile,
   validateTargetPlacement,
+  reserveAccountCapacity,
   MAX_SINGLE_FILE_BYTES,
   FileExceedsCeilingError,
   recordTransfer,
+  recordTransferSync,
   invalidatePooledStorageOverview,
 } from '../storage/index.js';
 
 export type UploadConflictMode = 'reject' | 'replace' | 'keep_both';
 
 export class UploadConflictError extends Error {}
+export class SharePoolReadOnlyError extends Error {}
+export class UploadValidationError extends Error {}
 
 export interface UploadOptions {
   virtualPath: string;
@@ -147,44 +153,24 @@ export async function copyDriveFileCrossAccount(
     return newDriveFileId;
   } finally {
     if (permissionId) {
-      void withDriveRetry(() =>
-        driveSource.permissions.delete({
-          fileId: sourceDriveFileId,
-          permissionId,
-          supportsAllDrives: false,
-        })
-      ).catch((cleanupErr) => {
+      try {
+        await withDriveRetry(() =>
+          driveSource.permissions.delete({
+            fileId: sourceDriveFileId,
+            permissionId,
+            supportsAllDrives: false,
+          })
+        );
+      } catch (cleanupErr) {
         console.warn(`Failed to cleanup temp reader permission on ${sourceDriveFileId}:`, cleanupErr);
-      });
-    }
-  }
-}
-
-export async function deleteDriveFileIgnoreNotFound(
-  accountId: string,
-  driveFileId: string
-): Promise<void> {
-  try {
-    const drive = getDriveClient(accountId);
-    await drive.files.delete({
-      fileId: driveFileId,
-      supportsAllDrives: false,
-    });
-  } catch (err: unknown) {
-    const isNotFound =
-      (err && typeof err === 'object' && 'status' in err && (err as { status: number }).status === 404) ||
-      (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 404) ||
-      (err instanceof Error && err.message.toLowerCase().includes('not found'));
-
-    if (!isNotFound) {
-      console.warn(`Drive delete warning for ${driveFileId}:`, err instanceof Error ? err.message : String(err));
+      }
     }
   }
 }
 
 const SMALL_UPLOAD_MULTIPART_BYTES = 5 * 1024 * 1024;
 const VALID_RANGE_HEADER_RE = /^bytes=(?:\d+-\d*|\d*-\d+)(?:\s*,\s*(?:\d+-\d*|\d*-\d+))*$/i;
-const inFlightUploadPaths = new Set<string>();
+const inFlightUploadPaths = new Map<string, string>();
 
 function allocateKeepBothPath(poolId: number, basePath: string): string {
   const checkActiveStmt = sqlite.prepare(
@@ -222,6 +208,8 @@ interface PreparedUploadTarget {
   mimeType: string;
   remoteParentFolderId: string;
   accessToken: string;
+  uploadToken: string;
+  releaseCapacity: () => void;
   metadata: {
     name: string;
     parents: string[];
@@ -234,10 +222,24 @@ async function prepareUploadTarget(
   reserveInFlight = false
 ): Promise<PreparedUploadTarget> {
   const { sizeBytes, mimeType = 'application/octet-stream', hash, conflictMode = 'reject' } = options;
-  const initialVirtualPath = normalizeVirtualPath(options.virtualPath);
 
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+    throw new UploadValidationError(`Invalid upload sizeBytes: ${sizeBytes}`);
+  }
   if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
     throw new FileExceedsCeilingError(sizeBytes);
+  }
+
+  const initialVirtualPath = normalizeVirtualPath(options.virtualPath);
+  if (initialVirtualPath === '/') {
+    throw new UploadValidationError('Upload virtualPath cannot be root "/"');
+  }
+  for (const segment of initialVirtualPath.split('/').filter(Boolean)) {
+    try {
+      validateItemName(segment);
+    } catch (err) {
+      throw new UploadValidationError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   let poolId = options.poolId ?? 1;
@@ -246,6 +248,9 @@ async function prepareUploadTarget(
     if (accRow) {
       poolId = accRow.poolId;
     }
+  }
+  if (isSharePoolId(poolId)) {
+    throw new SharePoolReadOnlyError('Uploading directly to Share Pool is disabled');
   }
 
   const existingActive = sqlite
@@ -265,20 +270,32 @@ async function prepareUploadTarget(
     }
     if (conflictMode === 'keep_both') {
       virtualPath = allocateKeepBothPath(poolId, initialVirtualPath);
+    } else if (inFlightUploadPaths.has(`${poolId}:${initialVirtualPath}`)) {
+      throw new UploadConflictError(
+        `An upload for "${path.posix.basename(initialVirtualPath)}" is already in progress at ${initialVirtualPath}`
+      );
     }
-  } else if (conflictMode === 'keep_both' && inFlightUploadPaths.has(`${poolId}:${initialVirtualPath}`)) {
-    virtualPath = allocateKeepBothPath(poolId, initialVirtualPath);
+  } else if (inFlightUploadPaths.has(`${poolId}:${initialVirtualPath}`)) {
+    if (conflictMode === 'keep_both') {
+      virtualPath = allocateKeepBothPath(poolId, initialVirtualPath);
+    } else {
+      throw new UploadConflictError(
+        `An upload for "${path.posix.basename(initialVirtualPath)}" is already in progress at ${initialVirtualPath}`
+      );
+    }
   }
 
   const inFlightKey = `${poolId}:${virtualPath}`;
+  const uploadToken = randomUUID();
+  let releaseCapacity: () => void = () => {};
   if (reserveInFlight) {
-    inFlightUploadPaths.add(inFlightKey);
+    inFlightUploadPaths.set(inFlightKey, uploadToken);
   }
 
   try {
     let accountId: string;
     if (options.targetAccountId) {
-      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), options.poolId);
+      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), poolId);
       accountId = options.targetAccountId;
     } else if (conflictMode === 'replace' && existingActive) {
       try {
@@ -305,6 +322,10 @@ async function prepareUploadTarget(
       accountId = decision.accountId;
     }
 
+    if (reserveInFlight) {
+      releaseCapacity = reserveAccountCapacity(accountId, sizeBytes);
+    }
+
     const rootFolderId = await getAccountRootFolderId(accountId);
     const drive = getDriveClient(accountId);
     const folderDir = path.posix.dirname(virtualPath);
@@ -324,6 +345,8 @@ async function prepareUploadTarget(
       mimeType,
       remoteParentFolderId,
       accessToken,
+      uploadToken,
+      releaseCapacity,
       metadata: {
         name: fileName,
         parents: [remoteParentFolderId],
@@ -336,7 +359,8 @@ async function prepareUploadTarget(
       },
     };
   } catch (err) {
-    if (reserveInFlight) {
+    releaseCapacity();
+    if (reserveInFlight && inFlightUploadPaths.get(inFlightKey) === uploadToken) {
       inFlightUploadPaths.delete(inFlightKey);
     }
     throw err;
@@ -427,6 +451,14 @@ export async function executeStreamingUpload(
                 controller.error(new FileExceedsCeilingError(actualBytes));
                 return;
               }
+              if (actualBytes > target.sizeBytes || (target.sizeBytes === 0 && actualBytes > 0)) {
+                controller.error(
+                  new UploadValidationError(
+                    `Upload stream exceeded declared sizeBytes (${target.sizeBytes})`
+                  )
+                );
+                return;
+              }
               controller.enqueue(chunk);
             },
           })
@@ -476,15 +508,40 @@ export async function executeStreamingUpload(
         body: countingStream ?? Buffer.alloc(0),
       };
 
-      uploadRes = await fetch(uploadLocation, requestInit);
+      try {
+        uploadRes = await fetch(uploadLocation, requestInit);
+      } catch (err) {
+        if (actualBytes > 0) {
+          try {
+            recordTransferSync(target.accountId, 'upload', actualBytes, Date.now(), target.poolId);
+          } catch (logErr) {
+            console.warn(`Failed to record aborted resumable upload bytes for ${target.accountId}:`, logErr);
+          }
+        }
+        throw err;
+      }
     }
 
     if (uploadRes.status === 308) {
+      if (target.sizeBytes > SMALL_UPLOAD_MULTIPART_BYTES && actualBytes > 0) {
+        try {
+          recordTransferSync(target.accountId, 'upload', actualBytes, Date.now(), target.poolId);
+        } catch (logErr) {
+          console.warn(`Failed to record incomplete resumable upload bytes for ${target.accountId}:`, logErr);
+        }
+      }
       const errText = await uploadRes.text().catch(() => '');
       throw new Error(`Google Drive resumable upload incomplete (308): ${errText}`);
     }
 
     if (!uploadRes.ok) {
+      if (target.sizeBytes > SMALL_UPLOAD_MULTIPART_BYTES && actualBytes > 0) {
+        try {
+          recordTransferSync(target.accountId, 'upload', actualBytes, Date.now(), target.poolId);
+        } catch (logErr) {
+          console.warn(`Failed to record failed resumable upload bytes for ${target.accountId}:`, logErr);
+        }
+      }
       const errText = await uploadRes.text();
       throw new Error(`Google Drive stream upload failed: ${uploadRes.status} ${errText}`);
     }
@@ -498,6 +555,11 @@ export async function executeStreamingUpload(
     };
 
     const finalBytes = bodyStream ? actualBytes : 0;
+    if (finalBytes !== target.sizeBytes) {
+      throw new UploadValidationError(
+        `Upload stream byte count (${finalBytes}) does not match declared sizeBytes (${target.sizeBytes})`
+      );
+    }
     const resolvedHash = options.hash || driveData.md5Checksum || driveData.sha256Checksum || null;
     const parentDir = path.posix.dirname(target.virtualPath);
     const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(target.poolId, parentDir);
@@ -542,6 +604,7 @@ export async function executeStreamingUpload(
             account_id, drive_file_id, folder_id, is_trashed, trashed_at, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, unixepoch(), unixepoch())
           ON CONFLICT(pool_id, virtual_path) DO UPDATE SET
+            id = excluded.id,
             name = excluded.name,
             size_bytes = excluded.size_bytes,
             mime_type = excluded.mime_type,
@@ -585,9 +648,10 @@ export async function executeStreamingUpload(
           .prepare('UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?')
           .run(finalBytes, target.accountId);
       }
+
+      recordTransferSync(target.accountId, 'upload', finalBytes, Date.now(), target.poolId);
     }).immediate();
 
-    await recordTransfer(target.accountId, 'upload', finalBytes);
     invalidatePooledStorageOverview(target.poolId);
     bumpPoolRevision(target.poolId);
 
@@ -599,7 +663,10 @@ export async function executeStreamingUpload(
     }
     return saved;
   } finally {
-    inFlightUploadPaths.delete(inFlightKey);
+    target.releaseCapacity();
+    if (inFlightUploadPaths.get(inFlightKey) === target.uploadToken) {
+      inFlightUploadPaths.delete(inFlightKey);
+    }
   }
 }
 
@@ -628,7 +695,7 @@ export async function getStreamingDownload(
   });
 
   if (!file) {
-    throw new Error(`Active file not found: ${fileIdOrPath}`);
+    throw new ItemNotFoundError(`Active file not found: ${fileIdOrPath}`);
   }
 
   const accessToken = await getAccessToken(file.accountId);
@@ -718,15 +785,32 @@ export async function getStreamingDownload(
 }
 
 export async function trashFile(fileId: string): Promise<FileRecord> {
-  const file = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-  });
-
-  if (!file) {
-    throw new Error(`File ${fileId} not found`);
-  }
+  let poolId = 0;
+  let wasAlreadyTrashed = false;
 
   sqlite.transaction(() => {
+    const row = sqlite
+      .prepare('SELECT id, pool_id, account_id, drive_file_id, is_trashed FROM files WHERE id = ?')
+      .get(fileId) as
+      | {
+          id: string;
+          pool_id: number;
+          account_id: string;
+          drive_file_id: string;
+          is_trashed: number;
+        }
+      | undefined;
+
+    if (!row) {
+      throw new ItemNotFoundError(`File ${fileId} not found`);
+    }
+
+    poolId = row.pool_id;
+    wasAlreadyTrashed = row.is_trashed === 1;
+    if (wasAlreadyTrashed) {
+      return;
+    }
+
     sqlite
       .prepare(
         'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE id = ?'
@@ -735,24 +819,29 @@ export async function trashFile(fileId: string): Promise<FileRecord> {
 
     enqueueDriveOutbox([
       {
-        accountId: file.accountId,
-        poolId: file.poolId,
+        accountId: row.account_id,
+        poolId: row.pool_id,
         opType: 'file_trash',
-        driveFileId: file.driveFileId,
+        driveFileId: row.drive_file_id,
         payload: {
-          fileId: file.id,
-          driveFileId: file.driveFileId,
+          fileId: row.id,
+          driveFileId: row.drive_file_id,
         },
       },
     ]);
   }).immediate();
 
-  bumpPoolRevision(file.poolId);
+  if (!wasAlreadyTrashed) {
+    bumpPoolRevision(poolId);
+  }
 
   const updated = await db.query.files.findFirst({
     where: eq(files.id, fileId),
   });
-  return updated ?? { ...file, isTrashed: true };
+  if (!updated) {
+    throw new ItemNotFoundError(`File ${fileId} not found`);
+  }
+  return updated;
 }
 
 function allocateRestoredPath(poolId: number, basePath: string, selfId: string): string {
@@ -780,27 +869,39 @@ function allocateRestoredPath(poolId: number, basePath: string, selfId: string):
 }
 
 export async function restoreFile(fileId: string): Promise<FileRecord> {
-  const file = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-  });
-
-  if (!file) {
-    throw new Error(`File ${fileId} not found`);
-  }
-
-  const strippedPath = file.virtualPath.replace(/\.trashed-\d+(?:-[a-zA-Z0-9]+)?$/, '');
-  const restoredPath = allocateRestoredPath(file.poolId, strippedPath, file.id);
-  const restoredName = path.posix.basename(restoredPath);
-  const parentDir = path.posix.dirname(restoredPath);
-  const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(file.poolId, parentDir);
-  const pathOrNameChanged = restoredPath !== file.virtualPath || restoredName !== file.name;
-
-  ensureLocalParentFolders(restoredPath, file.poolId);
+  let poolId = 0;
 
   sqlite.transaction(() => {
+    const row = sqlite
+      .prepare('SELECT id, pool_id, virtual_path, name, account_id, drive_file_id FROM files WHERE id = ?')
+      .get(fileId) as
+      | {
+          id: string;
+          pool_id: number;
+          virtual_path: string;
+          name: string;
+          account_id: string;
+          drive_file_id: string;
+        }
+      | undefined;
+
+    if (!row) {
+      throw new ItemNotFoundError(`File ${fileId} not found`);
+    }
+
+    poolId = row.pool_id;
+    const strippedPath = row.virtual_path.replace(/\.trashed-\d+(?:-[a-zA-Z0-9]+)?$/, '');
+    const restoredPath = allocateRestoredPath(row.pool_id, strippedPath, row.id);
+    const restoredName = path.posix.basename(restoredPath);
+    const parentDir = path.posix.dirname(restoredPath);
+    const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(row.pool_id, parentDir);
+    const pathOrNameChanged = restoredPath !== row.virtual_path || restoredName !== row.name;
+
+    ensureLocalParentFolders(restoredPath, row.pool_id);
+
     const collidingTrashed = sqlite
       .prepare('SELECT id FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1 AND id != ?')
-      .get(file.poolId, restoredPath, file.id) as { id: string } | undefined;
+      .get(row.pool_id, restoredPath, row.id) as { id: string } | undefined;
 
     if (collidingTrashed) {
       sqlite
@@ -812,99 +913,103 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
       .prepare(
         'UPDATE files SET virtual_path = ?, name = ?, folder_id = ?, is_trashed = 0, trashed_at = NULL, updated_at = unixepoch() WHERE id = ?'
       )
-      .run(restoredPath, restoredName, folderId, file.id);
+      .run(restoredPath, restoredName, folderId, row.id);
 
     enqueueDriveOutbox([
       {
-        accountId: file.accountId,
-        poolId: file.poolId,
+        accountId: row.account_id,
+        poolId: row.pool_id,
         opType: 'file_restore',
-        driveFileId: file.driveFileId,
+        driveFileId: row.drive_file_id,
         payload: {
-          fileId: file.id,
-          driveFileId: file.driveFileId,
+          fileId: row.id,
+          driveFileId: row.drive_file_id,
+          restoredPath,
           ...(pathOrNameChanged ? { newVirtualPath: restoredPath, newName: restoredName } : {}),
         },
       },
     ]);
   }).immediate();
 
-  bumpPoolRevision(file.poolId);
+  bumpPoolRevision(poolId);
 
   const updated = await db.query.files.findFirst({
     where: eq(files.id, fileId),
   });
-  return (
-    updated ?? {
-      ...file,
-      virtualPath: restoredPath,
-      name: restoredName,
-      folderId,
-      isTrashed: false,
-      trashedAt: null,
-    }
-  );
+  if (!updated) {
+    throw new ItemNotFoundError(`File ${fileId} not found`);
+  }
+  return updated;
 }
 
 export async function purgeFile(fileId: string): Promise<FileRecord> {
-  const file = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-  });
-
-  if (!file) {
-    throw new Error(`File ${fileId} not found`);
-  }
+  let purgedFile: FileRecord | undefined;
 
   sqlite.transaction(() => {
+    purgedFile = db.select().from(files).where(eq(files.id, fileId)).get();
+    if (!purgedFile) {
+      throw new ItemNotFoundError(`File ${fileId} not found`);
+    }
+
     sqlite.prepare('DELETE FROM files WHERE id = ?').run(fileId);
 
     sqlite
       .prepare(
         'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
       )
-      .run(file.sizeBytes, file.accountId);
+      .run(purgedFile.sizeBytes, purgedFile.accountId);
 
     enqueueDriveOutbox([
       {
-        accountId: file.accountId,
-        poolId: file.poolId,
+        accountId: purgedFile.accountId,
+        poolId: purgedFile.poolId,
         opType: 'file_delete',
-        driveFileId: file.driveFileId,
+        driveFileId: purgedFile.driveFileId,
         payload: {
-          fileId: file.id,
-          driveFileId: file.driveFileId,
+          fileId: purgedFile.id,
+          driveFileId: purgedFile.driveFileId,
         },
       },
     ]);
   }).immediate();
 
-  markAccountQuotaDecreased(file.accountId);
-  invalidatePooledStorageOverview(file.poolId);
-  bumpPoolRevision(file.poolId);
+  if (!purgedFile) {
+    throw new ItemNotFoundError(`File ${fileId} not found`);
+  }
 
-  return file;
+  markAccountQuotaDecreased(purgedFile.accountId);
+  invalidatePooledStorageOverview(purgedFile.poolId);
+  bumpPoolRevision(purgedFile.poolId);
+
+  return purgedFile;
 }
 
 export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number; bytesReclaimed: number }> {
-  const trashedFiles = await db.query.files.findMany({
-    where:
-      poolId !== undefined
-        ? and(eq(files.isTrashed, true), eq(files.poolId, poolId))
-        : eq(files.isTrashed, true),
-  });
-
-  if (trashedFiles.length === 0) {
-    return { filesPurged: 0, bytesReclaimed: 0 };
-  }
-
-  const bytesByAccount = new Map<string, number>();
+  let filesPurged = 0;
   let bytesReclaimed = 0;
-  for (const f of trashedFiles) {
-    bytesReclaimed += f.sizeBytes;
-    bytesByAccount.set(f.accountId, (bytesByAccount.get(f.accountId) ?? 0) + f.sizeBytes);
-  }
+  const bytesByAccount = new Map<string, number>();
 
   sqlite.transaction(() => {
+    const trashedFiles = db
+      .select()
+      .from(files)
+      .where(
+        poolId !== undefined
+          ? and(eq(files.isTrashed, true), eq(files.poolId, poolId))
+          : eq(files.isTrashed, true)
+      )
+      .all();
+
+    if (trashedFiles.length === 0) {
+      return;
+    }
+
+    filesPurged = trashedFiles.length;
+    for (const f of trashedFiles) {
+      bytesReclaimed += f.sizeBytes;
+      bytesByAccount.set(f.accountId, (bytesByAccount.get(f.accountId) ?? 0) + f.sizeBytes);
+    }
+
     const deleteFileStmt = sqlite.prepare('DELETE FROM files WHERE id = ?');
     for (const f of trashedFiles) {
       deleteFileStmt.run(f.id);
@@ -931,12 +1036,16 @@ export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number
     );
   }).immediate();
 
+  if (filesPurged === 0) {
+    return { filesPurged: 0, bytesReclaimed: 0 };
+  }
+
   for (const accountId of bytesByAccount.keys()) {
     markAccountQuotaDecreased(accountId);
   }
   invalidatePooledStorageOverview(poolId);
   bumpPoolRevision(poolId);
 
-  return { filesPurged: trashedFiles.length, bytesReclaimed };
+  return { filesPurged, bytesReclaimed };
 }
 
