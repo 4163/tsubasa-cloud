@@ -1,6 +1,7 @@
 import { sqlite } from './index.js';
 
-const CURRENT_SCHEMA_VERSION = 4;
+// init.ts owns runtime DDL and migrations; keep all table, column, and index definitions synchronized with src/server/db/schema.ts.
+const CURRENT_SCHEMA_VERSION = 5;
 
 export function initializeDatabase(): void {
   const currentVersion = sqlite.pragma('user_version', { simple: true }) as number;
@@ -114,7 +115,6 @@ export function initializeDatabase(): void {
     CREATE UNIQUE INDEX IF NOT EXISTS folders_pool_path_idx ON folders(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS folders_pool_parent_idx ON folders(pool_id, parent_folder_id);
     CREATE UNIQUE INDEX IF NOT EXISTS files_pool_path_idx ON files(pool_id, virtual_path);
-    CREATE INDEX IF NOT EXISTS files_pool_trashed_idx ON files(pool_id, is_trashed);
     CREATE INDEX IF NOT EXISTS files_pool_trashed_path_idx ON files(pool_id, is_trashed, virtual_path, account_id, size_bytes);
     CREATE INDEX IF NOT EXISTS files_pool_trashed_account_size_idx ON files(pool_id, is_trashed, account_id, size_bytes);
     CREATE INDEX IF NOT EXISTS files_account_idx ON files(account_id);
@@ -134,6 +134,7 @@ export function initializeDatabase(): void {
 
     DROP INDEX IF EXISTS folders_parent_idx;
     DROP INDEX IF EXISTS folders_path_idx;
+    DROP INDEX IF EXISTS files_pool_trashed_idx;
     DROP INDEX IF EXISTS files_trashed_idx;
     DROP INDEX IF EXISTS transfer_account_ts_idx;
   `);
@@ -219,12 +220,20 @@ export function initializeDatabase(): void {
             .run(SHARE_POOL_RESERVE_ID, oldId);
 
           sqlite
+            .prepare('UPDATE drive_outbox SET pool_id = ? WHERE pool_id = ?')
+            .run(SHARE_POOL_RESERVE_ID, oldId);
+
+          sqlite
             .prepare('UPDATE pools SET id = ? WHERE id = ?')
             .run(SHARE_POOL_RESERVE_ID, oldId);
         }).immediate();
       } finally {
         sqlite.pragma(`foreign_keys = ${fkWasEnabled ? 'ON' : 'OFF'}`);
       }
+    } else {
+      console.warn(
+        `[db/init] Legacy share pool ${legacySharePool.id} could not be migrated because reserved pool ID ${SHARE_POOL_RESERVE_ID} already exists.`
+      );
     }
   }
 

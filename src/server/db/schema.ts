@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
+// Runtime DDL and migrations live in src/server/db/init.ts; keep these Drizzle definitions synchronized with init.ts.
 export const pools = sqliteTable('pools', {
   id: integer('id').primaryKey(),
   name: text('name').notNull(),
@@ -58,7 +59,6 @@ export const files = sqliteTable('files', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 }, (table) => [
   uniqueIndex('files_pool_path_idx').on(table.poolId, table.virtualPath),
-  index('files_pool_trashed_idx').on(table.poolId, table.isTrashed),
   index('files_pool_trashed_path_idx').on(table.poolId, table.isTrashed, table.virtualPath, table.accountId, table.sizeBytes),
   index('files_pool_trashed_account_size_idx').on(table.poolId, table.isTrashed, table.accountId, table.sizeBytes),
   index('files_account_idx').on(table.accountId),
@@ -142,6 +142,9 @@ export type NewFileRecord = typeof files.$inferInsert;
 
 export type TransferLog = typeof transferLogs.$inferSelect;
 export type NewTransferLog = typeof transferLogs.$inferInsert;
+
+export type ShareLink = typeof shareLinks.$inferSelect;
+export type NewShareLink = typeof shareLinks.$inferInsert;
 
 export type PendingDriveSync = typeof pendingDriveSync.$inferSelect;
 export type NewPendingDriveSync = typeof pendingDriveSync.$inferInsert;

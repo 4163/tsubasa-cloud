@@ -1,33 +1,34 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const dbDir = path.resolve(process.cwd(), 'data');
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+const dbPath =
+  process.env.TSUBASA_DB_PATH || path.join(path.resolve(process.cwd(), 'data'), 'tsubasa.db');
 
-const dbPath = process.env.TSUBASA_DB_PATH || path.join(dbDir, 'tsubasa.db');
+if (dbPath !== ':memory:') {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+}
 
 export const sqlite = new Database(dbPath);
 
 // Performance pragmas for zero-latency local operations
+sqlite.pragma('busy_timeout = 5000');
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('synchronous = NORMAL');
 sqlite.pragma('cache_size = -64000'); // 64 MB
 sqlite.pragma('temp_store = MEMORY');
 sqlite.pragma('mmap_size = 268435456'); // 256 MB
 sqlite.pragma('foreign_keys = ON');
-sqlite.pragma('busy_timeout = 5000');
 sqlite.pragma('wal_autocheckpoint = 2000');
 sqlite.pragma('journal_size_limit = 67108864');
 
 export const db = drizzle(sqlite, { schema });
 export type DatabaseInstance = typeof db;
 
-let globalPoolRevisionEpoch = 0;
+let globalPoolRevisionEpoch = Date.now() * 1000 + crypto.randomInt(1000);
 const poolRevisions = new Map<number, number>();
 
 export function getPoolRevision(poolId: number): number {
@@ -42,6 +43,20 @@ export function bumpPoolRevision(poolId?: number): number {
   const next = (poolRevisions.get(poolId) ?? 0) + 1;
   poolRevisions.set(poolId, next);
   return globalPoolRevisionEpoch + next;
+}
+
+export function chunkArray<T>(items: readonly T[], chunkSize = 400): T[][] {
+  if (chunkSize <= 0 || !Number.isInteger(chunkSize)) {
+    throw new RangeError(`chunkSize must be a positive integer, got ${chunkSize}`);
+  }
+  if (items.length === 0) {
+    return [];
+  }
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+  return chunks;
 }
 
 export function buildDirectoryPrefixBounds(dirPath: string): { lower: string; upper: string } {
@@ -85,13 +100,25 @@ function prepareRenameStatements() {
   };
 }
 
-let renameStatements: ReturnType<typeof prepareRenameStatements> | null = null;
+type RenameStatements = ReturnType<typeof prepareRenameStatements>;
+let renameStatements: RenameStatements | null = null;
 
-function getRenameStatements() {
+function getRenameStatements(): RenameStatements {
   if (!renameStatements) {
     renameStatements = prepareRenameStatements();
   }
   return renameStatements;
+}
+
+function reassignAccountRows(stmts: RenameStatements, oldId: string, targetId: string): number {
+  stmts.deleteConflictingShareLinks.run(oldId, targetId);
+  stmts.deleteConflictingPendingDriveSync.run(oldId, targetId);
+  const filesRes = stmts.updateFilesAccount.run(targetId, oldId);
+  stmts.updateTransferLogsAccount.run(targetId, oldId);
+  stmts.updateShareLinksAccount.run(targetId, oldId);
+  stmts.updatePendingDriveSyncAccount.run(targetId, oldId);
+  stmts.updateDriveOutboxAccount.run(targetId, oldId);
+  return filesRes.changes;
 }
 
 export function renameAccountInDb(oldId: string, newId: string): void {
@@ -100,6 +127,7 @@ export function renameAccountInDb(oldId: string, newId: string): void {
   }
 
   const stmts = getRenameStatements();
+  let filesChanged = 0;
 
   sqlite.transaction(() => {
     sqlite.pragma('defer_foreign_keys = ON');
@@ -113,32 +141,20 @@ export function renameAccountInDb(oldId: string, newId: string): void {
     if (existingWithOld) {
       if (existingWithNewId || existingWithNewEmail) {
         const targetId = existingWithNewId?.id ?? existingWithNewEmail?.id ?? newId;
-        stmts.deleteConflictingShareLinks.run(oldId, targetId);
-        stmts.deleteConflictingPendingDriveSync.run(oldId, targetId);
-        stmts.updateFilesAccount.run(targetId, oldId);
-        stmts.updateTransferLogsAccount.run(targetId, oldId);
-        stmts.updateShareLinksAccount.run(targetId, oldId);
-        stmts.updatePendingDriveSyncAccount.run(targetId, oldId);
-        stmts.updateDriveOutboxAccount.run(targetId, oldId);
+        filesChanged = reassignAccountRows(stmts, oldId, targetId);
         stmts.deleteAccountById.run(oldId);
       } else {
-        stmts.deleteConflictingPendingDriveSync.run(oldId, newId);
         stmts.updateAccountIdAndEmail.run(newId, newId, oldId);
-        stmts.updateFilesAccount.run(newId, oldId);
-        stmts.updateTransferLogsAccount.run(newId, oldId);
-        stmts.updateShareLinksAccount.run(newId, oldId);
-        stmts.updatePendingDriveSyncAccount.run(newId, oldId);
-        stmts.updateDriveOutboxAccount.run(newId, oldId);
+        filesChanged = reassignAccountRows(stmts, oldId, newId);
       }
     } else {
-      stmts.deleteConflictingPendingDriveSync.run(oldId, newId);
-      stmts.updateFilesAccount.run(newId, oldId);
-      stmts.updateTransferLogsAccount.run(newId, oldId);
-      stmts.updateShareLinksAccount.run(newId, oldId);
-      stmts.updatePendingDriveSyncAccount.run(newId, oldId);
-      stmts.updateDriveOutboxAccount.run(newId, oldId);
+      filesChanged = reassignAccountRows(stmts, oldId, newId);
     }
   }).immediate();
+
+  if (filesChanged > 0) {
+    bumpPoolRevision();
+  }
 }
 
 
