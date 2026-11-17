@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconFolder, IconChevronDown } from './Icons.js';
+import { IconClose, IconFolder } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { ModalDialog } from './ModalDialog.js';
+import { SelectField } from './SelectField.js';
 import type { AccountItem } from './Sidebar.js';
 
 export interface MoveFileItem {
@@ -23,36 +25,9 @@ export interface MoveFilesModalProps {
   onConfirm: (fileIds: string[], targetAccountId: string) => Promise<void> | void;
 }
 
-function formatGbCompact(bytes: number): string {
-  return (bytes / (1024 * 1024 * 1024)).toFixed(1);
-}
-
 function formatFilePath(file: MoveFileItem): string {
   const p = file.virtualPath || file.name;
   return p.startsWith('/') ? p : `/${p}`;
-}
-
-function evaluateCandidate(acc: AccountItem, totalBytes: number) {
-  const isDriveDisabled = Boolean(acc.isDisabled);
-  const hasHeadroom = acc.headroomBytes >= totalBytes;
-  const remainingBudget = acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
-  const hasTransferBudget = remainingBudget >= totalBytes;
-  const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
-
-  let labelSuffix = '';
-  if (isDriveDisabled) {
-    labelSuffix = ' (Disabled)';
-  } else if (!acc.authorized) {
-    labelSuffix = ' (Unauthorized)';
-  } else if (!hasHeadroom) {
-    labelSuffix = ` (No headroom: needs ${formatGbCompact(totalBytes)} GB)`;
-  } else if (!hasTransferBudget) {
-    labelSuffix = ' (24h transfer limit reached)';
-  } else {
-    labelSuffix = ` (${formatGbCompact(acc.headroomBytes)} GB free)`;
-  }
-
-  return { canHold, labelSuffix };
 }
 
 const styles = stylex.create({
@@ -226,60 +201,6 @@ const styles = stylex.create({
     fontWeight: typography.fontWeightTitle,
     color: colors.secondaryText,
   },
-  selectWrapper: {
-    position: 'relative',
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-  },
-  select: {
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    MozAppearance: 'none',
-    width: '100%',
-    height: '34px',
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    borderRadius: radius.compact,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space9,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    color: colors.primaryText,
-    outline: 'none',
-    boxSizing: 'border-box',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      borderColor: colors.primaryText,
-    },
-    ':focus': {
-      borderColor: colors.accentGold,
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-    },
-  },
-  selectChevron: {
-    position: 'absolute',
-    right: spacing.space3,
-    top: '50%',
-    transform: 'translateY(-50%)',
-    pointerEvents: 'none',
-    color: colors.secondaryText,
-    display: 'flex',
-    alignItems: 'center',
-  },
   errorMessage: {
     fontSize: typography.fontSizeMeta,
     color: colors.dangerTextOnSurface,
@@ -400,7 +321,7 @@ export function MoveFilesModal({
 
   const firstEligibleId = useMemo(() => {
     const eligible = candidateAccounts.find(
-      (acc) => evaluateCandidate(acc, effectiveTotalBytes).canHold
+      (acc) => evaluateAccountTransferCandidate(acc, effectiveTotalBytes).canHold
     );
     return eligible?.id ?? candidateAccounts[0]?.id ?? '';
   }, [candidateAccounts, effectiveTotalBytes]);
@@ -430,7 +351,7 @@ export function MoveFilesModal({
 
   const currentTarget = candidateAccounts.find((acc) => acc.id === targetAccountId);
   const currentCanHold = currentTarget
-    ? evaluateCandidate(currentTarget, effectiveTotalBytes).canHold
+    ? evaluateAccountTransferCandidate(currentTarget, effectiveTotalBytes).canHold
     : false;
 
   const handleSubmit = async (e?: React.FormEvent) => {
@@ -526,47 +447,38 @@ export function MoveFilesModal({
 
           <div {...stylex.props(styles.fieldGroup)}>
             <label htmlFor={selectId} {...stylex.props(styles.label)}>Target storage account</label>
-            <div {...stylex.props(styles.selectWrapper)}>
-              <select
-                id={selectId}
-                ref={selectRef}
-                autoFocus
-                value={targetAccountId}
-                onChange={(e) => {
-                  setTargetAccountId(e.target.value);
-                  if (error) setError(null);
-                }}
-                disabled={isLoading || candidateAccounts.length === 0}
-                {...stylex.props(styles.select)}
-              >
-                {candidateAccounts.length === 0 ? (
-                  <option value="" disabled>
-                    No candidate accounts available
-                  </option>
-                ) : (
-                  candidateAccounts.map((acc) => {
-                    const { canHold, labelSuffix } = evaluateCandidate(
-                      acc,
-                      effectiveTotalBytes
-                    );
-                    const optTitle = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
-                    return (
-                      <option
-                        key={acc.id}
-                        value={acc.id}
-                        disabled={!canHold}
-                        title={optTitle}
-                      >
-                        {(acc.displayName || acc.id) + labelSuffix}
-                      </option>
-                    );
-                  })
-                )}
-              </select>
-              <div {...stylex.props(styles.selectChevron)}>
-                <IconChevronDown size={14} strokeWidth={2.5} />
-              </div>
-            </div>
+            <SelectField
+              id={selectId}
+              selectRef={selectRef}
+              autoFocus
+              value={targetAccountId}
+              onChange={(e) => {
+                setTargetAccountId(e.target.value);
+                if (error) setError(null);
+              }}
+              disabled={isLoading || candidateAccounts.length === 0}
+            >
+              {candidateAccounts.length === 0 ? (
+                <option value="" disabled>
+                  No candidate accounts available
+                </option>
+              ) : (
+                candidateAccounts.map((acc) => {
+                  const { canHold, optionLabel, optionTitle } =
+                    evaluateAccountTransferCandidate(acc, effectiveTotalBytes);
+                  return (
+                    <option
+                      key={acc.id}
+                      value={acc.id}
+                      disabled={!canHold}
+                      title={optionTitle}
+                    >
+                      {optionLabel}
+                    </option>
+                  );
+                })
+              )}
+            </SelectField>
             <div role="status" aria-live="polite">
               {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
             </div>

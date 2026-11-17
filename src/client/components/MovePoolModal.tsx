@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconFolder, IconChevronDown } from './Icons.js';
+import { IconClose, IconFolder } from './Icons.js';
 import { type AccountItem, type PoolSummary } from './Sidebar.js';
 import { sortPools } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
+import { SelectField } from './SelectField.js';
 
 export interface MovePoolModalProps {
   isOpen: boolean;
@@ -115,60 +116,6 @@ const styles = stylex.create({
     fontSize: typography.fontSizeMeta,
     fontWeight: '600',
     color: colors.secondaryText,
-  },
-  selectWrapper: {
-    position: 'relative',
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-  },
-  select: {
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    MozAppearance: 'none',
-    width: '100%',
-    height: '34px',
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    borderRadius: radius.compact,
-    paddingLeft: spacing.space3,
-    paddingRight: '32px',
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    color: colors.primaryText,
-    outline: 'none',
-    boxSizing: 'border-box',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      borderColor: colors.primaryText,
-    },
-    ':focus': {
-      borderColor: colors.accentGold,
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '44px',
-    },
-  },
-  selectChevron: {
-    position: 'absolute',
-    right: '10px',
-    top: '50%',
-    transform: 'translateY(-50%)',
-    pointerEvents: 'none',
-    color: colors.secondaryText,
-    display: 'flex',
-    alignItems: 'center',
   },
   errorMessage: {
     fontSize: typography.fontSizeMeta,
@@ -355,33 +302,27 @@ export function MovePoolModal({
 
               <div {...stylex.props(styles.fieldGroup)}>
                 <label htmlFor={selectId} {...stylex.props(styles.label)}>Target storage pool</label>
-                <div {...stylex.props(styles.selectWrapper)}>
-                  <select
-                    id={selectId}
-                    ref={selectRef}
-                    autoFocus
-                    value={targetPoolId}
-                    onChange={(e) => {
-                      setTargetPoolId(Number(e.target.value));
-                      if (error) setError(null);
-                    }}
-                    disabled={isLoading || candidatePools.length === 0}
-                    {...stylex.props(styles.select)}
-                  >
-                    {sortedPools.map((pool) => (
-                      <option
-                        key={pool.id}
-                        value={pool.id}
-                        disabled={pool.id === currentPoolId}
-                      >
-                        {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'}){pool.id === currentPoolId ? ' (Current)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <div {...stylex.props(styles.selectChevron)}>
-                    <IconChevronDown size={14} strokeWidth={2.5} />
-                  </div>
-                </div>
+                <SelectField
+                  id={selectId}
+                  selectRef={selectRef}
+                  autoFocus
+                  value={targetPoolId}
+                  onChange={(e) => {
+                    setTargetPoolId(Number(e.target.value));
+                    if (error) setError(null);
+                  }}
+                  disabled={isLoading || candidatePools.length === 0}
+                >
+                  {sortedPools.map((pool) => (
+                    <option
+                      key={pool.id}
+                      value={pool.id}
+                      disabled={pool.id === currentPoolId}
+                    >
+                      {pool.name} ({pool.accountCount} {pool.accountCount === 1 ? 'Drive' : 'Drives'}){pool.id === currentPoolId ? ' (Current)' : ''}
+                    </option>
+                  ))}
+                </SelectField>
                 <div role="status" aria-live="polite">
                   {error && <span {...stylex.props(styles.errorMessage)}>{error}</span>}
                 </div>
