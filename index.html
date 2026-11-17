@@ -10,6 +10,9 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="preload" as="font" type="font/woff2" crossorigin href="/src/client/assets/fonts/Montserrat/Montserrat-VariableFont_wght.woff2" />
     <link rel="preload" as="font" type="font/woff2" crossorigin href="/src/client/assets/fonts/Pixelify_Sans/PixelifySans-VariableFont_wght.woff2" />
+    <!-- Inline boot script and styles prevent a theme flash before React mounts.
+         localStorage access is best-effort for restricted origins, and any CSP
+         header must allow this inline block with a hash or nonce. -->
     <script>
       (function () {
         try {
