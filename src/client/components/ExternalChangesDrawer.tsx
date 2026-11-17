@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { client } from '../api.js';
-import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
+import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
+import { DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
 import { formatBytes } from '../utils/format.js';
 import { useBeforeUnload } from '../utils/useBeforeUnload.js';
 import {
@@ -151,7 +152,7 @@ const styles = stylex.create({
     },
   },
   drawerHeader: {
-    height: '56px',
+    height: layout.drawerHeaderHeight,
     paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderBottomWidth: '1px',
@@ -167,10 +168,11 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: spacing.space3,
+    minWidth: 0,
   },
   title: {
     fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeTitle,
+    fontSize: typography.fontSizeSection,
     fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
     margin: 0,
@@ -180,7 +182,7 @@ const styles = stylex.create({
     borderWidth: '0px',
     cursor: 'pointer',
     color: colors.secondaryText,
-    padding: spacing.space2,
+    padding: spacing.space1,
     borderRadius: radius.compact,
     display: 'inline-flex',
     alignItems: 'center',
@@ -236,31 +238,32 @@ const styles = stylex.create({
     MozAppearance: 'none',
     width: '100%',
     height: '32px',
-    lineHeight: '28px',
+    lineHeight: '26px',
     paddingTop: '2px',
     paddingBottom: '2px',
     paddingLeft: spacing.space3,
     paddingRight: '28px',
     borderRadius: radius.compact,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceAlt,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+    borderColor: colors.border,
     color: colors.primaryText,
     fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
+    fontSize: typography.fontSizeBody,
     fontWeight: '500',
     outline: 'none',
     cursor: 'pointer',
     boxSizing: 'border-box',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    transition: motion.transitionFast,
+    transitionProperty: 'background-color, border-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      borderColor: colors.brandAccent,
-      backgroundColor: colors.surface,
+      borderColor: colors.accentGold,
     },
-    ':focus': {
+    ':focus-visible': {
       borderColor: colors.focusRing,
       outlineWidth: '2px',
       outlineStyle: 'solid',
@@ -283,40 +286,48 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  rescanBtn: {
+    height: '32px',
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.compact,
+    fontSize: typography.fontSizeBody,
+    flexShrink: 0,
+  },
   contentScroll: {
     flex: 1,
     overflowY: 'auto',
-    paddingTop: spacing.space5,
-    paddingBottom: spacing.space5,
+    paddingTop: 0,
+    paddingBottom: 0,
     paddingLeft: 0,
     paddingRight: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.space4,
+    gap: 0,
   },
-  sectionTitle: {
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightSection,
-    color: colors.primaryText,
-    margin: 0,
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
+  sectionSubBar: {
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
+    backgroundColor: colors.surface,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     display: 'flex',
-    alignItems: 'center',
+    flexDirection: 'column',
     gap: spacing.space2,
-  },
-  sectionDesc: {
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
   },
   card: {
     position: 'relative',
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
+    paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
-    borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
@@ -325,49 +336,45 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.rowHover,
     },
-    '@media (max-width: 768px)': {
-      paddingRight: spacing.space5,
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: 'transparent',
-    },
   },
   cardOverCeiling: {
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.danger,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      borderLeftColor: colors.danger,
+      display: 'block',
     },
   },
   cardConflict: {
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.warning,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      borderLeftColor: colors.warning,
+      display: 'block',
     },
   },
   batchActionsBar: {
@@ -375,13 +382,17 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
     flexWrap: 'wrap',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    marginTop: spacing.space2,
+  },
+  fileIconWrap: {
+    width: '16px',
+    height: '16px',
+    marginTop: '2px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   poolFolderIcon: {
-    display: 'inline-flex',
-    flexShrink: 0,
     color: colors.poolGold,
   },
   conflictBadgeExact: {
@@ -392,6 +403,9 @@ const styles = stylex.create({
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
     backgroundColor: colors.brandAccentSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
     color: colors.brandAccent,
     fontSize: typography.fontSizeBadge,
     fontWeight: '600',
@@ -405,6 +419,9 @@ const styles = stylex.create({
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
     backgroundColor: colors.warningSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.warningBorder,
     color: colors.warning,
     fontSize: typography.fontSizeBadge,
     fontWeight: '600',
@@ -425,41 +442,35 @@ const styles = stylex.create({
     borderColor: colors.borderSubtle,
   },
   conflictCompareRow: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: '64px minmax(0, 1fr) auto',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: spacing.space2,
-    fontSize: typography.fontSizeMeta,
     fontVariantNumeric: 'tabular-nums',
-  },
-  conflictCompareLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    minWidth: 0,
-    flex: 1,
   },
   conflictOriginTag: {
     fontSize: typography.fontSizeBadge,
     fontWeight: '600',
-    color: colors.primaryText,
-    minWidth: '66px',
-    flexShrink: 0,
+    textTransform: 'uppercase',
+    color: colors.secondaryText,
+    letterSpacing: '0.02em',
   },
   conflictAccountEmail: {
     fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
+    color: colors.primaryText,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     minWidth: 0,
   },
   conflictSizeText: {
+    fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
     color: colors.primaryText,
-    fontWeight: '500',
+    fontWeight: '600',
     fontVariantNumeric: 'tabular-nums',
+    textAlign: 'right',
     flexShrink: 0,
   },
   fileHeaderRow: {
@@ -470,8 +481,8 @@ const styles = stylex.create({
   },
   fileTitleGroup: {
     display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
+    alignItems: 'flex-start',
+    gap: spacing.space4,
     minWidth: 0,
     flex: 1,
   },
@@ -484,12 +495,15 @@ const styles = stylex.create({
     whiteSpace: 'nowrap',
   },
   fileMeta: {
+    fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
+    fontWeight: '600',
+    color: colors.primaryText,
     fontVariantNumeric: 'tabular-nums',
+    flexShrink: 0,
   },
   cardDesc: {
-    fontSize: '12px',
+    fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     lineHeight: '1.4',
     margin: 0,
@@ -507,68 +521,37 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
     flexWrap: 'wrap',
-    marginTop: spacing.space1,
-  },
-  btnPrimary: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.brandAccent,
-    color: colors.brandAccentText,
-    borderWidth: '0px',
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.brandAccentHover,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-  },
-  btnSecondary: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.surface,
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '500',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.border,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
   },
   btnDanger: {
-    height: '28px',
+    height: '26px',
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.danger,
-    color: colors.dangerText,
-    borderWidth: '0px',
+    borderRadius: radius.compact,
+    backgroundColor: colors.dangerSurface,
+    color: colors.dangerTextOnSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.dangerBorder,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     fontWeight: '600',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    whiteSpace: 'nowrap',
     cursor: 'pointer',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
-      backgroundColor: colors.dangerHover,
+      backgroundColor: colors.danger,
+      borderColor: colors.danger,
+      color: colors.dangerText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.5,
@@ -579,39 +562,38 @@ const styles = stylex.create({
     position: 'relative',
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
+    paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
-    borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: colors.dangerSurface,
     color: colors.danger,
     fontSize: typography.fontSizeMeta,
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.danger,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      paddingRight: spacing.space5,
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: colors.danger,
+      display: 'block',
     },
   },
   cardList: {
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
-    marginTop: spacing.space3,
   },
   fileTitleCol: {
     display: 'flex',
@@ -638,18 +620,20 @@ const styles = stylex.create({
     color: colors.dimText,
   },
   emptyNoticeTitle: {
-    fontSize: '14px',
-    fontWeight: '600',
+    fontSize: typography.fontSizeSection,
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
   },
   rebalanceBanner: {
     position: 'relative',
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
+    paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
-    borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
@@ -657,22 +641,20 @@ const styles = stylex.create({
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.warning,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      paddingRight: spacing.space5,
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: colors.warning,
+      display: 'block',
     },
   },
   emptyNotice: {
@@ -1250,7 +1232,7 @@ export function ExternalChangesDrawer({
       <div {...stylex.props(styles.drawerSurface)}>
         <div {...stylex.props(styles.drawerHeader)}>
           <div {...stylex.props(styles.titleGroup)}>
-            <IconAlertTriangle size={18} />
+            <IconAlertTriangle size={16} />
             <h2 {...stylex.props(styles.title)}>External changes</h2>
           </div>
           <button
@@ -1286,7 +1268,6 @@ export function ExternalChangesDrawer({
                   <option
                     key={acc.id}
                     value={acc.id}
-                    title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
                   >
                     {acc.displayName || acc.id} ({acc.email || acc.id})
                   </option>
@@ -1297,14 +1278,14 @@ export function ExternalChangesDrawer({
               <IconChevronDown size={11} strokeWidth={2.5} />
             </div>
           </div>
-          <button
-            type="button"
-            {...stylex.props(styles.btnSecondary)}
+          <DrawerButton
+            variant="secondary"
+            style={styles.rescanBtn}
             onClick={() => void scanAccount(selectedAccount, true)}
             disabled={isScanning || isLocked || !selectedAccount}
           >
             {isScanning ? 'Scanning...' : 'Rescan'}
-          </button>
+          </DrawerButton>
         </div>
 
         <div {...stylex.props(styles.contentScroll)}>
@@ -1317,19 +1298,24 @@ export function ExternalChangesDrawer({
           {/* Over-ceiling items */}
           {report?.overCeiling && report.overCeiling.length > 0 && (
             <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                <IconAlertTriangle size={16} color={colors.danger} />
-                Over-ceiling files (&gt; 14.25 GB)
-              </h3>
-              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
-                Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
-              </p>
+              <DrawerSectionHeader
+                icon={<IconAlertTriangle size={14} color={colors.danger} />}
+                title="Over-ceiling files (> 14.25 GB)"
+                count={report.overCeiling.length.toLocaleString()}
+              />
+              <div {...stylex.props(styles.sectionSubBar)}>
+                <p {...stylex.props(styles.cardDesc)}>
+                  Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
+                </p>
+              </div>
               <div {...stylex.props(styles.cardList)}>
                 {report.overCeiling.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardOverCeiling)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        <span {...stylex.props(styles.fileIconWrap)}>
+                          <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        </span>
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -1346,21 +1332,20 @@ export function ExternalChangesDrawer({
                     </div>
 
                     <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
+                      <DrawerButton
+                        variant="primary"
                         onClick={() => handleAccept(item)}
                         disabled={isLocked}
                       >
-                        Accept into Tsubasa (Over-ceiling mode)
-                      </button>
+                        Accept (Over-ceiling)
+                      </DrawerButton>
                       <button
                         type="button"
                         {...stylex.props(styles.btnDanger)}
                         onClick={() => handleMoveToRoot(item)}
                         disabled={isLocked}
                       >
-                        Move to root (Eject)
+                        Eject to root
                       </button>
                     </div>
                   </div>
@@ -1372,43 +1357,45 @@ export function ExternalChangesDrawer({
           {/* Path conflicts in pool */}
           {report?.conflicts && report.conflicts.length > 0 && (
             <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                <IconAlertTriangle size={16} color={colors.warning} />
-                Path conflicts in pool, {report.conflicts.length}
-              </h3>
-              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
-                These files share the same folder path as files already stored on another drive in this pool.
-              </p>
-
-              {report.conflicts.length > 1 && (
-                <div {...stylex.props(styles.batchActionsBar)}>
-                  {exactDuplicates.length > 1 && (
-                    <button
-                      type="button"
-                      {...stylex.props(styles.btnPrimary)}
-                      onClick={() => handleBatchResolveConflicts(exactDuplicates, 'deduplicate')}
+              <DrawerSectionHeader
+                icon={<IconAlertTriangle size={14} color={colors.warning} />}
+                title="Path conflicts in pool"
+                count={report.conflicts.length.toLocaleString()}
+              />
+              <div {...stylex.props(styles.sectionSubBar)}>
+                <p {...stylex.props(styles.cardDesc)}>
+                  These files share the same folder path as files already stored on another drive in this pool.
+                </p>
+                {report.conflicts.length > 1 && (
+                  <div {...stylex.props(styles.batchActionsBar)}>
+                    {exactDuplicates.length > 1 && (
+                      <DrawerButton
+                        variant="primary"
+                        onClick={() => handleBatchResolveConflicts(exactDuplicates, 'deduplicate')}
+                        disabled={isLocked}
+                      >
+                        Remove {exactDuplicates.length} identical duplicates
+                      </DrawerButton>
+                    )}
+                    <DrawerButton
+                      variant={exactDuplicates.length > 1 ? 'secondary' : 'primary'}
+                      onClick={() => handleBatchResolveConflicts(report.conflicts, 'keep_both')}
                       disabled={isLocked}
                     >
-                      Remove {exactDuplicates.length} identical duplicates
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    {...stylex.props(exactDuplicates.length > 1 ? styles.btnSecondary : styles.btnPrimary)}
-                    onClick={() => handleBatchResolveConflicts(report.conflicts, 'keep_both')}
-                    disabled={isLocked}
-                  >
-                    Keep both for all {report.conflicts.length}
-                  </button>
-                </div>
-              )}
+                      Keep both for all {report.conflicts.length}
+                    </DrawerButton>
+                  </div>
+                )}
+              </div>
 
               <div {...stylex.props(styles.cardList)}>
                 {report.conflicts.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardConflict)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        <span {...stylex.props(styles.fileIconWrap)}>
+                          <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        </span>
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -1429,26 +1416,22 @@ export function ExternalChangesDrawer({
 
                     <div {...stylex.props(styles.conflictCompareBox)}>
                       <div {...stylex.props(styles.conflictCompareRow)}>
-                        <div {...stylex.props(styles.conflictCompareLeft)}>
-                          <span {...stylex.props(styles.conflictOriginTag)}>In pool</span>
-                          <span
-                            {...stylex.props(styles.conflictAccountEmail)}
-                            title={item.existingFile.accountEmail}
-                          >
-                            {item.existingFile.accountEmail}
-                          </span>
-                        </div>
+                        <span {...stylex.props(styles.conflictOriginTag)}>In pool</span>
+                        <span
+                          {...stylex.props(styles.conflictAccountEmail)}
+                          title={item.existingFile.accountEmail}
+                        >
+                          {item.existingFile.accountEmail}
+                        </span>
                         <span {...stylex.props(styles.conflictSizeText)}>
                           {formatBytes(item.existingFile.sizeBytes)}
                         </span>
                       </div>
                       <div {...stylex.props(styles.conflictCompareRow)}>
-                        <div {...stylex.props(styles.conflictCompareLeft)}>
-                          <span {...stylex.props(styles.conflictOriginTag)}>This drive</span>
-                          <span {...stylex.props(styles.conflictAccountEmail)} title={item.accountEmail}>
-                            {item.accountEmail}
-                          </span>
-                        </div>
+                        <span {...stylex.props(styles.conflictOriginTag)}>This drive</span>
+                        <span {...stylex.props(styles.conflictAccountEmail)} title={item.accountEmail}>
+                          {item.accountEmail}
+                        </span>
                         <span {...stylex.props(styles.conflictSizeText)}>{formatBytes(item.sizeBytes)}</span>
                       </div>
                     </div>
@@ -1456,73 +1439,65 @@ export function ExternalChangesDrawer({
                     <div {...stylex.props(styles.actionsRow)}>
                       {item.isExactDuplicate ? (
                         <>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnPrimary)}
+                          <DrawerButton
+                            variant="primary"
                             onClick={() => handleResolveConflict(item, 'deduplicate')}
                             disabled={isLocked}
                           >
                             Remove duplicate
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
+                          </DrawerButton>
+                          <DrawerButton
+                            variant="secondary"
                             onClick={() => handleResolveConflict(item, 'keep_both')}
                             disabled={isLocked}
                           >
-                            Keep both, rename
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
+                            Keep both
+                          </DrawerButton>
+                          <DrawerButton
+                            variant="secondary"
                             onClick={() => handleResolveConflict(item, 'replace_existing')}
                             disabled={isLocked}
                           >
-                            Use this drive&apos;s copy
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
+                            Use drive copy
+                          </DrawerButton>
+                          <DrawerButton
+                            variant="secondary"
                             onClick={() => handleResolveConflict(item, 'eject')}
                             disabled={isLocked}
                           >
-                            Eject to Drive root
-                          </button>
+                            Eject
+                          </DrawerButton>
                         </>
                       ) : (
                         <>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnPrimary)}
+                          <DrawerButton
+                            variant="primary"
                             onClick={() => handleResolveConflict(item, 'keep_both')}
                             disabled={isLocked}
                           >
-                            Keep both, rename
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
+                            Keep both
+                          </DrawerButton>
+                          <DrawerButton
+                            variant="secondary"
                             onClick={() => handleResolveConflict(item, 'replace_existing')}
                             disabled={isLocked}
                           >
-                            Replace pool copy
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
+                            Replace pool
+                          </DrawerButton>
+                          <DrawerButton
+                            variant="secondary"
                             onClick={() => handleResolveConflict(item, 'deduplicate')}
                             disabled={isLocked}
                           >
-                            Discard this copy
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
+                            Discard copy
+                          </DrawerButton>
+                          <DrawerButton
+                            variant="secondary"
                             onClick={() => handleResolveConflict(item, 'eject')}
                             disabled={isLocked}
                           >
-                            Eject to Drive root
-                          </button>
+                            Eject
+                          </DrawerButton>
                         </>
                       )}
                     </div>
@@ -1535,13 +1510,16 @@ export function ExternalChangesDrawer({
           {/* Pool folder summary: accept every external change in one action */}
           {report && showPoolSummary && (
             <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>Files added or changed in Google Drive</h3>
+              <DrawerSectionHeader
+                title="Files added or changed in Google Drive"
+                count={acceptableItems.length.toLocaleString()}
+              />
               <div {...stylex.props(styles.cardList)}>
                 <div {...stylex.props(styles.card)}>
                   <div {...stylex.props(styles.fileHeaderRow)}>
                     <div {...stylex.props(styles.fileTitleGroup)}>
-                      <span {...stylex.props(styles.poolFolderIcon)}>
-                        <IconFolderFilled size={18} />
+                      <span {...stylex.props(styles.fileIconWrap, styles.poolFolderIcon)}>
+                        <IconFolderFilled size={16} />
                       </span>
                       <div {...stylex.props(styles.fileTitleCol)}>
                         <span {...stylex.props(styles.fileName)} title={report.poolFolderName}>
@@ -1570,45 +1548,41 @@ export function ExternalChangesDrawer({
                             ? 'Ejecting...'
                             : `Eject ${acceptableItems.length.toLocaleString()} files`}
                         </button>
-                        <button
-                          type="button"
-                          {...stylex.props(styles.btnSecondary)}
+                        <DrawerButton
+                          variant="secondary"
                           onClick={() => setConfirmingEject(false)}
                           disabled={isLocked}
                         >
                           Cancel
-                        </button>
+                        </DrawerButton>
                       </div>
                     </>
                   ) : (
                     <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
+                      <DrawerButton
+                        variant="primary"
                         onClick={() => handleBulkResolve('accept-all')}
                         disabled={isLocked}
                       >
                         {activeActionId === 'accept-all'
                           ? 'Accepting...'
                           : `Accept all ${acceptableItems.length.toLocaleString()} files`}
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnSecondary)}
+                      </DrawerButton>
+                      <DrawerButton
+                        variant="secondary"
                         onClick={() => setConfirmingEject(true)}
                         disabled={isLocked}
                       >
                         Eject all to Drive root
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnSecondary)}
+                      </DrawerButton>
+                      <DrawerButton
+                        variant="secondary"
                         onClick={() => setShowIndividualFiles((prev) => !prev)}
                         disabled={isLocked}
                         aria-expanded={showIndividualFiles}
                       >
                         {showIndividualFiles ? 'Hide individual files' : 'Review individually'}
-                      </button>
+                      </DrawerButton>
                     </div>
                   )}
                 </div>
@@ -1619,15 +1593,18 @@ export function ExternalChangesDrawer({
           {/* Unindexed external additions */}
           {showIndividualAcceptable && report?.unindexed && report.unindexed.length > 0 && (
             <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                Unindexed files added in Google Drive
-              </h3>
+              <DrawerSectionHeader
+                title="Unindexed files added in Google Drive"
+                count={report.unindexed.length.toLocaleString()}
+              />
               <div {...stylex.props(styles.cardList)}>
                 {report.unindexed.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        <span {...stylex.props(styles.fileIconWrap)}>
+                          <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        </span>
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -1644,22 +1621,20 @@ export function ExternalChangesDrawer({
                     </div>
 
                     <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
+                      <DrawerButton
+                        variant="primary"
                         onClick={() => handleAccept(item)}
                         disabled={isLocked}
                       >
                         Accept into Tsubasa
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnSecondary)}
+                      </DrawerButton>
+                      <DrawerButton
+                        variant="secondary"
                         onClick={() => handleMoveToRoot(item)}
                         disabled={isLocked}
                       >
                         Eject to Drive root
-                      </button>
+                      </DrawerButton>
                     </div>
                   </div>
                 ))}
@@ -1670,13 +1645,18 @@ export function ExternalChangesDrawer({
           {/* Modified files */}
           {showIndividualAcceptable && report?.modified && report.modified.length > 0 && (
             <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>Modified files</h3>
+              <DrawerSectionHeader
+                title="Modified files"
+                count={report.modified.length.toLocaleString()}
+              />
               <div {...stylex.props(styles.cardList)}>
                 {report.modified.map((item) => (
                   <div key={item.driveFileId} {...stylex.props(styles.card)}>
                     <div {...stylex.props(styles.fileHeaderRow)}>
                       <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        <span {...stylex.props(styles.fileIconWrap)}>
+                          <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                        </span>
                         <div {...stylex.props(styles.fileTitleCol)}>
                           <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
                             {item.name}
@@ -1693,14 +1673,13 @@ export function ExternalChangesDrawer({
                     </div>
 
                     <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
+                      <DrawerButton
+                        variant="primary"
                         onClick={() => handleAccept(item)}
                         disabled={isLocked}
                       >
                         Accept update
-                      </button>
+                      </DrawerButton>
                     </div>
                   </div>
                 ))}
@@ -1711,37 +1690,50 @@ export function ExternalChangesDrawer({
           {/* Missing or externally moved files */}
           {report?.missingRemote && report.missingRemote.length > 0 && (
             <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                <IconAlertTriangle size={16} color={colors.warning} />
-                Missing or externally moved files
-              </h3>
-              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
-                These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
-              </p>
+              <DrawerSectionHeader
+                icon={<IconAlertTriangle size={14} color={colors.warning} />}
+                title="Missing or externally moved files"
+                count={report.missingRemote.length.toLocaleString()}
+              />
+              <div {...stylex.props(styles.sectionSubBar)}>
+                <p {...stylex.props(styles.cardDesc)}>
+                  These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
+                </p>
+              </div>
               <div {...stylex.props(styles.cardList)}>
-                {report.missingRemote.map((item) => (
-                  <div key={item.driveFileId} {...stylex.props(styles.card)}>
-                    <div {...stylex.props(styles.fileHeaderRow)}>
-                      <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.virtualPath} size={16} />
-                        <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
-                          {item.virtualPath}
-                        </span>
+                {report.missingRemote.map((item) => {
+                  const baseName = item.virtualPath.split('/').filter(Boolean).pop() || item.virtualPath;
+                  return (
+                    <div key={item.driveFileId} {...stylex.props(styles.card)}>
+                      <div {...stylex.props(styles.fileHeaderRow)}>
+                        <div {...stylex.props(styles.fileTitleGroup)}>
+                          <span {...stylex.props(styles.fileIconWrap)}>
+                            <FileTypeIcon name={item.virtualPath} size={16} />
+                          </span>
+                          <div {...stylex.props(styles.fileTitleCol)}>
+                            <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                              {baseName}
+                            </span>
+                            <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+                              {item.virtualPath}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div {...stylex.props(styles.actionsRow)}>
+                        <button
+                          type="button"
+                          {...stylex.props(styles.btnDanger)}
+                          onClick={() => handleRemoveMissing(item)}
+                          disabled={isLocked}
+                        >
+                          Remove from Tsubasa
+                        </button>
                       </div>
                     </div>
-
-                    <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnDanger)}
-                        onClick={() => handleRemoveMissing(item)}
-                        disabled={isLocked}
-                      >
-                        Remove from Tsubasa
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1756,14 +1748,13 @@ export function ExternalChangesDrawer({
                 This account breached its 750 MB safety buffer. Auto-rebalance moves Tsubasa files to an emptier account in your pool to restore safe headroom.
               </p>
               <div>
-                <button
-                  type="button"
-                  {...stylex.props(styles.btnSecondary)}
+                <DrawerButton
+                  variant="secondary"
                   onClick={handleAutoRebalance}
                   disabled={isLocked}
                 >
                   {activeActionId === 'rebalance' ? 'Rebalancing...' : 'Auto-rebalance'}
-                </button>
+                </DrawerButton>
               </div>
             </div>
           )}
