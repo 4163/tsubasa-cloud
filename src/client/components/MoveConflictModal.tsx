@@ -2,8 +2,10 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, motion, radius, spacing, typography } from '../tokens.stylex.js';
 import { IconAlertTriangle, IconClose } from './Icons.js';
-import { formatBytes } from '../utils/format.js';
+import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
+
+export type MoveConflictContentMatch = 'identical' | 'different' | 'unverified';
 
 export interface MoveConflictItem {
   sourceFileId: string;
@@ -15,6 +17,8 @@ export interface MoveConflictItem {
   existingFileId?: string;
   existingSizeBytes?: number;
   existingUpdatedAt?: number;
+  contentMatch?: MoveConflictContentMatch;
+  canOverwrite?: boolean;
 }
 
 export type MoveConflictResolutionMode = 'skip' | 'keep_both' | 'overwrite';
@@ -184,10 +188,10 @@ const styles = stylex.create({
     boxSizing: 'border-box',
   },
   conflictRow: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto 64px',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space3,
+    gap: spacing.space2,
     paddingTop: spacing.space1,
     paddingBottom: spacing.space1,
     paddingLeft: spacing.space2,
@@ -202,7 +206,6 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     minWidth: 0,
-    flex: 1,
   },
   conflictSizes: {
     fontFamily: typography.fontFamilyMono,
@@ -210,7 +213,49 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
     whiteSpace: 'nowrap',
+    textAlign: 'right',
+  },
+  matchBadge: {
+    height: '18px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightBadge,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    whiteSpace: 'nowrap',
     flexShrink: 0,
+    boxSizing: 'border-box',
+  },
+  matchBadgeIdentical: {
+    backgroundColor: colors.surface,
+    borderColor: colors.borderSubtle,
+    color: colors.secondaryText,
+  },
+  matchBadgeDiff: {
+    backgroundColor: colors.warningSurface,
+    borderColor: colors.warningBorder,
+    color: colors.warning,
+  },
+  infoBox: {
+    padding: spacing.space3,
+    borderRadius: radius.compact,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+  },
+  infoText: {
+    margin: 0,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    lineHeight: '1.4',
+    color: colors.secondaryText,
   },
   warningBox: {
     padding: spacing.space3,
@@ -287,7 +332,9 @@ const styles = stylex.create({
     borderRadius: radius.compact,
     backgroundColor: colors.danger,
     color: colors.dangerText,
-    borderWidth: '0px',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.danger,
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
     fontWeight: typography.fontWeightTitle,
@@ -299,6 +346,7 @@ const styles = stylex.create({
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerHover,
+      borderColor: colors.dangerHover,
     },
     ':focus-visible': {
       outlineWidth: '2px',
@@ -307,7 +355,10 @@ const styles = stylex.create({
       outlineOffset: '1px',
     },
     ':disabled': {
-      opacity: 0.5,
+      opacity: 0.45,
+      backgroundColor: colors.surfaceAlt,
+      color: colors.secondaryText,
+      borderColor: colors.borderSubtle,
       cursor: 'not-allowed',
     },
     '@media (pointer: coarse)': {
@@ -381,6 +432,36 @@ export function MoveConflictModal({
   const singleSourceDate = singleConflict ? formatConflictDate(singleConflict.sourceUpdatedAt) : null;
   const singleExistingDate = singleConflict ? formatConflictDate(singleConflict.existingUpdatedAt) : null;
 
+  const getConflictMatchMeta = (conflict: MoveConflictItem): { label: string; isIdentical: boolean } => {
+    const match = conflict.contentMatch;
+    if (match === 'identical') {
+      return { label: 'Identical copy', isIdentical: true };
+    }
+    if (conflict.existingSizeBytes !== undefined && conflict.existingSizeBytes === conflict.sourceSizeBytes) {
+      return {
+        label: match === 'different' ? 'Same size, different content' : 'Same size (no checksum)',
+        isIdentical: false,
+      };
+    }
+    return { label: 'Different size', isIdentical: false };
+  };
+
+  const overwriteableConflicts = conflicts.filter(
+    (c) => c.canOverwrite ?? Boolean(c.existingFileId)
+  );
+  const hasOverwriteTarget = overwriteableConflicts.length > 0;
+  const reclaimedBytes = overwriteableConflicts.reduce(
+    (sum, c) => sum + (c.existingSizeBytes ?? 0),
+    0
+  );
+  const identicalCount = conflicts.filter((c) => c.contentMatch === 'identical').length;
+  const differentCount = conflicts.length - identicalCount;
+  const singleMatchMeta = singleConflict ? getConflictMatchMeta(singleConflict) : null;
+  const singleDeltaBytes =
+    singleConflict && singleConflict.existingSizeBytes !== undefined
+      ? singleConflict.sourceSizeBytes - singleConflict.existingSizeBytes
+      : null;
+
   return (
     <ModalDialog
       isOpen={effectiveOpen}
@@ -424,6 +505,19 @@ export function MoveConflictModal({
               </p>
             )}
             <div {...stylex.props(styles.detailCard)}>
+              {singleMatchMeta && (
+                <div {...stylex.props(styles.detailRow)}>
+                  <span {...stylex.props(styles.detailLabel)}>Content check</span>
+                  <span
+                    {...stylex.props(
+                      styles.matchBadge,
+                      singleMatchMeta.isIdentical ? styles.matchBadgeIdentical : styles.matchBadgeDiff
+                    )}
+                  >
+                    {singleMatchMeta.label}
+                  </span>
+                </div>
+              )}
               <div {...stylex.props(styles.detailRow)}>
                 <span {...stylex.props(styles.detailLabel)}>Moving file</span>
                 <span {...stylex.props(styles.detailValue)}>
@@ -433,12 +527,22 @@ export function MoveConflictModal({
               </div>
               {(singleConflict.existingSizeBytes !== undefined || singleExistingDate) && (
                 <div {...stylex.props(styles.detailRow)}>
-                  <span {...stylex.props(styles.detailLabel)}>Existing file</span>
+                  <span {...stylex.props(styles.detailLabel)}>
+                    {hasOverwriteTarget ? 'Existing file' : 'Colliding item'}
+                  </span>
                   <span {...stylex.props(styles.detailValue)}>
                     {singleConflict.existingSizeBytes !== undefined
                       ? formatBytes(singleConflict.existingSizeBytes)
                       : 'Unknown size'}
                     {singleExistingDate ? `, ${singleExistingDate}` : ''}
+                  </span>
+                </div>
+              )}
+              {hasOverwriteTarget && singleDeltaBytes !== null && (
+                <div {...stylex.props(styles.detailRow)}>
+                  <span {...stylex.props(styles.detailLabel)}>If overwritten</span>
+                  <span {...stylex.props(styles.detailValue)}>
+                    Frees {formatBytes(singleConflict.existingSizeBytes ?? 0)} ({formatSignedBytes(singleDeltaBytes)} net)
                   </span>
                 </div>
               )}
@@ -450,34 +554,63 @@ export function MoveConflictModal({
               {conflicts.length} files already exist in{' '}
               <span {...stylex.props(styles.pathInline)}>{targetFolderPath || '/'}</span>.
             </p>
-            {cleanCount > 0 && (
-              <p {...stylex.props(styles.subText)}>
-                {cleanCount} other {cleanCount === 1 ? 'item' : 'items'} will move with no conflicts.
-              </p>
-            )}
+            <p {...stylex.props(styles.subText)}>
+              {identicalCount > 0 && differentCount > 0
+                ? `${identicalCount} identical, ${differentCount} different`
+                : identicalCount === conflicts.length
+                ? 'All colliding files are byte-for-byte identical'
+                : 'Colliding files have differing size or content'}
+              {cleanCount > 0
+                ? ` · ${cleanCount} other ${cleanCount === 1 ? 'item' : 'items'} will move with no conflicts`
+                : ''}
+            </p>
             <div {...stylex.props(styles.conflictList)}>
-              {conflicts.map((conflict) => (
-                <div key={conflict.sourceFileId} {...stylex.props(styles.conflictRow)}>
-                  <span {...stylex.props(styles.conflictName)} title={conflict.destPath}>
-                    {conflict.sourceName}
-                  </span>
-                  <span {...stylex.props(styles.conflictSizes)}>
-                    {formatBytes(conflict.sourceSizeBytes)}
-                    {conflict.existingSizeBytes !== undefined
-                      ? ` / ${formatBytes(conflict.existingSizeBytes)}`
-                      : ''}
-                  </span>
-                </div>
-              ))}
+              {conflicts.map((conflict) => {
+                const meta = getConflictMatchMeta(conflict);
+                return (
+                  <div key={conflict.sourceFileId} {...stylex.props(styles.conflictRow)}>
+                    <span {...stylex.props(styles.conflictName)} title={conflict.destPath}>
+                      {conflict.sourceName}
+                    </span>
+                    <span {...stylex.props(styles.conflictSizes)}>
+                      {formatBytes(conflict.sourceSizeBytes)}
+                      {conflict.existingSizeBytes !== undefined
+                        ? ` / ${formatBytes(conflict.existingSizeBytes)}`
+                        : ''}
+                    </span>
+                    <span
+                      {...stylex.props(
+                        styles.matchBadge,
+                        meta.isIdentical ? styles.matchBadgeIdentical : styles.matchBadgeDiff
+                      )}
+                      title={meta.label}
+                    >
+                      {meta.isIdentical ? 'Identical' : 'Different'}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
 
-        <div {...stylex.props(styles.warningBox)}>
-          <p {...stylex.props(styles.warningText)}>
-            Overwrite permanently replaces the existing file without moving it to Trash.
-          </p>
-        </div>
+        {hasOverwriteTarget ? (
+          <div {...stylex.props(styles.warningBox)}>
+            <p {...stylex.props(styles.warningText)}>
+              Overwrite permanently replaces{' '}
+              {overwriteableConflicts.length === 1
+                ? 'the existing file'
+                : `${overwriteableConflicts.length} existing files`}{' '}
+              without moving to Trash, freeing {formatBytes(reclaimedBytes)}.
+            </p>
+          </div>
+        ) : (
+          <div {...stylex.props(styles.infoBox)}>
+            <p {...stylex.props(styles.infoText)}>
+              Name collision within this move batch. No existing destination file can be overwritten; choose Skip or Keep both.
+            </p>
+          </div>
+        )}
       </div>
 
       <div {...stylex.props(styles.footer)}>
@@ -493,7 +626,12 @@ export function MoveConflictModal({
           type="button"
           {...stylex.props(styles.overwriteBtn)}
           onClick={() => handleChoose('overwrite')}
-          disabled={isSubmitting}
+          disabled={isSubmitting || !hasOverwriteTarget}
+          title={
+            !hasOverwriteTarget
+              ? 'Overwrite is unavailable because there is no existing destination file to replace'
+              : undefined
+          }
         >
           {isSubmitting && activeMode === 'overwrite' ? 'Overwriting...' : 'Overwrite'}
         </button>

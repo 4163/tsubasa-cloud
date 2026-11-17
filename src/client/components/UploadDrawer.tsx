@@ -4,19 +4,22 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { client } from '../api.js';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconClose, IconUpload, FileTypeIcon, IconCheck, IconAlertTriangle, IconChevronDown, IconFolder, IconFolderFilled, IconRotateCcw } from './Icons.js';
-import { formatBytes } from '../utils/format.js';
-import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
+import { formatBytes, formatSignedBytes } from '../utils/format.js';
+import { verifyFileMatchesHash, type FileContentVerification } from '../utils/fileHash.js';
+import { DAILY_UPLOAD_LIMIT_BYTES, evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { useBeforeUnload } from '../utils/useBeforeUnload.js';
 import { DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
 import type { AccountItem } from './Sidebar.js';
 
 export type UploadConflictAction = 'skip' | 'replace' | 'keep_both';
+export type UploadContentMatchStatus = FileContentVerification | 'checking';
 
 export interface ExistingPoolFile {
   id: string;
   virtualPath: string;
   name: string;
   sizeBytes: number;
+  hash: string | null;
   accountId: string;
   updatedAt: number;
 }
@@ -735,6 +738,8 @@ interface UploadFileCardProps {
   progress?: FileProgressState;
   existingFile?: ExistingPoolFile;
   existingAcc?: AccountItem;
+  contentMatch?: UploadContentMatchStatus;
+  canHoldUpload: boolean;
   conflictAction?: UploadConflictAction;
   selectedAccountId?: string;
   chosenAcc?: AccountItem;
@@ -752,6 +757,8 @@ const UploadFileCard = React.memo(function UploadFileCard({
   progress,
   existingFile,
   existingAcc,
+  contentMatch,
+  canHoldUpload,
   conflictAction,
   selectedAccountId,
   chosenAcc,
@@ -771,7 +778,30 @@ const UploadFileCard = React.memo(function UploadFileCard({
   const isSkipped = effectiveConflictAction === 'skip';
   const isComplete = progress?.status === 'complete';
   const isSameSize = Boolean(existingFile && existingFile.sizeBytes === item.file.size);
+  const resolvedMatch: UploadContentMatchStatus =
+    contentMatch ??
+    (existingFile
+      ? isSameSize
+        ? existingFile.hash
+          ? 'checking'
+          : item.file.size === 0
+            ? 'identical'
+            : 'unverified'
+        : 'different'
+      : 'different');
+  const isIdentical = resolvedMatch === 'identical';
   const conflictControlsDisabled = isUploading || isComplete;
+  const conflictComparisonText =
+    resolvedMatch === 'checking'
+      ? 'Checking contents...'
+      : resolvedMatch === 'identical'
+        ? 'Byte-for-byte identical'
+        : resolvedMatch === 'unverified'
+          ? 'Same size (no checksum stored)'
+          : isSameSize
+            ? 'Same size, different content'
+            : 'Different size';
+  const netDeltaBytes = existingFile ? item.file.size - existingFile.sizeBytes : 0;
 
   return (
     <div
@@ -807,8 +837,8 @@ const UploadFileCard = React.memo(function UploadFileCard({
             {progress.error === 'Cancelled' ? 'Cancelled' : 'Failed'}
           </span>
         ) : isSkipped && existingFile ? (
-          <span {...stylex.props(styles.badge, isSameSize ? styles.badgeMuted : styles.badgeWarning)}>
-            {isSameSize ? 'Already uploaded' : 'Skipped'}
+          <span {...stylex.props(styles.badge, isIdentical ? styles.badgeMuted : styles.badgeWarning)}>
+            {isIdentical ? 'Already uploaded' : 'Skipped'}
           </span>
         ) : (
           <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.file.size)}</span>
@@ -827,7 +857,8 @@ const UploadFileCard = React.memo(function UploadFileCard({
           Existing: {formatBytes(existingFile.sizeBytes)}
           {existingAcc ? ` on ${existingAcc.displayName || existingAcc.id}` : ''}
           {' · '}
-          {isSameSize ? 'Same size' : 'Different size'}
+          {conflictComparisonText}
+          {effectiveConflictAction === 'replace' ? ` · ${formatSignedBytes(netDeltaBytes)} net` : ''}
         </span>
       )}
 
@@ -843,12 +874,17 @@ const UploadFileCard = React.memo(function UploadFileCard({
               ] as const
             ).map((opt) => {
               const active = effectiveConflictAction === opt.value;
+              const lacksCapacity = opt.value !== 'skip' && !canHoldUpload;
+              const disabledReason = lacksCapacity
+                ? `No drive has enough headroom or 24h transfer quota for ${formatBytes(item.file.size)}`
+                : undefined;
               return (
                 <DrawerButton
                   key={opt.value}
                   variant={active ? 'primary' : 'secondary'}
                   aria-pressed={active}
-                  disabled={conflictControlsDisabled}
+                  disabled={conflictControlsDisabled || lacksCapacity}
+                  title={disabledReason}
                   onClick={() => onSelectConflictAction(item.key, opt.value)}
                 >
                   {opt.label}
@@ -873,15 +909,10 @@ const UploadFileCard = React.memo(function UploadFileCard({
                     </option>
                   )}
                   {accounts.map((acc) => {
-                    const freedBytes =
-                      effectiveConflictAction === 'replace' && existingFile?.accountId === acc.id
-                        ? existingFile.sizeBytes
-                        : 0;
                     const { canHold, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
                       acc,
                       item.file.size,
                       {
-                        freedBytes,
                         isAutoSelected: acc.id === preview?.targetAccountId,
                         compactHeadroomLabel: true,
                       },
@@ -934,10 +965,13 @@ interface UploadFolderCardProps {
   isPlanning: boolean;
   previewByPath: Map<string, PlacementItemPreview>;
   conflictsByPath: Record<string, ExistingPoolFile>;
+  contentMatchByKey: Record<string, UploadContentMatchStatus>;
   conflictActions: Record<string, UploadConflictAction>;
   selectedAccounts: Record<string, string>;
   fileProgress: Record<string, FileProgressState>;
   accountById: Map<string, AccountItem>;
+  canHoldFile: (sizeBytes: number) => boolean;
+  canFitTotalBytes: (totalBytes: number) => boolean;
   onToggleExpand: (groupKey: string) => void;
   onApplyFolderConflictAction: (groupKey: string, action: UploadConflictAction) => void;
 }
@@ -949,10 +983,13 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
   isPlanning,
   previewByPath,
   conflictsByPath,
+  contentMatchByKey,
   conflictActions,
   selectedAccounts,
   fileProgress,
   accountById,
+  canHoldFile,
+  canFitTotalBytes,
   onToggleExpand,
   onApplyFolderConflictAction,
 }: UploadFolderCardProps) {
@@ -961,10 +998,13 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
   let completedCount = 0;
   let uploadingCount = 0;
   let errorCount = 0;
-  let sameSizeSkippedCount = 0;
+  let identicalSkippedCount = 0;
   let actionableCount = 0;
   let actionableBytes = 0;
+  let replacedBytes = 0;
   let loadedBytes = 0;
+  let basePendingBytes = 0;
+  let editableConflictBytes = 0;
 
   const editableConflicts: NormalizedUploadItem[] = [];
   const targetAccountIds = new Set<string>();
@@ -986,18 +1026,25 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
 
     if (existingFile && !isComplete) {
       editableConflicts.push(item);
+      editableConflictBytes += item.file.size;
+    } else if (!isComplete) {
+      basePendingBytes += item.file.size;
     }
 
     if (effectiveAction === 'skip') {
       skippedCount += 1;
-      if (existingFile && existingFile.sizeBytes === item.file.size) {
-        sameSizeSkippedCount += 1;
+      const match = contentMatchByKey[item.key];
+      if (match === 'identical') {
+        identicalSkippedCount += 1;
       }
       continue;
     }
 
     actionableCount += 1;
     actionableBytes += item.file.size;
+    if (existingFile && effectiveAction === 'replace') {
+      replacedBytes += existingFile.sizeBytes;
+    }
 
     const chosenAccountId = selectedAccounts[item.key] || preview?.targetAccountId;
     if (chosenAccountId) {
@@ -1019,6 +1066,10 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
   const allComplete = actionableCount > 0 && completedCount === actionableCount;
   const allSkipped = !allRejected && actionableCount === 0 && skippedCount > 0;
   const pct = actionableBytes > 0 ? Math.round((loadedBytes / actionableBytes) * 100) : 0;
+  const netDeltaBytes = actionableBytes - replacedBytes;
+  const folderCanFitConflicts =
+    editableConflicts.every((it) => canHoldFile(it.file.size)) &&
+    canFitTotalBytes(basePendingBytes + editableConflictBytes);
 
   let uniformFolderConflictAction: UploadConflictAction | null = null;
   if (editableConflicts.length > 0) {
@@ -1075,10 +1126,10 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
           <span
             {...stylex.props(
               styles.badge,
-              sameSizeSkippedCount === skippedCount ? styles.badgeMuted : styles.badgeWarning
+              identicalSkippedCount === skippedCount ? styles.badgeMuted : styles.badgeWarning
             )}
           >
-            {sameSizeSkippedCount === skippedCount ? 'Already uploaded' : 'Skipped'}
+            {identicalSkippedCount === skippedCount ? 'Already uploaded' : 'Skipped'}
           </span>
         ) : editableConflicts.length > 0 ? (
           <span {...stylex.props(styles.badge, styles.badgeWarning)}>
@@ -1106,6 +1157,7 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
           : ''}
         {skippedCount > 0 ? ` · ${skippedCount} skipped` : ''}
         {` · ${formatBytes(skippedCount > 0 ? actionableBytes : group.totalBytes)}`}
+        {replacedBytes > 0 ? ` (${formatSignedBytes(netDeltaBytes)} net)` : ''}
       </div>
 
       {!allRejected && editableConflicts.length > 0 && (
@@ -1137,12 +1189,18 @@ const UploadFolderCard = React.memo(function UploadFolderCard({
             ] as const
           ).map((opt) => {
             const active = uniformFolderConflictAction === opt.value;
+            const lacksCapacity = opt.value !== 'skip' && !folderCanFitConflicts;
             return (
               <DrawerButton
                 key={opt.value}
                 variant={active ? 'primary' : 'secondary'}
                 aria-pressed={active}
-                disabled={isUploading}
+                disabled={isUploading || lacksCapacity}
+                title={
+                  lacksCapacity
+                    ? 'Insufficient pool headroom or 24h transfer quota for all conflicting files in this folder'
+                    : undefined
+                }
                 onClick={() => onApplyFolderConflictAction(group.key, opt.value)}
               >
                 {opt.label}
@@ -1175,6 +1233,7 @@ export function UploadDrawer({
 }: UploadDrawerProps) {
   const [previews, setPreviews] = useState<PlacementItemPreview[]>([]);
   const [conflictsByPath, setConflictsByPath] = useState<Record<string, ExistingPoolFile>>({});
+  const [contentMatchByKey, setContentMatchByKey] = useState<Record<string, UploadContentMatchStatus>>({});
   const [conflictActions, setConflictActions] = useState<Record<string, UploadConflictAction>>({});
   const [isPlanning, setIsPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -1304,22 +1363,61 @@ export function UploadDrawer({
     });
   }, [actionableItems, fileProgress]);
 
-  const { totalBytes, actionableBytes, allRejected } = useMemo(() => {
+  const { totalBytes, actionableBytes, replacedBytes, netDeltaBytes, allRejected } = useMemo(() => {
     let allBytes = 0;
     for (const it of normalizedItems) {
       allBytes += it.file.size;
     }
     let activeBytes = 0;
+    let repBytes = 0;
     for (const it of actionableItems) {
       activeBytes += it.file.size;
+      const existing = conflictsByPath[it.virtualPath];
+      if (existing && conflictActions[it.key] === 'replace') {
+        repBytes += existing.sizeBytes;
+      }
     }
     const allExceed = normalizedItems.length > 0 && normalizedItems.every((it) => it.file.size > CEILING_14_25_GB);
-    return { totalBytes: allBytes, actionableBytes: activeBytes, allRejected: allExceed };
-  }, [normalizedItems, actionableItems]);
+    return {
+      totalBytes: allBytes,
+      actionableBytes: activeBytes,
+      replacedBytes: repBytes,
+      netDeltaBytes: activeBytes - repBytes,
+      allRejected: allExceed,
+    };
+  }, [normalizedItems, actionableItems, conflictsByPath, conflictActions]);
+
+  const { totalPoolHeadroom, totalPoolUploadBudget, canHoldFile, canFitTotalBytes } = useMemo(() => {
+    if (accounts.length === 0) {
+      return {
+        totalPoolHeadroom: Infinity,
+        totalPoolUploadBudget: Infinity,
+        canHoldFile: () => true,
+        canFitTotalBytes: () => true,
+      };
+    }
+
+    const activeEligible = accounts.filter((acc) => !acc.isDisabled && acc.authorized);
+    const headroomSum = activeEligible.reduce((sum, acc) => sum + Math.max(0, acc.headroomBytes), 0);
+    const budgetSum = activeEligible.reduce(
+      (sum, acc) => sum + Math.max(0, acc.transferStats?.remainingUploadBytes24h ?? DAILY_UPLOAD_LIMIT_BYTES),
+      0
+    );
+
+    return {
+      totalPoolHeadroom: headroomSum,
+      totalPoolUploadBudget: budgetSum,
+      canHoldFile: (sizeBytes: number) =>
+        activeEligible.some((acc) => evaluateAccountTransferCandidate(acc, sizeBytes).canHold),
+      canFitTotalBytes: (neededBytes: number) =>
+        neededBytes <= headroomSum && neededBytes <= budgetSum,
+    };
+  }, [accounts]);
 
   // Reset per-session progress and conflict overrides whenever staged items change
   useEffect(() => {
     setConflictsByPath({});
+    setContentMatchByKey({});
     setConflictActions({});
     setExpandedFolders({});
     progressRef.current = {};
@@ -1327,6 +1425,58 @@ export function UploadDrawer({
     setFileProgress({});
     setSelectedAccounts({});
   }, [isOpen, normalizedItems, poolId]);
+
+  // Verify byte-for-byte identity only when a conflicting file shares the existing file's exact size
+  useEffect(() => {
+    if (!isOpen || conflictItems.length === 0) {
+      setContentMatchByKey({});
+      return;
+    }
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    const immediate: Record<string, UploadContentMatchStatus> = {};
+    const toVerify: Array<{ item: NormalizedUploadItem; existing: ExistingPoolFile }> = [];
+
+    for (const item of conflictItems) {
+      const existing = conflictsByPath[item.virtualPath];
+      if (!existing) continue;
+      if (item.file.size !== existing.sizeBytes) {
+        immediate[item.key] = 'different';
+      } else if (!existing.hash) {
+        immediate[item.key] = item.file.size === 0 ? 'identical' : 'unverified';
+      } else {
+        immediate[item.key] = 'checking';
+        toVerify.push({ item, existing });
+      }
+    }
+
+    setContentMatchByKey(immediate);
+    if (toVerify.length === 0) return;
+
+    void (async () => {
+      for (const entry of toVerify) {
+        if (signal.aborted) break;
+        try {
+          const result = await verifyFileMatchesHash(
+            entry.item.file,
+            entry.existing.sizeBytes,
+            entry.existing.hash,
+            signal
+          );
+          if (signal.aborted) break;
+          setContentMatchByKey((prev) => ({ ...prev, [entry.item.key]: result }));
+        } catch (err) {
+          if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) break;
+          setContentMatchByKey((prev) => ({ ...prev, [entry.item.key]: 'unverified' }));
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [isOpen, conflictItems, conflictsByPath]);
 
   // Request placement plan whenever staged files or conflict choices change
   useEffect(() => {
@@ -2031,6 +2181,21 @@ export function UploadDrawer({
     () => conflictItems.some((it) => fileProgress[it.key]?.status !== 'complete'),
     [conflictItems, fileProgress]
   );
+  const batchCanFitConflicts = useMemo(() => {
+    let neededBytes = 0;
+    for (const it of normalizedItems) {
+      if (it.file.size > CEILING_14_25_GB) continue;
+      if (fileProgress[it.key]?.status === 'complete') continue;
+      const isConflict = Boolean(conflictsByPath[it.virtualPath]);
+      if (isConflict) {
+        if (!canHoldFile(it.file.size)) return false;
+        neededBytes += it.file.size;
+      } else {
+        neededBytes += it.file.size;
+      }
+    }
+    return neededBytes <= totalPoolHeadroom && neededBytes <= totalPoolUploadBudget;
+  }, [normalizedItems, fileProgress, conflictsByPath, canHoldFile, totalPoolHeadroom, totalPoolUploadBudget]);
 
   if (!isOpen) return null;
 
@@ -2115,10 +2280,13 @@ export function UploadDrawer({
           isPlanning={isPlanning}
           previewByPath={previewByPath}
           conflictsByPath={conflictsByPath}
+          contentMatchByKey={contentMatchByKey}
           conflictActions={conflictActions}
           selectedAccounts={selectedAccounts}
           fileProgress={fileProgress}
           accountById={accountById}
+          canHoldFile={canHoldFile}
+          canFitTotalBytes={canFitTotalBytes}
           onToggleExpand={handleToggleFolderExpand}
           onApplyFolderConflictAction={handleApplyFolderConflictAction}
         />
@@ -2163,6 +2331,8 @@ export function UploadDrawer({
         progress={fileProgress[item.key]}
         existingFile={existingFile}
         existingAcc={existingAcc}
+        contentMatch={contentMatchByKey[item.key]}
+        canHoldUpload={canHoldFile(item.file.size)}
         conflictAction={conflictActions[item.key]}
         selectedAccountId={selectedAccountId}
         chosenAcc={chosenAcc}
@@ -2222,6 +2392,7 @@ export function UploadDrawer({
                 ? ` + ${stagedEmptyFolders.length} folder${stagedEmptyFolders.length === 1 ? '' : 's'}`
                 : ''}{' '}
               · {formatBytes(skippedCount > 0 ? actionableBytes : totalBytes)}
+              {replacedBytes > 0 ? ` (${formatSignedBytes(netDeltaBytes)} net)` : ''}
             </span>
           </div>
 
@@ -2259,12 +2430,18 @@ export function UploadDrawer({
                 ] as const
               ).map((opt) => {
                 const active = batchConflictSelection === opt.value;
+                const lacksCapacity = opt.value !== 'skip' && !batchCanFitConflicts;
                 return (
                   <DrawerButton
                     key={opt.value}
                     variant={active ? 'primary' : 'secondary'}
-                    disabled={isUploading}
+                    disabled={isUploading || lacksCapacity}
                     aria-pressed={active}
+                    title={
+                      lacksCapacity
+                        ? 'Insufficient pool headroom or 24h transfer quota for all conflicting files'
+                        : undefined
+                    }
                     onClick={() => handleApplyBatchConflictAction(opt.value)}
                   >
                     {opt.label}

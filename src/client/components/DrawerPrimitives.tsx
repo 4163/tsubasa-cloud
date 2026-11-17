@@ -77,7 +77,7 @@ const styles = stylex.create({
       outlineOffset: '1px',
     },
     ':disabled': {
-      opacity: 0.5,
+      opacity: 0.45,
       cursor: 'not-allowed',
     },
     '@media (pointer: coarse)': {
@@ -117,7 +117,10 @@ const styles = stylex.create({
       outlineOffset: '1px',
     },
     ':disabled': {
-      opacity: 0.5,
+      opacity: 0.45,
+      backgroundColor: colors.surfaceAlt,
+      color: colors.secondaryText,
+      borderColor: colors.borderSubtle,
       cursor: 'not-allowed',
     },
     '@media (pointer: coarse)': {
