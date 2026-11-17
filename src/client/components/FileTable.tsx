@@ -19,6 +19,13 @@ import {
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import {
+  getParentDir,
+  setActiveInternalDragPayload,
+  rejectInvalidInternalDragOver,
+  parseInternalDropItems,
+} from '../utils/virtualPath.js';
+import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { RedactedEmail } from './RedactedEmail.js';
 
 const TABLE_ROW_HEIGHT_DESKTOP = 36;
@@ -165,7 +172,7 @@ const styles = stylex.create({
     ':focus-visible': {
       outlineWidth: '2px',
       outlineStyle: 'solid',
-      outlineColor: colors.accentGold,
+      outlineColor: colors.focusRing,
       outlineOffset: '-2px',
     },
   },
@@ -277,13 +284,6 @@ const styles = stylex.create({
     fontFamily: typography.fontFamilyBody,
     backgroundColor: 'transparent',
     transition: motion.transitionFast,
-    outline: 'none',
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-2px',
-    },
     '@media (pointer: coarse)': {
       gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 120px',
       ':active': {
@@ -413,141 +413,85 @@ const styles = stylex.create({
     alignItems: 'center',
     minWidth: 0,
     height: '100%',
-    paddingLeft: '0px',
+    paddingLeft: '2px',
     paddingRight: spacing.space6,
     overflow: 'hidden',
     '@media (max-width: 768px)': {
       display: 'none',
     },
   },
-  accountTransferBtn: {
+  selectWrapper: {
+    position: 'relative',
     display: 'inline-flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space1,
     minWidth: 0,
     maxWidth: '136px',
-    minHeight: '28px',
-    paddingTop: '0px',
-    paddingBottom: '0px',
-    paddingLeft: '0px',
-    paddingRight: '0px',
-    borderRadius: radius.compact,
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    color: colors.brandAccent,
-    cursor: 'pointer',
-    outline: 'none',
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-2px',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '36px',
-    },
   },
-  accountTransferBtnInner: {
-    display: 'inline-flex',
+  selectChevron: {
+    position: 'absolute',
+    right: '7px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    pointerEvents: 'none',
+    color: colors.brandAccent,
+    display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space1,
-    minWidth: 0,
-    maxWidth: '100%',
+    justifyContent: 'center',
+  },
+  accountSelect: {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    fontSize: typography.fontSizeBadge,
+    fontFamily: typography.fontFamilyMono,
     height: '22px',
+    lineHeight: '18px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
     paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
+    paddingRight: '22px',
     borderRadius: radius.compact,
     backgroundColor: colors.brandAccentSurface,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     color: colors.brandAccent,
-    fontSize: typography.fontSizeBadge,
-    fontFamily: typography.fontFamilyMono,
+    width: '100%',
+    maxWidth: '136px',
+    outline: 'none',
+    cursor: 'pointer',
     boxSizing: 'border-box',
-    pointerEvents: 'none',
-    transition: motion.transitionFast,
-  },
-  accountTransferBtnLabel: {
-    overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-  },
-  accountTransferBtnDisabled: {
-    opacity: 0.5,
-    cursor: 'wait',
-    pointerEvents: 'none',
-  },
-  transferPopover: {
-    position: 'fixed',
-    inset: 'auto',
-    margin: '0px',
-    padding: spacing.space1,
-    backgroundColor: colors.surfaceElevated,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    borderRadius: radius.card,
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.22)',
-    minWidth: '220px',
-    maxWidth: '320px',
-    maxHeight: '280px',
-    overflowY: 'auto',
-    color: colors.primaryText,
-    boxSizing: 'border-box',
-    zIndex: 100,
-  },
-  transferMenuItem: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.space2,
-    width: '100%',
-    minHeight: '36px',
-    paddingTop: spacing.space1,
-    paddingBottom: spacing.space1,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.compact,
-    borderWidth: '0px',
-    backgroundColor: 'transparent',
-    color: colors.primaryText,
-    cursor: 'pointer',
-    textAlign: 'left',
-    fontSize: typography.fontSizeMeta,
-    fontFamily: typography.fontFamilyBody,
-    boxSizing: 'border-box',
-    outline: 'none',
-    transition: motion.transitionFast,
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      backgroundColor: colors.rowHover,
+      borderColor: colors.accentGold,
+      backgroundColor: colors.surfaceAlt,
     },
-    ':focus-visible': {
+    ':focus': {
+      borderColor: colors.focusRing,
       outlineWidth: '2px',
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
-      outlineOffset: '-2px',
+      outlineOffset: '-1px',
+    },
+    ':focus-visible': {
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
     '@media (pointer: coarse)': {
-      minHeight: '44px',
+      minHeight: '36px',
     },
   },
-  transferMenuItemCurrent: {
-    fontWeight: '600',
-    color: colors.brandAccent,
-    backgroundColor: colors.brandAccentSurface,
-  },
-  transferMenuItemDisabled: {
-    opacity: 0.45,
-    cursor: 'not-allowed',
-    color: colors.disabledText,
-    ':hover': {
-      backgroundColor: 'transparent',
-    },
+  accountSelectTransferring: {
+    opacity: 0.5,
+    cursor: 'wait',
+    pointerEvents: 'none',
   },
   accountPill: {
     fontSize: typography.fontSizeBadge,
@@ -733,22 +677,6 @@ const styles = stylex.create({
     margin: 0,
     lineHeight: '1.4',
   },
-  dropTargetBadge: {
-    fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
-    color: colors.primaryText,
-    backgroundColor: colors.selectionBg,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
-    marginTop: spacing.space1,
-  },
   loadingSpinner: {
     position: 'relative',
     width: layout.loadingSpinnerSize,
@@ -759,16 +687,6 @@ const styles = stylex.create({
     backgroundColor: colors.progressTrack,
   },
 });
-
-function getParentDir(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  if (parts.length <= 1) return '/';
-  return '/' + parts.slice(0, -1).join('/');
-}
-
-function formatGbCompact(bytes: number): string {
-  return (bytes / (1024 * 1024 * 1024)).toFixed(1);
-}
 
 function formatDate(dateValue: Date | number | string | null | undefined): string {
   if (!dateValue) return '—';
@@ -1016,7 +934,6 @@ interface MemoParentRowProps {
   virtualSize: number;
   virtualStart: number;
   isSelected: boolean;
-  isFocused: boolean;
   isDragOver: boolean;
   isTrashView: boolean;
   isSharePoolActive: boolean;
@@ -1024,7 +941,6 @@ interface MemoParentRowProps {
   onNavigate: (path: string) => void;
   onSetDragOverRowId: React.Dispatch<React.SetStateAction<string | null>>;
   onRowDrop: (e: React.DragEvent, targetVirtualPath: string) => void;
-  onRowFocus: (rowIndex: number) => void;
 }
 
 const MemoParentRow = React.memo(function MemoParentRow({
@@ -1033,7 +949,6 @@ const MemoParentRow = React.memo(function MemoParentRow({
   virtualSize,
   virtualStart,
   isSelected,
-  isFocused,
   isDragOver,
   isTrashView,
   isSharePoolActive,
@@ -1041,7 +956,6 @@ const MemoParentRow = React.memo(function MemoParentRow({
   onNavigate,
   onSetDragOverRowId,
   onRowDrop,
-  onRowFocus,
 }: MemoParentRowProps) {
   return (
     <div
@@ -1065,9 +979,6 @@ const MemoParentRow = React.memo(function MemoParentRow({
       />
       <div
         data-row="true"
-        data-row-index={rowIndex}
-        tabIndex={isFocused ? 0 : -1}
-        onFocus={() => onRowFocus(rowIndex)}
         {...stylex.props(
           styles.rowMain,
           isSelected && styles.rowSelected,
@@ -1079,6 +990,13 @@ const MemoParentRow = React.memo(function MemoParentRow({
         }}
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
+          if (
+            rejectInvalidInternalDragOver(e, path, () =>
+              onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev))
+            )
+          ) {
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           if (e.dataTransfer) {
@@ -1092,6 +1010,14 @@ const MemoParentRow = React.memo(function MemoParentRow({
           onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
         }}
         onDrop={(e) => {
+          if (isInternalItemDrag(e) && !parseInternalDropItems(e, path)) {
+            e.preventDefault();
+            e.stopPropagation();
+            (e.nativeEvent as any).__tsubasaHandled = true;
+            setActiveInternalDragPayload(null);
+            onSetDragOverRowId(null);
+            return;
+          }
           onSetDragOverRowId(null);
           onRowDrop(e, path);
         }}
@@ -1102,7 +1028,7 @@ const MemoParentRow = React.memo(function MemoParentRow({
           <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
         </div>
         <div role="gridcell" {...stylex.props(styles.accountCell)}>
-          <span {...stylex.props(styles.accountPill)} title="Parent folder">Parent folder</span>
+          <span {...stylex.props(styles.accountPill)}>Parent folder</span>
         </div>
         <div role="gridcell" {...stylex.props(styles.tabularCell)}>—</div>
         <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>—</div>
@@ -1130,7 +1056,6 @@ interface MemoFolderRowProps {
   virtualSize: number;
   virtualStart: number;
   isSelected: boolean;
-  isFocused: boolean;
   isDragOver: boolean;
   isCut: boolean;
   folderSize: number;
@@ -1148,7 +1073,6 @@ interface MemoFolderRowProps {
   onCopyBatchLinks?: (folderId: string, folderName: string) => void;
   onDeleteFolder?: (folder: ClientFolder) => void;
   onNavigate: (path: string) => void;
-  onRowFocus: (rowIndex: number) => void;
 }
 
 const MemoFolderRow = React.memo(function MemoFolderRow({
@@ -1157,7 +1081,6 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
   virtualSize,
   virtualStart,
   isSelected,
-  isFocused,
   isDragOver,
   isCut,
   folderSize,
@@ -1175,7 +1098,6 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
   onCopyBatchLinks,
   onDeleteFolder,
   onNavigate,
-  onRowFocus,
 }: MemoFolderRowProps) {
   return (
     <div
@@ -1199,9 +1121,6 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
       />
       <div
         data-row="true"
-        data-row-index={rowIndex}
-        tabIndex={isFocused ? 0 : -1}
-        onFocus={() => onRowFocus(rowIndex)}
         draggable={!isTrashView}
         onDragStart={(e) =>
           onRowDragStart(e, {
@@ -1213,6 +1132,13 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
         }
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
+          if (
+            rejectInvalidInternalDragOver(e, folder.virtualPath, () =>
+              onSetDragOverRowId((prev) => (prev === folder.id ? null : prev))
+            )
+          ) {
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           if (e.dataTransfer) {
@@ -1226,6 +1152,14 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
           onSetDragOverRowId((prev) => (prev === folder.id ? null : prev));
         }}
         onDrop={(e) => {
+          if (isInternalItemDrag(e) && !parseInternalDropItems(e, folder.virtualPath)) {
+            e.preventDefault();
+            e.stopPropagation();
+            (e.nativeEvent as any).__tsubasaHandled = true;
+            setActiveInternalDragPayload(null);
+            onSetDragOverRowId(null);
+            return;
+          }
           onSetDragOverRowId(null);
           onRowDrop(e, folder.virtualPath);
         }}
@@ -1266,7 +1200,7 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
         </div>
 
         <div role="gridcell" {...stylex.props(styles.accountCell)}>
-          <span {...stylex.props(styles.accountPill)} title="Cluster folder">Cluster folder</span>
+          <span {...stylex.props(styles.accountPill)}>Cluster folder</span>
         </div>
 
         <div
@@ -1285,7 +1219,6 @@ const MemoFolderRow = React.memo(function MemoFolderRow({
               type="button"
               {...stylex.props(styles.rowBtn)}
               aria-label={`Share folder ${folder.name}`}
-              title="Share folder"
               onClick={(e) => {
                 e.stopPropagation();
                 onShareItem({
@@ -1363,25 +1296,23 @@ interface MemoFileRowProps {
   virtualSize: number;
   virtualStart: number;
   isSelected: boolean;
-  isFocused: boolean;
   isCut: boolean;
   fileAcc?: AccountItem;
+  accounts?: AccountItem[];
   canTransfer: boolean;
   isTransferring: boolean;
-  isTransferMenuOpen: boolean;
   isTrashView: boolean;
   isSharePoolActive: boolean;
   isSearching: boolean;
   onItemClick: (id: string, e: React.MouseEvent) => void;
   onCheckboxToggle: (id: string, e: React.MouseEvent) => void;
   onRowDragStart: (e: React.DragEvent, item: DragItemPayload) => void;
-  onOpenTransferMenu: (file: ClientFileRecord, triggerEl: HTMLButtonElement) => void;
+  onTransferFile?: (fileId: string, targetAccountId: string) => void;
   onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
   onDownload: (file: ClientFileRecord) => void;
   onTrash: (file: ClientFileRecord) => void;
   onRestore?: (file: ClientFileRecord) => void;
   onPermanentDelete?: (file: ClientFileRecord) => void;
-  onRowFocus: (rowIndex: number) => void;
 }
 
 const MemoFileRow = React.memo(function MemoFileRow({
@@ -1391,25 +1322,23 @@ const MemoFileRow = React.memo(function MemoFileRow({
   virtualSize,
   virtualStart,
   isSelected,
-  isFocused,
   isCut,
   fileAcc,
+  accounts,
   canTransfer,
   isTransferring,
-  isTransferMenuOpen,
   isTrashView,
   isSharePoolActive,
   isSearching,
   onItemClick,
   onCheckboxToggle,
   onRowDragStart,
-  onOpenTransferMenu,
+  onTransferFile,
   onShareItem,
   onDownload,
   onTrash,
   onRestore,
   onPermanentDelete,
-  onRowFocus,
 }: MemoFileRowProps) {
   return (
     <div
@@ -1432,9 +1361,6 @@ const MemoFileRow = React.memo(function MemoFileRow({
       />
       <div
         data-row="true"
-        data-row-index={rowIndex}
-        tabIndex={isFocused ? 0 : -1}
-        onFocus={() => onRowFocus(rowIndex)}
         draggable={isTrashItem || !isTrashView}
         onDragStart={(e) =>
           onRowDragStart(e, {
@@ -1501,32 +1427,45 @@ const MemoFileRow = React.memo(function MemoFileRow({
         </div>
 
         <div role="gridcell" {...stylex.props(styles.accountCell)}>
-          {!isTrashItem && canTransfer ? (
-            <button
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={isTransferMenuOpen}
-              aria-label={`Transfer ${file.name} to another account`}
-              title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
-              disabled={isTransferring}
-              style={isTransferMenuOpen ? ({ anchorName: '--tsubasa-transfer-anchor' } as React.CSSProperties) : undefined}
-              {...stylex.props(
-                styles.accountTransferBtn,
-                isTransferring && styles.accountTransferBtnDisabled
-              )}
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenTransferMenu(file, e.currentTarget);
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <span {...stylex.props(styles.accountTransferBtnInner)}>
-                <span {...stylex.props(styles.accountTransferBtnLabel)}>
-                  {fileAcc?.displayName || file.accountId}
-                </span>
+          {!isTrashItem && canTransfer && accounts && onTransferFile ? (
+            <div {...stylex.props(styles.selectWrapper)}>
+              <select
+                aria-label={`Transfer ${file.name} to another account`}
+                title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
+                value={file.accountId}
+                disabled={isTransferring}
+                {...stylex.props(
+                  styles.accountSelect,
+                  isTransferring && styles.accountSelectTransferring
+                )}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  const targetId = e.target.value;
+                  if (targetId && targetId !== file.accountId) {
+                    onTransferFile(file.id, targetId);
+                  }
+                }}
+              >
+                {accounts.map((acc) => {
+                  const { isMuted, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
+                    acc,
+                    file.sizeBytes,
+                    { isCurrent: acc.id === file.accountId }
+                  );
+
+                  return (
+                    <option key={acc.id} value={acc.id} disabled={isMuted} title={optionTitle}>
+                      {optionLabel}
+                    </option>
+                  );
+                })}
+              </select>
+              <div {...stylex.props(styles.selectChevron)}>
                 <IconChevronDown size={10} strokeWidth={2.5} />
-              </span>
-            </button>
+              </div>
+            </div>
           ) : (
             <RedactedEmail
               email={fileAcc?.email || file.accountId}
@@ -1668,20 +1607,6 @@ export function FileTable({
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
-  const [focusedRowIndex, setFocusedRowIndex] = useState<number>(0);
-  const transferPopoverRef = useRef<HTMLDivElement | null>(null);
-  const transferTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const [transferMenuState, setTransferMenuState] = useState<{
-    file: ClientFileRecord;
-    fallbackPos: { top: number; left: number };
-  } | null>(null);
-  const supportsAnchorPositioning = useMemo(
-    () =>
-      typeof CSS !== 'undefined' &&
-      typeof CSS.supports === 'function' &&
-      CSS.supports('position-area', 'block-end'),
-    []
-  );
   // Tracked manually because native dblclick is suppressed once the clicked row unmounts mid-sequence.
   const lastClickRef = useRef<{ id: string; path: string; time: number } | null>(null);
   const isMobile = useMediaQuery('(max-width: 768px)');
@@ -1783,6 +1708,7 @@ export function FileTable({
 
   useEffect(() => {
     const handleGlobalDragEnd = () => {
+      setActiveInternalDragPayload(null);
       setIsDropZoneActive(false);
       setDragOverRowId(null);
       hideMarqueeBox();
@@ -1815,51 +1741,6 @@ export function FileTable({
     };
   }, [hideMarqueeBox]);
 
-  useEffect(() => {
-    const popoverEl = transferPopoverRef.current;
-    if (!popoverEl) return;
-    const handleToggle = (e: Event) => {
-      const toggleEvent = e as ToggleEvent;
-      if (toggleEvent.newState === 'closed') {
-        const trigger = transferTriggerRef.current;
-        transferTriggerRef.current = null;
-        if (
-          trigger &&
-          trigger.isConnected &&
-          (document.activeElement === document.body || popoverEl.contains(document.activeElement))
-        ) {
-          trigger.focus({ preventScroll: true });
-        }
-        setTransferMenuState(null);
-      }
-    };
-    popoverEl.addEventListener('toggle', handleToggle);
-    return () => {
-      popoverEl.removeEventListener('toggle', handleToggle);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!transferMenuState) return;
-    const popoverEl = transferPopoverRef.current;
-    if (!popoverEl) return;
-    if (!popoverEl.matches(':popover-open')) {
-      try {
-        (popoverEl as HTMLElement & { showPopover: (options?: { source?: HTMLElement }) => void }).showPopover({
-          source: transferTriggerRef.current ?? undefined,
-        });
-      } catch {
-        // Ignore if element is not connected or already open
-      }
-    }
-    requestAnimationFrame(() => {
-      const firstEnabled = popoverEl.querySelector<HTMLButtonElement>(
-        '[role="menuitem"]:not(:disabled)'
-      );
-      firstEnabled?.focus({ preventScroll: true });
-    });
-  }, [transferMenuState]);
-
   const handleSort = (column: SortColumn) => {
     let newDirection: SortDirection = 'asc';
     if (currentSortColumn === column) {
@@ -1885,19 +1766,17 @@ export function FileTable({
     e.preventDefault();
     e.stopPropagation();
     (e.nativeEvent as any).__tsubasaHandled = true;
+    setActiveInternalDragPayload(null);
     setIsDropZoneActive(false);
     setDragOverRowId(null);
 
     if (e.dataTransfer) {
       if (isInternalItemDrag(e)) {
-        try {
-          const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            onMoveItems?.(parsed, cleanPath);
-            return;
-          }
-        } catch {}
+        const parsed = parseInternalDropItems(e, cleanPath);
+        if (parsed) {
+          onMoveItems?.(parsed, cleanPath);
+        }
+        return;
       }
 
       if (isExternalFileDrag(e)) {
@@ -1919,18 +1798,16 @@ export function FileTable({
       e.preventDefault();
       e.stopPropagation();
       (e.nativeEvent as any).__tsubasaHandled = true;
+      setActiveInternalDragPayload(null);
       setIsDropZoneActive(false);
       setDragOverRowId(null);
 
       if (isInternalItemDrag(e)) {
-        try {
-          const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            onMoveItems?.(parsed, targetVirtualPath);
-            return;
-          }
-        } catch {}
+        const parsed = parseInternalDropItems(e, targetVirtualPath);
+        if (parsed) {
+          onMoveItems?.(parsed, targetVirtualPath);
+        }
+        return;
       }
 
       if (isExternalFileDrag(e)) {
@@ -1952,12 +1829,8 @@ export function FileTable({
   useEffect(() => {
     anchorIndexRef.current = -1;
     focusIndexRef.current = -1;
-    setFocusedRowIndex(0);
     lastSelectedIdRef.current = null;
     lastClickRef.current = null;
-    if (transferPopoverRef.current?.matches(':popover-open')) {
-      transferPopoverRef.current.hidePopover();
-    }
   }, [cleanPath]);
 
   // Filter or search
@@ -2048,16 +1921,6 @@ export function FileTable({
     return set;
   }, [clipboard]);
 
-  const clipboardCopyIds = useMemo(() => {
-    const set = new Set<string>();
-    if (clipboard?.mode === 'copy') {
-      for (const ci of clipboard.items) {
-        set.add(ci.id);
-      }
-    }
-    return set;
-  }, [clipboard]);
-
   // Keep latest values in refs so row callbacks stay identity-stable for React.memo rows.
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -2065,38 +1928,6 @@ export function FileTable({
   selectableItemsRef.current = selectableItems;
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
-  const transferMenuFileIdRef = useRef<string | null>(null);
-  transferMenuFileIdRef.current = transferMenuState?.file.id ?? null;
-
-  const handleRowFocus = useCallback((rowIndex: number) => {
-    focusIndexRef.current = rowIndex;
-    setFocusedRowIndex(rowIndex);
-  }, []);
-
-  const handleOpenTransferMenu = useCallback(
-    (file: ClientFileRecord, triggerEl: HTMLButtonElement) => {
-      const popoverEl = transferPopoverRef.current;
-      if (
-        popoverEl?.matches(':popover-open') &&
-        transferMenuFileIdRef.current === file.id
-      ) {
-        popoverEl.hidePopover();
-        return;
-      }
-      transferTriggerRef.current = triggerEl;
-      const rect = triggerEl.getBoundingClientRect();
-      const menuMaxWidth = 320;
-      const menuMaxHeight = 280;
-      const left = Math.max(8, Math.min(window.innerWidth - menuMaxWidth - 8, rect.left));
-      const spaceBelow = window.innerHeight - rect.bottom - 8;
-      const top =
-        spaceBelow >= 160 || spaceBelow >= rect.top - 8
-          ? Math.max(8, Math.min(window.innerHeight - menuMaxHeight - 8, rect.bottom + 4))
-          : Math.max(8, rect.top - menuMaxHeight - 4);
-      setTransferMenuState({ file, fallbackPos: { top, left } });
-    },
-    []
-  );
 
   const handleCopyBatchLinks = useCallback(
     async (folderId: string, folderName: string) => {
@@ -2163,7 +1994,6 @@ export function FileTable({
       if (id === '__parent__') {
         anchorIndexRef.current = 0;
         focusIndexRef.current = 0;
-        setFocusedRowIndex(0);
         lastSelectedIdRef.current = null;
         onSelect('__parent__', false);
         return;
@@ -2177,7 +2007,6 @@ export function FileTable({
           anchorIndexRef.current = clickedIdx;
         }
         focusIndexRef.current = clickedIdx;
-        setFocusedRowIndex(clickedIdx);
       }
 
       if (e.shiftKey && lastSelectedIdRef.current && onSelectMultiple) {
@@ -2206,7 +2035,6 @@ export function FileTable({
       if (clickedIdx !== -1) {
         anchorIndexRef.current = clickedIdx;
         focusIndexRef.current = clickedIdx;
-        setFocusedRowIndex(clickedIdx);
       }
       onSelect(id, true);
     },
@@ -2431,6 +2259,7 @@ export function FileTable({
         }
       }
 
+      setActiveInternalDragPayload(dragPayload);
       e.dataTransfer.setData('application/x-tsubasa-items', JSON.stringify(dragPayload));
       e.dataTransfer.effectAllowed = 'copyMove';
     },
@@ -2466,27 +2295,9 @@ export function FileTable({
     });
   }, [items, selectedIds]);
 
-  const focusRowElement = useCallback((rowIdx: number) => {
-    const viewport = parentRef.current;
-    if (!viewport) return;
-    const activeEl = document.activeElement;
-    const shouldMoveFocus =
-      activeEl === null ||
-      activeEl === document.body ||
-      viewport.contains(activeEl);
-    if (!shouldMoveFocus) return;
-    requestAnimationFrame(() => {
-      const rowEl = viewport.querySelector<HTMLElement>(`[data-row-index="${rowIdx}"]`);
-      rowEl?.focus({ preventScroll: true });
-    });
-  }, []);
-
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (parentRef.current?.closest('[inert]')) {
-        return;
-      }
-      if (transferPopoverRef.current?.matches(':popover-open')) {
         return;
       }
       if (document.querySelector('dialog[open], [role="dialog"]')) {
@@ -2499,7 +2310,7 @@ export function FileTable({
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement ||
         (target instanceof HTMLElement &&
-          (target.isContentEditable || Boolean(target.closest('select, input, textarea, [contenteditable="true"], [role="menu"]'))))
+          (target.isContentEditable || Boolean(target.closest('select, input, textarea, [contenteditable="true"]'))))
       ) {
         return;
       }
@@ -2536,6 +2347,14 @@ export function FileTable({
 
         e.preventDefault();
 
+        if (
+          parentRef.current &&
+          document.activeElement instanceof HTMLElement &&
+          parentRef.current.contains(document.activeElement)
+        ) {
+          document.activeElement.blur();
+        }
+
         // Single selection movement (without Shift)
         if (!e.shiftKey) {
           const currentIndex = getActiveIndex();
@@ -2558,12 +2377,10 @@ export function FileTable({
 
           anchorIndexRef.current = nextIndex;
           focusIndexRef.current = nextIndex;
-          setFocusedRowIndex(nextIndex);
           lastSelectedIdRef.current = nextItem.kind === 'parent' ? null : nextId;
 
           onSelect(nextId, false);
           rowVirtualizer.scrollToIndex(nextIndex, { align: 'auto' });
-          focusRowElement(nextIndex);
           return;
         }
 
@@ -2598,7 +2415,6 @@ export function FileTable({
           }
 
           focusIndexRef.current = newFocus;
-          setFocusedRowIndex(newFocus);
           const focusItem = items[newFocus];
           lastSelectedIdRef.current = focusItem && focusItem.kind !== 'parent' ? focusItem.data.id : null;
 
@@ -2622,7 +2438,6 @@ export function FileTable({
           }
 
           rowVirtualizer.scrollToIndex(newFocus, { align: 'auto' });
-          focusRowElement(newFocus);
           return;
         }
       }
@@ -2637,7 +2452,6 @@ export function FileTable({
     onSelectMultiple,
     rowVirtualizer,
     getActiveIndex,
-    focusRowElement,
   ]);
 
   const headerRef = useRef<HTMLDivElement | null>(null);
@@ -2702,10 +2516,6 @@ export function FileTable({
     };
   }, []);
 
-  const activeFocusIndex =
-    items.length > 0
-      ? Math.max(0, Math.min(items.length - 1, focusedRowIndex))
-      : 0;
   const canTransferFiles = Boolean(!isSharePoolActive && accounts && accounts.length > 1 && onTransferFile);
 
   return (
@@ -2921,9 +2731,6 @@ export function FileTable({
                 <p {...stylex.props(styles.dropSubtitle)}>
                   Files will be staged for cluster allocation
                 </p>
-                <span {...stylex.props(styles.dropTargetBadge)}>
-                  Target: {cleanPath}
-                </span>
               </div>
             ) : isLoading ? (
               <progress
@@ -2962,7 +2769,6 @@ export function FileTable({
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                 const item = items[virtualRow.index];
                 if (!item) return null;
-                const isFocused = virtualRow.index === activeFocusIndex;
 
                 if (item.kind === 'parent') {
                   return (
@@ -2973,7 +2779,6 @@ export function FileTable({
                       virtualSize={virtualRow.size}
                       virtualStart={virtualRow.start}
                       isSelected={selectedIds.has('__parent__')}
-                      isFocused={isFocused}
                       isDragOver={dragOverRowId === '__parent__'}
                       isTrashView={isTrashView}
                       isSharePoolActive={isSharePoolActive}
@@ -2981,7 +2786,6 @@ export function FileTable({
                       onNavigate={onNavigate}
                       onSetDragOverRowId={setDragOverRowId}
                       onRowDrop={handleRowDrop}
-                      onRowFocus={handleRowFocus}
                     />
                   );
                 }
@@ -3000,7 +2804,6 @@ export function FileTable({
                       virtualSize={virtualRow.size}
                       virtualStart={virtualRow.start}
                       isSelected={selectedIds.has(folder.id)}
-                      isFocused={isFocused}
                       isDragOver={dragOverRowId === folder.id}
                       isCut={clipboardCutIds.has(folder.id)}
                       folderSize={folderSizeMap.get(folder.id) || 0}
@@ -3018,7 +2821,6 @@ export function FileTable({
                       onCopyBatchLinks={onCopyShareLinks ? handleCopyBatchLinks : undefined}
                       onDeleteFolder={onDeleteFolder}
                       onNavigate={onNavigate}
-                      onRowFocus={handleRowFocus}
                     />
                   );
                 }
@@ -3034,25 +2836,23 @@ export function FileTable({
                     virtualSize={virtualRow.size}
                     virtualStart={virtualRow.start}
                     isSelected={selectedIds.has(file.id)}
-                    isFocused={isFocused}
                     isCut={!isTrashItem && clipboardCutIds.has(file.id)}
                     fileAcc={accountById.get(file.accountId)}
+                    accounts={accounts}
                     canTransfer={canTransferFiles}
                     isTransferring={transferringFileId === file.id}
-                    isTransferMenuOpen={!isTrashItem && transferMenuState?.file.id === file.id}
                     isTrashView={isTrashView}
                     isSharePoolActive={isSharePoolActive}
                     isSearching={isSearching}
                     onItemClick={handleItemClick}
                     onCheckboxToggle={handleCheckboxToggle}
                     onRowDragStart={handleRowDragStart}
-                    onOpenTransferMenu={handleOpenTransferMenu}
+                    onTransferFile={onTransferFile}
                     onShareItem={onShareItem}
                     onDownload={onDownload}
                     onTrash={onTrash}
                     onRestore={onRestore}
                     onPermanentDelete={onPermanentDelete}
-                    onRowFocus={handleRowFocus}
                   />
                 );
               })}
@@ -3097,122 +2897,11 @@ export function FileTable({
                   <p {...stylex.props(styles.dropSubtitle)}>
                     Files will be staged for cluster allocation
                   </p>
-                  <span {...stylex.props(styles.dropTargetBadge)}>
-                    Target: {cleanPath}
-                  </span>
                 </div>
               )}
             </div>
           </div>
         )}
-      </div>
-
-      <div
-        ref={transferPopoverRef}
-        popover="auto"
-        role="menu"
-        aria-label={
-          transferMenuState
-            ? `Transfer ${transferMenuState.file.name} to another account`
-            : 'Transfer file to another account'
-        }
-        {...stylex.props(styles.transferPopover)}
-        style={
-          transferMenuState
-            ? supportsAnchorPositioning
-              ? ({
-                  positionAnchor: '--tsubasa-transfer-anchor',
-                  positionArea: 'block-end span-inline-start',
-                  positionTryFallbacks: 'flip-block, flip-inline',
-                  marginTop: '4px',
-                } as React.CSSProperties)
-              : {
-                  top: `${transferMenuState.fallbackPos.top}px`,
-                  left: `${transferMenuState.fallbackPos.left}px`,
-                }
-            : undefined
-        }
-        onKeyDown={(e) => {
-          if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') {
-            return;
-          }
-          const popoverEl = transferPopoverRef.current;
-          if (!popoverEl) return;
-          const itemsList = Array.from(
-            popoverEl.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
-          );
-          if (itemsList.length === 0) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const currentIdx = itemsList.indexOf(document.activeElement as HTMLButtonElement);
-          let nextIdx = 0;
-          if (e.key === 'Home') {
-            nextIdx = 0;
-          } else if (e.key === 'End') {
-            nextIdx = itemsList.length - 1;
-          } else if (e.key === 'ArrowDown') {
-            nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % itemsList.length;
-          } else {
-            nextIdx = currentIdx <= 0 ? itemsList.length - 1 : currentIdx - 1;
-          }
-          itemsList[nextIdx]?.focus();
-        }}
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        {transferMenuState &&
-          accounts.map((acc) => {
-            const file = transferMenuState.file;
-            const isCurrent = acc.id === file.accountId;
-            const isDriveDisabled = Boolean(acc.isDisabled);
-            const hasHeadroom = acc.headroomBytes >= file.sizeBytes;
-            const remainingBudget =
-              acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
-            const hasTransferBudget = remainingBudget >= file.sizeBytes;
-            const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
-            const isMuted = !isCurrent && !canHold;
-
-            let labelSuffix = '';
-            if (isCurrent) {
-              labelSuffix = ' (Current)';
-            } else if (isDriveDisabled) {
-              labelSuffix = ' (Disabled)';
-            } else if (!acc.authorized) {
-              labelSuffix = ' (Unauthorized)';
-            } else if (!hasHeadroom) {
-              labelSuffix = ` (No headroom: needs ${formatGbCompact(file.sizeBytes)} GB)`;
-            } else if (!hasTransferBudget) {
-              labelSuffix = ' (24h transfer limit reached)';
-            } else {
-              labelSuffix = ` (${formatGbCompact(acc.headroomBytes)} GB free)`;
-            }
-
-            const optFullTitle = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
-
-            return (
-              <button
-                key={acc.id}
-                type="button"
-                role="menuitem"
-                disabled={isMuted}
-                title={optFullTitle}
-                {...stylex.props(
-                  styles.transferMenuItem,
-                  isCurrent && styles.transferMenuItemCurrent,
-                  isMuted && styles.transferMenuItemDisabled
-                )}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  transferPopoverRef.current?.hidePopover();
-                  if (!isCurrent && !isMuted && onTransferFile) {
-                    onTransferFile(file.id, acc.id);
-                  }
-                }}
-              >
-                <span>{(acc.displayName || acc.id) + labelSuffix}</span>
-              </button>
-            );
-          })}
       </div>
     </div>
   );
