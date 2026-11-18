@@ -1,8 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
-import { client } from '../api.js';
-import type { InferResponseType } from 'hono/client';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import {
   IconShare,
@@ -19,27 +17,14 @@ import {
   COPY_FEEDBACK_DURATION_MS,
 } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
-import {
-  getShareInspectCache,
-  invalidateShareInspectCache,
-  setShareInspectCache,
-} from '../utils/queryCache.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
-
-export type ShareTargetItem = {
-  kind: 'file' | 'folder';
-  id: string;
-  name: string;
-  virtualPath: string;
-};
-
-type InspectResponse = InferResponseType<typeof client.api.share.inspect.$post, 200>;
-type ValidateResponse = InferResponseType<typeof client.api.share.validate.$post, 200>;
-type ExecuteResponse = InferResponseType<typeof client.api.share.execute.$post, 200>;
-type EmptyShareAccount = InspectResponse['emptyAccounts'][number];
-
-export type ShareExecuteResult = ExecuteResponse;
+import type { ShareTargetItem, ShareExecuteResult } from '../types.js';
+import {
+  useShareWizard,
+  isDriveSelectable,
+  type EmptyShareAccount,
+} from '../hooks/useShareWizard.js';
 
 export interface ShareModalProps {
   isOpen: boolean;
@@ -59,24 +44,12 @@ function getDriveStatusBadge(
   return null;
 }
 
-function isDriveSelectable(acc: EmptyShareAccount): boolean {
-  return acc.authorized && !acc.isDisabled && acc.syncState !== 'error' && !acc.currentPoolIsShare;
-}
-
 function getAccountLabel(
   displayName: string | null | undefined,
   email: string,
   fallbackId: string
 ): string {
   return displayName && displayName !== email ? displayName : fallbackId;
-}
-
-function buildInspectSignature(sourcePoolId: number, items: ShareTargetItem[]): string {
-  const itemKeys = items
-    .map((i) => `${i.kind}:${i.id}`)
-    .sort()
-    .join(',');
-  return `${sourcePoolId}:${itemKeys}`;
 }
 
 const styles = stylex.create({
@@ -633,18 +606,38 @@ export function ShareModal({
   sourcePoolId,
   onComplete,
 }: ShareModalProps) {
-  const [inspectData, setInspectData] = useState<InspectResponse | null>(null);
-  const [isInspecting, setIsInspecting] = useState(false);
+  const {
+    inspectData,
+    isInspecting,
+    selectedAccountIds,
+    validationData,
+    isValidating,
+    isSubmitting,
+    error,
+    setError,
+    executeResult,
+    activeDriveIndex,
+    setActiveDriveIndex,
+    emptyAccounts,
+    neededBytes,
+    selectedHeadroomBytes,
+    eligibleEmptyAccounts,
+    hasOverCeiling,
+    canSubmit,
+    meterPercent,
+    handleToggleAccount,
+    handleAutoSelect,
+    handleDismiss,
+    handleSubmit,
+  } = useShareWizard({
+    isOpen,
+    items,
+    sourcePoolId,
+    onComplete,
+    onClose,
+  });
 
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
-  const [validationData, setValidationData] = useState<ValidateResponse | null>(null);
-  const [isValidating, setIsValidating] = useState(false);
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [executeResult, setExecuteResult] = useState<ExecuteResponse | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [activeDriveIndex, setActiveDriveIndex] = useState<number>(0);
   const isCoarsePointer = useMediaQuery('(pointer: coarse)');
   const titleId = useId();
   const driveOptionIdPrefix = useId();
@@ -652,7 +645,6 @@ export function ShareModal({
   const driveListRef = useRef<HTMLDivElement | null>(null);
   const linksListRef = useRef<HTMLDivElement | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const submittingRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -661,151 +653,9 @@ export function ShareModal({
   }, []);
 
   useEffect(() => {
-    if (!isOpen || items.length === 0) {
-      submittingRef.current = false;
-      setInspectData(null);
-      setIsInspecting(false);
-      setSelectedAccountIds([]);
-      setValidationData(null);
-      setIsValidating(false);
-      setIsSubmitting(false);
-      setError(null);
-      setExecuteResult(null);
-      setCopiedKey(null);
-      setActiveDriveIndex(0);
-      return;
-    }
-
-    const signature = buildInspectSignature(sourcePoolId, items);
-    const cachedData = getShareInspectCache(signature);
-
-    submittingRef.current = false;
-    setSelectedAccountIds([]);
-    setValidationData(null);
-    setIsValidating(false);
-    setIsSubmitting(false);
-    setError(null);
-    setExecuteResult(null);
     setCopiedKey(null);
-    setActiveDriveIndex(0);
-
-    if (cachedData) {
-      setInspectData(cachedData);
-      setIsInspecting(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    setInspectData(null);
-    setIsInspecting(true);
-
-    (async () => {
-      try {
-        const res = await client.api.share.inspect.$post(
-          {
-            json: {
-              sourcePoolId,
-              items: items.map((i) => ({ kind: i.kind, id: i.id })),
-            },
-          },
-          { init: { signal: controller.signal } }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (controller.signal.aborted) return;
-        if (res.ok) {
-          const parsed = data as InspectResponse;
-          setShareInspectCache(signature, parsed);
-          setInspectData(parsed);
-        } else {
-          setError(
-            ('error' in data ? (data.error as string) : null) || 'Failed to inspect share targets'
-          );
-        }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsInspecting(false);
-        }
-      }
-    })();
-
-    return () => {
-      controller.abort();
-    };
   }, [isOpen, items, sourcePoolId]);
 
-  const needsExpansion = Boolean(
-    inspectData && !inspectData.sharePoolFitsWithoutExpansion && inspectData.overCeilingFiles.length === 0
-  );
-
-  useEffect(() => {
-    if (!isOpen || !needsExpansion || items.length === 0) {
-      setValidationData(null);
-      setIsValidating(false);
-      return;
-    }
-
-    if (selectedAccountIds.length === 0) {
-      setValidationData(null);
-      setIsValidating(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    setIsValidating(true);
-
-    const timer = setTimeout(() => {
-      (async () => {
-        try {
-          const res = await client.api.share.validate.$post(
-            {
-              json: {
-                sourcePoolId,
-                items: items.map((i) => ({ kind: i.kind, id: i.id })),
-                selectedAccountIds,
-              },
-            },
-            { init: { signal: controller.signal } }
-          );
-          const data = await res.json().catch(() => ({}));
-          if (controller.signal.aborted) return;
-          if (res.ok) {
-            setValidationData(data as ValidateResponse);
-          } else {
-            setValidationData({
-              valid: false,
-              reason: ('error' in data ? (data.error as string) : null) || 'Validation failed',
-              totalAvailableHeadroomBytes: 0,
-              requiredBytes: inspectData?.totalBytes ?? 0,
-            });
-          }
-        } catch (err) {
-          if (!controller.signal.aborted) {
-            setValidationData({
-              valid: false,
-              reason: err instanceof Error ? err.message : String(err),
-              totalAvailableHeadroomBytes: 0,
-              requiredBytes: inspectData?.totalBytes ?? 0,
-            });
-          }
-        } finally {
-          if (!controller.signal.aborted) {
-            setIsValidating(false);
-          }
-        }
-      })();
-    }, 180);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [isOpen, needsExpansion, selectedAccountIds, items, sourcePoolId, inspectData?.totalBytes]);
-
-  const emptyAccounts = inspectData?.emptyAccounts ?? [];
   const driveVirtualizer = useVirtualizer({
     count: emptyAccounts.length,
     getScrollElement: () => driveListRef.current,
@@ -819,65 +669,6 @@ export function ShareModal({
     estimateSize: () => 96,
     overscan: 4,
   });
-
-  const neededBytes = useMemo(() => {
-    if (!inspectData) return 0;
-    if (
-      inspectData.sharePoolExists &&
-      inspectData.existingSharePoolAccountCount > 0 &&
-      inspectData.shortfallBytes > 0
-    ) {
-      return inspectData.shortfallBytes;
-    }
-    return inspectData.totalBytes;
-  }, [inspectData]);
-
-  const selectedHeadroomBytes = useMemo(() => {
-    if (selectedAccountIds.length === 0) return 0;
-    const selectedSet = new Set(selectedAccountIds);
-    return emptyAccounts.reduce(
-      (sum, acc) => (selectedSet.has(acc.id) ? sum + acc.headroomBytes : sum),
-      0
-    );
-  }, [emptyAccounts, selectedAccountIds]);
-
-  const eligibleEmptyAccounts = useMemo(
-    () => emptyAccounts.filter((acc) => isDriveSelectable(acc)),
-    [emptyAccounts]
-  );
-
-  const handleToggleAccount = useCallback(
-    (acc: EmptyShareAccount) => {
-      if (isSubmitting || !isDriveSelectable(acc)) return;
-      setError(null);
-      setSelectedAccountIds((prev) =>
-        prev.includes(acc.id) ? prev.filter((id) => id !== acc.id) : [...prev, acc.id]
-      );
-    },
-    [isSubmitting]
-  );
-
-  const handleAutoSelect = useCallback(() => {
-    if (isSubmitting || eligibleEmptyAccounts.length === 0) return;
-    setError(null);
-    const sorted = [...eligibleEmptyAccounts].sort((a, b) => {
-      if (b.headroomBytes !== a.headroomBytes) {
-        return b.headroomBytes - a.headroomBytes;
-      }
-      return a.email.localeCompare(b.email, undefined, { sensitivity: 'base' });
-    });
-
-    const picked: string[] = [];
-    let covered = 0;
-    for (const acc of sorted) {
-      picked.push(acc.id);
-      covered += acc.headroomBytes;
-      if (neededBytes === 0 || covered >= neededBytes) {
-        break;
-      }
-    }
-    setSelectedAccountIds(picked);
-  }, [isSubmitting, eligibleEmptyAccounts, neededBytes]);
 
   const handleCopyText = async (key: string, text: string) => {
     try {
@@ -897,20 +688,7 @@ export function ShareModal({
     }
   };
 
-  const handleDismiss = useCallback(() => {
-    if (submittingRef.current || isSubmitting) return;
-    onClose();
-  }, [isSubmitting, onClose]);
-
   const effectiveOpen = isOpen && items.length > 0;
-
-  const hasOverCeiling = (inspectData?.overCeilingFiles.length ?? 0) > 0;
-  const allocationReady = Boolean(
-    inspectData &&
-      !hasOverCeiling &&
-      (inspectData.sharePoolFitsWithoutExpansion || validationData?.valid)
-  );
-  const canSubmit = !isInspecting && !isValidating && !isSubmitting && allocationReady;
 
   const firstItem = items[0];
   const summaryTitle = !firstItem
@@ -920,50 +698,6 @@ export function ShareModal({
       : `${firstItem.name} + ${items.length - 1} ${items.length - 1 === 1 ? 'other' : 'others'}`;
 
   const summaryHasFolder = items.some((i) => i.kind === 'folder');
-
-  const meterPercent =
-    neededBytes === 0
-      ? selectedAccountIds.length > 0
-        ? 100
-        : 0
-      : Math.min(100, Math.round((selectedHeadroomBytes / neededBytes) * 100));
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (submittingRef.current || !inspectData || isSubmitting || isValidating) return;
-
-    if (!allocationReady) return;
-
-    submittingRef.current = true;
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      const res = await client.api.share.execute.$post({
-        json: {
-          sourcePoolId,
-          items: items.map((i) => ({ kind: i.kind, id: i.id })),
-          selectedAccountIds: inspectData.sharePoolFitsWithoutExpansion ? [] : selectedAccountIds,
-        },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        const executed = data as ExecuteResponse;
-        invalidateShareInspectCache();
-        setExecuteResult(executed);
-        await onComplete(executed);
-      } else {
-        setError(
-          ('error' in data ? (data.error as string) : null) || 'Failed to share items'
-        );
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      submittingRef.current = false;
-      setIsSubmitting(false);
-    }
-  };
 
   const linksWithUrl = executeResult?.links.filter((l) => Boolean(l.webViewLink)) ?? [];
 

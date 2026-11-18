@@ -1,6 +1,6 @@
 import type { drive_v3 } from 'googleapis';
-import path from 'node:path';
-import { isDriveNotFoundError, withDriveRetry } from './client.js';
+import { isDriveNotFoundError, withDriveRetry } from './errors.js';
+import { normalizeVirtualPath } from '../virtualPath.js';
 
 // In-memory cache mapping `${rootFolderId}:${normalizedVirtualPath}` to Google Drive folder ID
 const remoteFolderCache = new Map<string, string>();
@@ -95,15 +95,6 @@ export function evictRemoteFolderByDriveId(rootFolderId: string, driveFolderId: 
   }
 
   bumpCacheGeneration(rootFolderId);
-}
-
-/**
- * Normalizes a virtual path to posix format with leading slash and no trailing slash.
- */
-export function normalizeVirtualPath(rawPath: string): string {
-  const normalized = path.posix.normalize(rawPath.replace(/\\/g, '/'));
-  if (normalized === '.' || normalized === '') return '/';
-  return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
 /**

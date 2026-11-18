@@ -2,8 +2,7 @@ import React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub } from './Icons';
-
-export type ThemeChoice = 'auto' | 'light' | 'dark';
+import type { ThemeChoice } from '../utils/theme.js';
 
 interface HeaderProps {
   searchQuery: string;

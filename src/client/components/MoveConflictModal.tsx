@@ -5,24 +5,10 @@ import { IconAlertTriangle } from './Icons.js';
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
-
-export type MoveConflictContentMatch = 'identical' | 'different' | 'unverified';
-
-export interface MoveConflictItem {
-  sourceFileId: string;
-  sourcePath: string;
-  sourceName: string;
-  sourceSizeBytes: number;
-  sourceUpdatedAt: number;
-  destPath: string;
-  existingFileId?: string;
-  existingSizeBytes?: number;
-  existingUpdatedAt?: number;
-  contentMatch?: MoveConflictContentMatch;
-  canOverwrite?: boolean;
-}
-
-export type MoveConflictResolutionMode = 'skip' | 'keep_both' | 'overwrite';
+import type {
+  MoveConflictItem,
+  MoveConflictResolutionMode,
+} from '../types.js';
 
 export interface MoveConflictModalProps {
   isOpen: boolean;

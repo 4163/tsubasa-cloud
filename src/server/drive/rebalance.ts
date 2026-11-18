@@ -2,12 +2,15 @@ import path from 'node:path';
 import { bumpPoolRevision, db, sqlite } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, inArray } from 'drizzle-orm';
-import { getDriveClient, runBoundedConcurrency, withDriveRetry } from './client.js';
-import { copyDriveFileCrossAccount } from './transfer.js';
-import { deleteRemoteFileIgnoreNotFound, enqueueDriveOutbox } from './outbox.js';
-import { clearRemoteFolderCache, ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
-import { authPool } from './auth.js';
-import { invalidateDiscrepancyCache } from './detector.js';
+import { getDriveClient } from './client.js';
+import { runBoundedConcurrency, withDriveRetry } from './errors.js';
+import { buildTsubasaAppProperties } from './appProperties.js';
+import { copyDriveFileCrossAccount } from './crossAccountCopy.js';
+import { deleteRemoteFileIgnoreNotFound } from './outboxExecutors.js';
+import { enqueueDriveOutbox } from './outbox.js';
+import { ensureRemoteFolderHierarchy } from './mirror.js';
+import { normalizeVirtualPath } from '../virtualPath.js';
+import { invalidateDiscrepancyCache } from './discrepancyCache.js';
 import {
   calculateHeadroom,
   calculateUsableLimit,
@@ -183,12 +186,12 @@ export async function rebalanceFilesBatch(
         targetAccountEmail: targetAccount.email,
         targetRemoteFolderId: targetFolderId,
         destFileName: file.name,
-        appProperties: {
-          tsubasa_managed: 'true',
-          tsubasa_virtual_path: file.virtualPath,
-          tsubasa_virtual_id: file.id,
-          tsubasa_checksum: file.hash || '',
-        },
+        appProperties: buildTsubasaAppProperties({
+          virtualPath: file.virtualPath,
+          virtualId: file.id,
+          checksum: file.hash,
+          includeChecksum: true,
+        }),
         fields: 'id, name, size, mimeType, md5Checksum',
       });
 
@@ -578,100 +581,6 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     filesMoved: transfers.length,
     bytesMoved,
     transfers,
-  };
-}
-
-export async function disableDriveAccount(accountId: string): Promise<{ success: boolean; accountId: string }> {
-  const account = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
-
-  if (!account) {
-    throw new Error(`Account ${accountId} not found`);
-  }
-
-  await db
-    .update(accounts)
-    .set({
-      isDisabled: true,
-      updatedAt: new Date(),
-    })
-    .where(eq(accounts.id, accountId));
-
-  return { success: true, accountId };
-}
-
-export async function enableDriveAccount(accountId: string): Promise<{ success: boolean; accountId: string }> {
-  const account = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
-
-  if (!account) {
-    throw new Error(`Account ${accountId} not found`);
-  }
-
-  await db
-    .update(accounts)
-    .set({
-      isDisabled: false,
-      updatedAt: new Date(),
-    })
-    .where(eq(accounts.id, accountId));
-
-  return { success: true, accountId };
-}
-
-export async function removeDriveAccount(
-  accountId: string
-): Promise<EvacuationResult & { removed: boolean }> {
-  const account = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
-
-  let evacuationResult: EvacuationResult = {
-    sourceAccountId: accountId,
-    filesMoved: 0,
-    bytesMoved: 0,
-    transfers: [],
-  };
-
-  if (account) {
-    if (!account.isDisabled) {
-      await db
-        .update(accounts)
-        .set({
-          isDisabled: true,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, accountId));
-    }
-
-    evacuationResult = await evacuateAccountFiles(accountId);
-
-    const deleteAccountIfEmpty = sqlite.transaction(() => {
-      const row = sqlite
-        .prepare<[string], { cnt: number }>('SELECT COUNT(*) AS cnt FROM files WHERE account_id = ?')
-        .get(accountId);
-      const cnt = row?.cnt ?? 0;
-      if (cnt > 0) {
-        throw new Error(`Cannot remove account ${accountId}: ${cnt} file(s) still remain on account`);
-      }
-      sqlite.prepare<[string]>('DELETE FROM accounts WHERE id = ?').run(accountId);
-    });
-    deleteAccountIfEmpty.immediate();
-
-    bumpPoolRevision(account.poolId);
-    invalidateDiscrepancyCache(accountId);
-    if (account.rootFolderId) {
-      clearRemoteFolderCache(account.rootFolderId);
-    }
-  }
-
-  authPool.removeAccount(accountId);
-
-  return {
-    ...evacuationResult,
-    removed: true,
   };
 }
 

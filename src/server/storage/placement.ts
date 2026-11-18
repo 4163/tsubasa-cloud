@@ -10,7 +10,7 @@ import {
   MAX_SINGLE_FILE_BYTES,
   type AccountTransferStats,
 } from './quota.js';
-import { normalizeVirtualPath } from '../drive/mirror.js';
+import { normalizeVirtualPath } from '../virtualPath.js';
 
 export class FileExceedsCeilingError extends Error {
   constructor(sizeBytes: number) {

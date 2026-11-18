@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography } from '../tokens.stylex.js';
 import { IconFolder } from './Icons.js';
-import { type AccountItem, type PoolSummary } from './Sidebar.js';
+import type { AccountItem, PoolSummary } from '../types.js';
 import { sortPools } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';

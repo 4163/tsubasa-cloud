@@ -3,18 +3,16 @@ import { randomUUID } from 'node:crypto';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
-import { authPool } from './auth.js';
-import {
-  getDriveClient,
-  getAccountRootFolderId,
-  withDriveRetry,
-  markAccountQuotaDecreased,
-  isSharePoolId,
-} from './client.js';
-import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
+import { getAccessToken, getDriveClient } from './client.js';
+import { isSharePoolId } from './poolRegistry.js';
+import { buildTsubasaAppProperties } from './appProperties.js';
+import { allocateUniqueVirtualPath, displaceTrashedFileAtPath } from './operationsDb.js';
+import { getAccountRootFolderId } from './remoteTree.js';
+import { ensureRemoteFolderHierarchy } from './mirror.js';
+import { normalizeVirtualPath } from '../virtualPath.js';
 import { ensureLocalParentFolders, formatFolderId } from './sync.js';
 import { enqueueDriveOutbox } from './outbox.js';
-import { ItemNotFoundError, validateItemName } from './operations.js';
+import { ItemNotFoundError, validateItemName } from './errors.js';
 import {
   selectPlacementForFile,
   validateTargetPlacement,
@@ -52,122 +50,6 @@ export interface ResumableSessionInfo {
   uploadLocation: string;
 }
 
-async function getAccessToken(accountId: string): Promise<string> {
-  const authClient = authPool.getClient(accountId);
-  if (!authClient) {
-    throw new Error(`Account ${accountId} not registered in auth pool`);
-  }
-  const tokenInfo = await authClient.getAccessToken();
-  if (!tokenInfo.token) {
-    throw new Error(`Failed to acquire Google access token for account ${accountId}`);
-  }
-  return tokenInfo.token;
-}
-
-export interface CopyCrossAccountOptions {
-  sourceAccountId: string;
-  sourceDriveFileId: string;
-  targetAccountId: string;
-  targetAccountEmail?: string;
-  targetRemoteFolderId: string;
-  destFileName: string;
-  appProperties: Record<string, string>;
-  fields?: string;
-}
-
-export async function copyDriveFileCrossAccount(
-  options: CopyCrossAccountOptions
-): Promise<string> {
-  const {
-    sourceAccountId,
-    sourceDriveFileId,
-    targetAccountId,
-    targetAccountEmail,
-    targetRemoteFolderId,
-    destFileName,
-    appProperties,
-    fields = 'id, name, size',
-  } = options;
-
-  const driveTarget = getDriveClient(targetAccountId);
-
-  if (sourceAccountId === targetAccountId) {
-    const copyRes = await withDriveRetry(() =>
-      driveTarget.files.copy({
-        fileId: sourceDriveFileId,
-        requestBody: {
-          name: destFileName,
-          parents: [targetRemoteFolderId],
-          appProperties,
-        },
-        fields,
-        supportsAllDrives: false,
-      })
-    );
-
-    const newDriveFileId = copyRes.data.id;
-    if (!newDriveFileId) {
-      throw new Error('Google Drive server-side copy returned empty file ID');
-    }
-    return newDriveFileId;
-  }
-
-  if (!targetAccountEmail) {
-    throw new Error('targetAccountEmail is required for cross-account Drive copy');
-  }
-
-  const driveSource = getDriveClient(sourceAccountId);
-
-  const shareRes = await withDriveRetry(() =>
-    driveSource.permissions.create({
-      fileId: sourceDriveFileId,
-      sendNotificationEmail: false,
-      requestBody: {
-        role: 'reader',
-        type: 'user',
-        emailAddress: targetAccountEmail,
-      },
-      supportsAllDrives: false,
-    })
-  );
-
-  const permissionId = shareRes.data.id;
-  try {
-    const copyRes = await withDriveRetry(() =>
-      driveTarget.files.copy({
-        fileId: sourceDriveFileId,
-        requestBody: {
-          name: destFileName,
-          parents: [targetRemoteFolderId],
-          appProperties,
-        },
-        fields,
-        supportsAllDrives: false,
-      })
-    );
-
-    const newDriveFileId = copyRes.data.id;
-    if (!newDriveFileId) {
-      throw new Error('Google Drive cross-account copy returned empty file ID');
-    }
-    return newDriveFileId;
-  } finally {
-    if (permissionId) {
-      try {
-        await withDriveRetry(() =>
-          driveSource.permissions.delete({
-            fileId: sourceDriveFileId,
-            permissionId,
-            supportsAllDrives: false,
-          })
-        );
-      } catch (cleanupErr) {
-        console.warn(`Failed to cleanup temp reader permission on ${sourceDriveFileId}:`, cleanupErr);
-      }
-    }
-  }
-}
-
 const SMALL_UPLOAD_MULTIPART_BYTES = 5 * 1024 * 1024;
 const VALID_RANGE_HEADER_RE = /^bytes=(?:\d+-\d*|\d*-\d+)(?:\s*,\s*(?:\d+-\d*|\d*-\d+))*$/i;
 const inFlightUploadPaths = new Map<string, string>();
@@ -177,25 +59,15 @@ function allocateKeepBothPath(poolId: number, basePath: string): string {
     'SELECT 1 FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0 LIMIT 1'
   );
 
-  const isPathTaken = (candidatePath: string): boolean =>
-    inFlightUploadPaths.has(`${poolId}:${candidatePath}`) || Boolean(checkActiveStmt.get(poolId, candidatePath));
-
-  if (!isPathTaken(basePath)) {
-    return basePath;
-  }
-
-  const dir = path.posix.dirname(basePath);
-  const baseName = path.posix.basename(basePath);
-  const ext = path.posix.extname(baseName);
-  const stem = ext ? baseName.slice(0, -ext.length) : baseName;
-
-  for (let n = 1; ; n++) {
-    const candidateName = `${stem} (${n})${ext}`;
-    const candidatePath = dir === '/' || dir === '.' ? `/${candidateName}` : `${dir}/${candidateName}`;
-    if (!isPathTaken(candidatePath)) {
-      return candidatePath;
-    }
-  }
+  return allocateUniqueVirtualPath({
+    targetDir: path.posix.dirname(basePath),
+    baseName: path.posix.basename(basePath),
+    kind: 'file',
+    style: 'numbered',
+    startCounter: 1,
+    isTaken: (candidatePath) =>
+      inFlightUploadPaths.has(`${poolId}:${candidatePath}`) || Boolean(checkActiveStmt.get(poolId, candidatePath)),
+  });
 }
 
 interface PreparedUploadTarget {
@@ -350,12 +222,11 @@ async function prepareUploadTarget(
       metadata: {
         name: fileName,
         parents: [remoteParentFolderId],
-        appProperties: {
-          tsubasa_managed: 'true',
-          tsubasa_virtual_path: virtualPath,
-          tsubasa_virtual_id: fileId,
-          tsubasa_checksum: hash || '',
-        },
+        appProperties: buildTsubasaAppProperties({
+          virtualPath,
+          virtualId: fileId,
+          checksum: hash,
+        }),
       },
     };
   } catch (err) {
@@ -572,15 +443,7 @@ export async function executeStreamingUpload(
     ensureLocalParentFolders(target.virtualPath, target.poolId);
 
     sqlite.transaction(() => {
-      const collidingTrashed = sqlite
-        .prepare('SELECT id FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1')
-        .get(target.poolId, target.virtualPath) as { id: string } | undefined;
-
-      if (collidingTrashed) {
-        sqlite
-          .prepare('UPDATE files SET virtual_path = ?, updated_at = unixepoch() WHERE id = ?')
-          .run(`${target.virtualPath}.trashed-${Date.now()}-${collidingTrashed.id.slice(0, 6)}`, collidingTrashed.id);
-      }
+      displaceTrashedFileAtPath(target.poolId, target.virtualPath, { appendShortId: true });
 
       const oldActiveRow = sqlite
         .prepare(
@@ -787,320 +650,5 @@ export async function getStreamingDownload(
     contentRange,
     totalBytes,
   };
-}
-
-export async function trashFile(fileId: string): Promise<FileRecord> {
-  let poolId = 0;
-  let wasAlreadyTrashed = false;
-
-  sqlite.transaction(() => {
-    const row = sqlite
-      .prepare('SELECT id, pool_id, account_id, drive_file_id, is_trashed FROM files WHERE id = ?')
-      .get(fileId) as
-      | {
-          id: string;
-          pool_id: number;
-          account_id: string;
-          drive_file_id: string;
-          is_trashed: number;
-        }
-      | undefined;
-
-    if (!row) {
-      throw new ItemNotFoundError(`File ${fileId} not found`);
-    }
-
-    poolId = row.pool_id;
-    wasAlreadyTrashed = row.is_trashed === 1;
-    if (wasAlreadyTrashed) {
-      return;
-    }
-
-    sqlite
-      .prepare(
-        'UPDATE files SET is_trashed = 1, trashed_at = unixepoch(), updated_at = unixepoch() WHERE id = ?'
-      )
-      .run(fileId);
-
-    enqueueDriveOutbox([
-      {
-        accountId: row.account_id,
-        poolId: row.pool_id,
-        opType: 'file_trash',
-        driveFileId: row.drive_file_id,
-        payload: {
-          fileId: row.id,
-          driveFileId: row.drive_file_id,
-        },
-      },
-    ]);
-  }).immediate();
-
-  if (!wasAlreadyTrashed) {
-    bumpPoolRevision(poolId);
-  }
-
-  const updated = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-  });
-  if (!updated) {
-    throw new ItemNotFoundError(`File ${fileId} not found`);
-  }
-  return updated;
-}
-
-function allocateRestoredPath(poolId: number, basePath: string, selfId: string): string {
-  const checkActiveStmt = sqlite.prepare(
-    'SELECT 1 FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0 AND id != ? LIMIT 1'
-  );
-
-  if (!checkActiveStmt.get(poolId, basePath, selfId)) {
-    return basePath;
-  }
-
-  const dir = path.posix.dirname(basePath);
-  const baseName = path.posix.basename(basePath);
-  const ext = path.posix.extname(baseName);
-  const stem = ext ? baseName.slice(0, -ext.length) : baseName;
-
-  for (let n = 1; ; n++) {
-    const suffix = n === 1 ? ' (restored)' : ` (restored ${n})`;
-    const candidateName = `${stem}${suffix}${ext}`;
-    const candidatePath = dir === '/' || dir === '.' ? `/${candidateName}` : `${dir}/${candidateName}`;
-    if (!checkActiveStmt.get(poolId, candidatePath, selfId)) {
-      return candidatePath;
-    }
-  }
-}
-
-export async function restoreFile(fileId: string): Promise<FileRecord> {
-  let poolId = 0;
-
-  sqlite.transaction(() => {
-    const row = sqlite
-      .prepare('SELECT id, pool_id, virtual_path, name, account_id, drive_file_id FROM files WHERE id = ?')
-      .get(fileId) as
-      | {
-          id: string;
-          pool_id: number;
-          virtual_path: string;
-          name: string;
-          account_id: string;
-          drive_file_id: string;
-        }
-      | undefined;
-
-    if (!row) {
-      throw new ItemNotFoundError(`File ${fileId} not found`);
-    }
-
-    poolId = row.pool_id;
-    const strippedPath = row.virtual_path.replace(/\.trashed-\d+(?:-[a-zA-Z0-9]+)?$/, '');
-    const restoredPath = allocateRestoredPath(row.pool_id, strippedPath, row.id);
-    const restoredName = path.posix.basename(restoredPath);
-    const parentDir = path.posix.dirname(restoredPath);
-    const folderId = parentDir === '/' || parentDir === '.' ? null : formatFolderId(row.pool_id, parentDir);
-    const pathOrNameChanged = restoredPath !== row.virtual_path || restoredName !== row.name;
-
-    ensureLocalParentFolders(restoredPath, row.pool_id);
-
-    const collidingTrashed = sqlite
-      .prepare('SELECT id FROM files WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 1 AND id != ?')
-      .get(row.pool_id, restoredPath, row.id) as { id: string } | undefined;
-
-    if (collidingTrashed) {
-      sqlite
-        .prepare('UPDATE files SET virtual_path = ?, updated_at = unixepoch() WHERE id = ?')
-        .run(`${restoredPath}.trashed-${Date.now()}-${collidingTrashed.id.slice(0, 6)}`, collidingTrashed.id);
-    }
-
-    sqlite
-      .prepare(
-        'UPDATE files SET virtual_path = ?, name = ?, folder_id = ?, is_trashed = 0, trashed_at = NULL, updated_at = unixepoch() WHERE id = ?'
-      )
-      .run(restoredPath, restoredName, folderId, row.id);
-
-    enqueueDriveOutbox([
-      {
-        accountId: row.account_id,
-        poolId: row.pool_id,
-        opType: 'file_restore',
-        driveFileId: row.drive_file_id,
-        payload: {
-          fileId: row.id,
-          driveFileId: row.drive_file_id,
-          restoredPath,
-          ...(pathOrNameChanged ? { newVirtualPath: restoredPath, newName: restoredName } : {}),
-        },
-      },
-    ]);
-  }).immediate();
-
-  bumpPoolRevision(poolId);
-
-  const updated = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-  });
-  if (!updated) {
-    throw new ItemNotFoundError(`File ${fileId} not found`);
-  }
-  return updated;
-}
-
-function cleanupOrphanedShareLinksForPool(poolId: number): void {
-  sqlite
-    .prepare(
-      `DELETE FROM share_links
-       WHERE pool_id = ?
-         AND (
-           (
-             share_links.files_count > 0
-             AND NOT EXISTS (
-               SELECT 1 FROM files fi
-               WHERE fi.pool_id = share_links.pool_id
-                 AND fi.account_id = share_links.account_id
-                 AND (
-                   fi.virtual_path = '/' || share_links.batch_folder_name
-                   OR (
-                     fi.virtual_path >= '/' || share_links.batch_folder_name || '/'
-                     AND fi.virtual_path < '/' || share_links.batch_folder_name || '0'
-                   )
-                 )
-             )
-           )
-           OR (
-             NOT EXISTS (
-               SELECT 1 FROM folders f
-               WHERE f.pool_id = share_links.pool_id
-                 AND f.virtual_path = '/' || share_links.batch_folder_name
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM files fi
-               WHERE fi.pool_id = share_links.pool_id
-                 AND (
-                   fi.virtual_path = '/' || share_links.batch_folder_name
-                   OR (
-                     fi.virtual_path >= '/' || share_links.batch_folder_name || '/'
-                     AND fi.virtual_path < '/' || share_links.batch_folder_name || '0'
-                   )
-                 )
-             )
-           )
-         )`
-    )
-    .run(poolId);
-}
-
-export async function purgeFile(fileId: string): Promise<FileRecord> {
-  let purgedFile: FileRecord | undefined;
-
-  sqlite.transaction(() => {
-    purgedFile = db.select().from(files).where(eq(files.id, fileId)).get();
-    if (!purgedFile) {
-      throw new ItemNotFoundError(`File ${fileId} not found`);
-    }
-
-    sqlite.prepare('DELETE FROM files WHERE id = ?').run(fileId);
-    cleanupOrphanedShareLinksForPool(purgedFile.poolId);
-
-    sqlite
-      .prepare(
-        'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
-      )
-      .run(purgedFile.sizeBytes, purgedFile.accountId);
-
-    enqueueDriveOutbox([
-      {
-        accountId: purgedFile.accountId,
-        poolId: purgedFile.poolId,
-        opType: 'file_delete',
-        driveFileId: purgedFile.driveFileId,
-        payload: {
-          fileId: purgedFile.id,
-          driveFileId: purgedFile.driveFileId,
-        },
-      },
-    ]);
-  }).immediate();
-
-  if (!purgedFile) {
-    throw new ItemNotFoundError(`File ${fileId} not found`);
-  }
-
-  markAccountQuotaDecreased(purgedFile.accountId);
-  invalidatePooledStorageOverview(purgedFile.poolId);
-  bumpPoolRevision(purgedFile.poolId);
-
-  return purgedFile;
-}
-
-export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number; bytesReclaimed: number }> {
-  let filesPurged = 0;
-  let bytesReclaimed = 0;
-  const bytesByAccount = new Map<string, number>();
-
-  sqlite.transaction(() => {
-    const trashedFiles = db
-      .select()
-      .from(files)
-      .where(
-        poolId !== undefined
-          ? and(eq(files.isTrashed, true), eq(files.poolId, poolId))
-          : eq(files.isTrashed, true)
-      )
-      .all();
-
-    if (trashedFiles.length === 0) {
-      return;
-    }
-
-    filesPurged = trashedFiles.length;
-    for (const f of trashedFiles) {
-      bytesReclaimed += f.sizeBytes;
-      bytesByAccount.set(f.accountId, (bytesByAccount.get(f.accountId) ?? 0) + f.sizeBytes);
-    }
-
-    const deleteFileStmt = sqlite.prepare('DELETE FROM files WHERE id = ?');
-    const touchedPoolIds = new Set<number>();
-    for (const f of trashedFiles) {
-      deleteFileStmt.run(f.id);
-      touchedPoolIds.add(f.poolId);
-    }
-    for (const pid of touchedPoolIds) {
-      cleanupOrphanedShareLinksForPool(pid);
-    }
-
-    const decrementQuotaStmt = sqlite.prepare(
-      'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
-    );
-    for (const [accountId, bytes] of bytesByAccount) {
-      decrementQuotaStmt.run(bytes, accountId);
-    }
-
-    enqueueDriveOutbox(
-      trashedFiles.map((f) => ({
-        accountId: f.accountId,
-        poolId: f.poolId,
-        opType: 'file_delete' as const,
-        driveFileId: f.driveFileId,
-        payload: {
-          fileId: f.id,
-          driveFileId: f.driveFileId,
-        },
-      }))
-    );
-  }).immediate();
-
-  if (filesPurged === 0) {
-    return { filesPurged: 0, bytesReclaimed: 0 };
-  }
-
-  for (const accountId of bytesByAccount.keys()) {
-    markAccountQuotaDecreased(accountId);
-  }
-  invalidatePooledStorageOverview(poolId);
-  bumpPoolRevision(poolId);
-
-  return { filesPurged, bytesReclaimed };
 }
 
