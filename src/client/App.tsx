@@ -736,6 +736,7 @@ export function App() {
 
   const [trashedFiles, setTrashedFiles] = useState<ClientFileRecord[]>([]);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState<boolean>(false);
+  const [pendingPurgeFiles, setPendingPurgeFiles] = useState<ClientFileRecord[] | null>(null);
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
   const [shareModalState, setShareModalState] = useState<{
     items: ShareTargetItem[];
@@ -768,6 +769,7 @@ export function App() {
       if (isExternalChangesOpen) setIsExternalChangesOpen(false);
       if (isNewFolderOpen) setIsNewFolderOpen(false);
       if (confirmEmptyTrash) setConfirmEmptyTrash(false);
+      if (pendingPurgeFiles) setPendingPurgeFiles(null);
       if (shareModalState) setShareModalState(null);
       if (isClearSharePoolOpen) setIsClearSharePoolOpen(false);
       if (driveActionModal.isOpen && !driveActionModal.isLoading) {
@@ -792,6 +794,7 @@ export function App() {
     isExternalChangesOpen,
     isNewFolderOpen,
     confirmEmptyTrash,
+    pendingPurgeFiles,
     shareModalState,
     isClearSharePoolOpen,
     driveActionModal.isOpen,
@@ -1289,6 +1292,7 @@ export function App() {
     setClipboard(null);
     setWorkspaceError(null);
     setPendingMoveConflict(null);
+    setPendingPurgeFiles(null);
     setIsResolvingMoveConflict(false);
     setScrollRequest(null);
     setPendingDiscrepancies({});
@@ -1354,6 +1358,7 @@ export function App() {
         setIsClearSharePoolOpen(false);
         setMoveFilesModalGroup(null);
         setPendingMoveConflict(null);
+        setPendingPurgeFiles(null);
         setIsResolvingMoveConflict(false);
         setRenameModalItem(null);
         setDriveActionModal((prev) => (prev.isOpen ? { ...prev, isOpen: false } : prev));
@@ -1457,8 +1462,9 @@ export function App() {
       if (loadedTrashPoolId !== activePoolId || trashStaleRef.current) {
         void loadTrashFiles(activePoolId);
       }
-      setConfirmEmptyTrash(false);
     }
+    setConfirmEmptyTrash(false);
+    setPendingPurgeFiles(null);
   }, [currentNav, activePoolId, loadedTrashPoolId, loadTrashFiles]);
 
   const handleSelect = useCallback((id: string, isMulti: boolean) => {
@@ -1978,48 +1984,72 @@ export function App() {
     [runPendingOp, loadTrashFiles, loadFiles, loadClusterData, surfaceWorkspaceError]
   );
 
-  const handlePermanentDelete = useCallback(
-    async (file: ClientFileRecord) => {
-      setWorkspaceError(null);
-      const poolId = activePoolIdRef.current;
-      const wasSelected = selectedIds.has(file.id);
-      setTrashedFiles((prev) => prev.filter((f) => f.id !== file.id));
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(file.id);
-        return next;
-      });
+  const handlePermanentDelete = useCallback((file: ClientFileRecord) => {
+    setConfirmEmptyTrash(false);
+    setPendingPurgeFiles([file]);
+  }, []);
 
-      await runPendingOp(async () => {
-        const result = await permanentDeleteFileRequest(file);
-        if (result.ok) {
+  const handleConfirmPurgeFiles = useCallback(async () => {
+    if (!pendingPurgeFiles || pendingPurgeFiles.length === 0) return;
+    setWorkspaceError(null);
+    const poolId = activePoolIdRef.current;
+    const toPurge = pendingPurgeFiles;
+
+    await runPendingOp(async () => {
+      try {
+        const results = await runWithConcurrency(toPurge, 6, (f) =>
+          permanentDeleteFileRequest(f)
+        );
+        const succeededIds = new Set<string>();
+        let firstError: string | undefined;
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].ok) {
+            succeededIds.add(toPurge[i].id);
+          } else if (!firstError) {
+            firstError = results[i].error;
+          }
+        }
+
+        if (succeededIds.size > 0) {
           invalidateShareInspectCache();
-          await Promise.all([
-            currentNavRef.current === 'trash' ? loadTrashFiles(poolId) : Promise.resolve(),
-            loadClusterData(poolId),
-          ]);
-        } else {
           if (activePoolIdRef.current === poolId) {
-            setTrashedFiles((prev) => (prev.some((f) => f.id === file.id) ? prev : [file, ...prev]));
-            if (wasSelected) {
-              setSelectedIds((prev) => new Set(prev).add(file.id));
-            }
-            surfaceWorkspaceError('handlePermanentDelete', result.error, 'Delete failed');
+            setTrashedFiles((prev) => prev.filter((f) => !succeededIds.has(f.id)));
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of succeededIds) next.delete(id);
+              return next;
+            });
           } else {
             const cached = getPoolCache(poolId);
             if (cached) {
               setPoolCache(poolId, {
-                trashedFiles: cached.trashedFiles.some((f) => f.id === file.id)
-                  ? cached.trashedFiles
-                  : [file, ...cached.trashedFiles],
+                trashedFiles: cached.trashedFiles.filter((f) => !succeededIds.has(f.id)),
               });
             }
           }
         }
-      });
-    },
-    [selectedIds, runPendingOp, loadTrashFiles, loadClusterData, surfaceWorkspaceError]
-  );
+
+        await Promise.all([loadTrashFiles(poolId), loadClusterData(poolId)]);
+
+        if (firstError) {
+          if (activePoolIdRef.current === poolId && succeededIds.size > 0) {
+            setPendingPurgeFiles((prev) =>
+              prev ? prev.filter((f) => !succeededIds.has(f.id)) : null
+            );
+          }
+          throw Object.assign(
+            new Error(firstError || 'Some files could not be permanently deleted'),
+            { handled: true }
+          );
+        }
+      } catch (err) {
+        if (err instanceof Error && 'handled' in err) {
+          throw err;
+        }
+        throw new Error(extractErrorMessage(err, 'Some files could not be permanently deleted'));
+      }
+    });
+  }, [pendingPurgeFiles, runPendingOp, loadTrashFiles, loadClusterData]);
 
   const handleDeleteFolder = useCallback(
     async (folder: ClientFolder) => {
@@ -2030,7 +2060,10 @@ export function App() {
         (f) => f.id === folder.id || f.virtualPath.startsWith(folderPrefix)
       );
       const removedFiles = filesRef.current.filter((f) => f.virtualPath.startsWith(folderPrefix));
-      const wasSelected = selectedIds.has(folder.id);
+      const removedFolderIds = new Set(removedFolders.map((f) => f.id));
+      const removedFileIds = new Set(removedFiles.map((f) => f.id));
+      const prevClipboard = clipboard;
+      const prevSelected = selectedIds;
 
       setFolders((prev) =>
         prev.filter((f) => f.id !== folder.id && !f.virtualPath.startsWith(folderPrefix))
@@ -2040,21 +2073,36 @@ export function App() {
       );
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        next.delete(folder.id);
+        for (const id of removedFolderIds) next.delete(id);
+        for (const id of removedFileIds) next.delete(id);
         return next;
+      });
+      setClipboard((prev) => {
+        if (!prev || prev.mode !== 'cut') return prev;
+        const remaining = prev.items.filter(
+          (i) => !(i.kind === 'folder' ? removedFolderIds.has(i.id) : removedFileIds.has(i.id))
+        );
+        return remaining.length > 0 ? { ...prev, items: remaining } : null;
       });
 
       await runPendingOp(async () => {
         const result = await deleteFolderRequest(folder);
         if (result.ok) {
           invalidateShareInspectCache();
-          if (result.navigateParent !== undefined) {
-            if (activePoolIdRef.current === poolId) {
-              handleNavigate(result.navigateParent);
-            }
-            await loadFiles(result.navigateParent, poolId);
+          const targetLoadPath =
+            result.navigateParent !== undefined ? result.navigateParent : currentPathRef.current;
+          if (result.navigateParent !== undefined && activePoolIdRef.current === poolId) {
+            handleNavigate(result.navigateParent);
+          }
+          if (currentNavRef.current === 'trash') {
+            await Promise.all([
+              loadFiles(targetLoadPath, poolId),
+              loadTrashFiles(poolId),
+              loadClusterData(poolId),
+            ]);
           } else {
-            await loadFiles(currentPathRef.current, poolId);
+            markTrashStale(poolId);
+            await Promise.all([loadFiles(targetLoadPath, poolId), loadClusterData(poolId)]);
           }
         } else {
           if (activePoolIdRef.current === poolId) {
@@ -2068,9 +2116,8 @@ export function App() {
               const toRestore = removedFiles.filter((f) => !existingIds.has(f.id));
               return toRestore.length > 0 ? [...prev, ...toRestore] : prev;
             });
-            if (wasSelected) {
-              setSelectedIds((prev) => new Set(prev).add(folder.id));
-            }
+            setSelectedIds(prevSelected);
+            setClipboard(prevClipboard);
             surfaceWorkspaceError('handleDeleteFolder', result.error, 'Failed to delete folder');
           } else {
             const cached = getPoolCache(poolId);
@@ -2086,12 +2133,21 @@ export function App() {
         }
       });
     },
-    [selectedIds, runPendingOp, handleNavigate, loadFiles, surfaceWorkspaceError]
+    [
+      selectedIds,
+      clipboard,
+      runPendingOp,
+      handleNavigate,
+      loadFiles,
+      markTrashStale,
+      loadTrashFiles,
+      loadClusterData,
+      surfaceWorkspaceError,
+    ]
   );
 
   const executeDeleteBatch = useCallback(
     async (
-      navMode: 'files' | 'trash',
       selectedFolders: ClientFolder[],
       selectedFilesList: ClientFileRecord[]
     ) => {
@@ -2099,85 +2155,71 @@ export function App() {
       const poolId = activePoolIdRef.current;
       const prevFiles = filesRef.current;
       const prevFolders = foldersRef.current;
-      const prevTrashed = trashedFilesRef.current;
       const prevSelected = selectedIds;
+      const prevClipboard = clipboard;
 
       const folderIds = new Set(selectedFolders.map((f) => f.id));
       const fileIds = new Set(selectedFilesList.map((f) => f.id));
+      const deletedPrefixes = selectedFolders.map((f) =>
+        f.virtualPath === '/' ? '/' : `${f.virtualPath}/`
+      );
       setSelectedIds(new Set());
 
-      if (navMode === 'trash') {
-        setTrashedFiles((prev) => prev.filter((f) => !fileIds.has(f.id)));
-      } else {
-        setFolders((prev) => prev.filter((f) => !folderIds.has(f.id)));
-        setFiles((prev) => prev.filter((f) => !fileIds.has(f.id)));
-        markTrashStale(poolId);
-      }
+      setFolders((prev) => prev.filter((f) => !folderIds.has(f.id)));
+      setFiles((prev) => prev.filter((f) => !fileIds.has(f.id)));
+      setClipboard((prev) => {
+        if (!prev || prev.mode !== 'cut') return prev;
+        const remaining = prev.items.filter((i) => {
+          if (i.kind === 'folder' ? folderIds.has(i.id) : fileIds.has(i.id)) {
+            return false;
+          }
+          return !deletedPrefixes.some((prefix) => i.virtualPath.startsWith(prefix));
+        });
+        return remaining.length > 0 ? { ...prev, items: remaining } : null;
+      });
+      markTrashStale(poolId);
 
       await runPendingOp(async () => {
-        if (navMode === 'trash') {
-          const results = await runWithConcurrency(selectedFilesList, 6, (f) =>
-            permanentDeleteFileRequest(f)
-          );
-          const failed = results.filter((r) => !r.ok);
-          if (results.some((r) => r.ok)) {
-            invalidateShareInspectCache();
-          }
-          if (failed.length > 0) {
-            if (activePoolIdRef.current === poolId) {
-              setTrashedFiles(prevTrashed);
-              setSelectedIds(prevSelected);
-              surfaceWorkspaceError(
-                'executeDeleteBatch.permanent',
-                failed[0].error,
-                'Some files could not be permanently deleted'
-              );
-            } else {
-              setPoolCache(poolId, { trashedFiles: prevTrashed });
-            }
-          }
-          await Promise.all([loadTrashFiles(poolId), loadClusterData(poolId)]);
-        } else {
-          let nextPath = currentPathRef.current;
-          const folderResults = await runWithConcurrency(selectedFolders, 6, (folder) =>
-            deleteFolderRequest(folder)
-          );
-          const fileResults = await runWithConcurrency(selectedFilesList, 6, (file) =>
-            trashFileRequest(file)
-          );
+        let nextPath = currentPathRef.current;
+        const folderResults = await runWithConcurrency(selectedFolders, 6, (folder) =>
+          deleteFolderRequest(folder)
+        );
+        const fileResults = await runWithConcurrency(selectedFilesList, 6, (file) =>
+          trashFileRequest(file)
+        );
 
-          for (const res of folderResults) {
-            if (res.ok && res.navigateParent !== undefined) {
-              nextPath = res.navigateParent;
-            }
+        for (const res of folderResults) {
+          if (res.ok && res.navigateParent !== undefined) {
+            nextPath = res.navigateParent;
           }
-          const failedFolder = folderResults.find((r) => !r.ok);
-          const failedFile = fileResults.find((r) => !r.ok);
-          if (folderResults.some((r) => r.ok) || fileResults.some((r) => r.ok)) {
-            invalidateShareInspectCache();
-          }
-
-          if (failedFolder || failedFile) {
-            if (activePoolIdRef.current === poolId) {
-              setFiles(prevFiles);
-              setFolders(prevFolders);
-              setSelectedIds(prevSelected);
-              surfaceWorkspaceError(
-                'executeDeleteBatch',
-                failedFolder?.error || failedFile?.error,
-                'Some items could not be deleted'
-              );
-            } else {
-              setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
-            }
-          } else if (nextPath !== currentPathRef.current && activePoolIdRef.current === poolId) {
-            handleNavigate(nextPath);
-          }
-          await Promise.all([loadFiles(nextPath, poolId), loadClusterData(poolId)]);
         }
+        const failedFolder = folderResults.find((r) => !r.ok);
+        const failedFile = fileResults.find((r) => !r.ok);
+        if (folderResults.some((r) => r.ok) || fileResults.some((r) => r.ok)) {
+          invalidateShareInspectCache();
+        }
+
+        if (failedFolder || failedFile) {
+          if (activePoolIdRef.current === poolId) {
+            setFiles(prevFiles);
+            setFolders(prevFolders);
+            setSelectedIds(prevSelected);
+            setClipboard(prevClipboard);
+            surfaceWorkspaceError(
+              'executeDeleteBatch',
+              failedFolder?.error || failedFile?.error,
+              'Some items could not be deleted'
+            );
+          } else {
+            setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+          }
+        } else if (nextPath !== currentPathRef.current && activePoolIdRef.current === poolId) {
+          handleNavigate(nextPath);
+        }
+        await Promise.all([loadFiles(nextPath, poolId), loadClusterData(poolId)]);
       });
     },
-    [selectedIds, markTrashStale, runPendingOp, loadTrashFiles, loadClusterData, handleNavigate, loadFiles, surfaceWorkspaceError]
+    [selectedIds, clipboard, markTrashStale, runPendingOp, loadClusterData, handleNavigate, loadFiles, surfaceWorkspaceError]
   );
 
   const handleDeleteSelected = useCallback(async () => {
@@ -2185,12 +2227,21 @@ export function App() {
     if (idsToDelete.size === 0) return;
 
     const navMode = currentNavRef.current;
+    if (navMode === 'trash') {
+      const selectedTrashFiles = trashedFilesRef.current.filter(
+        (f) => idsToDelete.has(f.id) && (filteredAccountIds.size === 0 || filteredAccountIds.has(f.accountId))
+      );
+      if (selectedTrashFiles.length > 0) {
+        setConfirmEmptyTrash(false);
+        setPendingPurgeFiles(selectedTrashFiles);
+      }
+      return;
+    }
+
     const selectedFolders = foldersRef.current.filter((f) => idsToDelete.has(f.id));
-    const selectedFilesList = (navMode === 'trash' ? trashedFilesRef.current : filesRef.current).filter(
-      (f) => idsToDelete.has(f.id)
-    );
-    await executeDeleteBatch(navMode, selectedFolders, selectedFilesList);
-  }, [selectedIds, executeDeleteBatch]);
+    const selectedFilesList = filesRef.current.filter((f) => idsToDelete.has(f.id));
+    await executeDeleteBatch(selectedFolders, selectedFilesList);
+  }, [selectedIds, filteredAccountIds, executeDeleteBatch]);
 
   const refreshAfterMove = useCallback(
     async (poolId: number) => {
@@ -3570,6 +3621,9 @@ export function App() {
           if (activePoolIdRef.current === poolId) {
             setFiles([]);
             setFolders([]);
+            setTrashedFiles([]);
+            setLoadedTrashPoolId(poolId);
+            trashStaleRef.current = false;
             setShareLinksByBatch({});
             setSelectedIds(new Set());
             if (currentPathRef.current !== nextPath) {
@@ -3579,13 +3633,15 @@ export function App() {
             setPoolCache(poolId, {
               files: [],
               folders: [],
+              trashedFiles: [],
+              loadedTrashPoolId: poolId,
+              trashStale: false,
               shareLinksByBatch: {},
             });
           }
           if (currentNavRef.current === 'trash') {
             await Promise.all([loadFiles(nextPath, poolId), loadTrashFiles(poolId), loadClusterData(poolId)]);
           } else {
-            markTrashStale(poolId);
             await Promise.all([loadFiles(nextPath, poolId), loadClusterData(poolId)]);
           }
         } else {
@@ -3599,7 +3655,7 @@ export function App() {
         throw new Error(extractErrorMessage(err, 'Failed to clear Share Pool'));
       }
     });
-  }, [handleNavigate, loadFiles, loadTrashFiles, loadClusterData, markTrashStale, runPendingOp]);
+  }, [handleNavigate, loadFiles, loadTrashFiles, loadClusterData, runPendingOp]);
 
   const handleCopyBatchLinks = useCallback(async (batchFolderName: string): Promise<boolean> => {
     const links = shareLinksByBatchRef.current[batchFolderName] ?? [];
@@ -3612,6 +3668,30 @@ export function App() {
 
   const isSharePoolDataReady = isSharePoolActive && loadedFilesPoolId === activePoolId;
   const isShareLinksReady = isSharePoolDataReady && shareLinksPoolId === activePoolId;
+  const hasLockedSharePoolAccounts = useMemo(
+    () => accountItems.some((a) => !a.canSwitchPool),
+    [accountItems]
+  );
+
+  useEffect(() => {
+    if (
+      isSharePoolDataReady &&
+      files.length === 0 &&
+      folders.length === 0 &&
+      hasLockedSharePoolAccounts &&
+      (loadedTrashPoolId !== activePoolId || trashStaleRef.current)
+    ) {
+      void loadTrashFiles(activePoolId);
+    }
+  }, [
+    isSharePoolDataReady,
+    files.length,
+    folders.length,
+    hasLockedSharePoolAccounts,
+    loadedTrashPoolId,
+    activePoolId,
+    loadTrashFiles,
+  ]);
   const isTableLoading =
     currentNav === 'trash' ? loadedTrashPoolId !== activePoolId : loadedFilesPoolId !== activePoolId;
   const activeBatchFolderName =
@@ -3723,7 +3803,24 @@ export function App() {
   const selectedTotalBytes = useMemo(() => {
     return selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
   }, [selectedFiles]);
-  const trashedTotalBytes = displayedTrashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+  const trashedTotalBytes = useMemo(
+    () => trashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0),
+    [trashedFiles]
+  );
+  const pendingPurgeTotalBytes = useMemo(
+    () => (pendingPurgeFiles ?? []).reduce((acc, f) => acc + (f.sizeBytes || 0), 0),
+    [pendingPurgeFiles]
+  );
+  const sharePoolTotalBytes = useMemo(
+    () =>
+      Math.max(
+        activePool?.totalBytes ?? 0,
+        files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)
+      ) + trashedTotalBytes,
+    [activePool?.totalBytes, files, trashedTotalBytes]
+  );
+  const sharePoolTotalItemCount =
+    Math.max(activePool?.fileCount ?? 0, files.length) + folders.length + trashedFiles.length;
 
   const selectedAccountGroups: SelectedAccountGroup[] = useMemo(() => {
     if (currentNav === 'trash') return [];
@@ -3836,6 +3933,7 @@ export function App() {
   );
 
   const handleOpenEmptyTrash = useCallback(() => {
+    setPendingPurgeFiles(null);
     setConfirmEmptyTrash(true);
   }, []);
 
@@ -3848,8 +3946,12 @@ export function App() {
   }, []);
 
   const handleOpenClearSharePool = useCallback(() => {
+    const poolId = activePoolIdRef.current;
+    if (loadedTrashPoolIdRef.current !== poolId || trashStaleRef.current) {
+      void loadTrashFiles(poolId);
+    }
     setIsClearSharePoolOpen(true);
-  }, []);
+  }, [loadTrashFiles]);
 
   const activeBatchFolderNameRef = useRef(activeBatchFolderName);
   activeBatchFolderNameRef.current = activeBatchFolderName;
@@ -3951,7 +4053,7 @@ export function App() {
           onDropExternalToPath={isSharePoolActive ? undefined : handleDropExternalToPath}
           onShareSelected={isSharePoolActive ? undefined : handleShareSelected}
           isSharePoolActive={isSharePoolActive}
-          sharePoolItemCount={isSharePoolDataReady ? files.length + folders.length : 0}
+          sharePoolItemCount={isSharePoolDataReady ? sharePoolTotalItemCount : 0}
           onClearSharePool={isSharePoolDataReady ? handleOpenClearSharePool : undefined}
           activeShareLinksCount={activeBatchLinks.length}
           onCopyActiveShareLinks={
@@ -4186,6 +4288,16 @@ export function App() {
           />
         )}
 
+        {pendingPurgeFiles !== null && pendingPurgeFiles.length > 0 && currentNav === 'trash' && (
+          <ConfirmPurgeModal
+            isOpen={pendingPurgeFiles !== null && pendingPurgeFiles.length > 0 && currentNav === 'trash'}
+            onClose={() => setPendingPurgeFiles(null)}
+            onConfirm={handleConfirmPurgeFiles}
+            itemCount={pendingPurgeFiles.length}
+            totalBytes={pendingPurgeTotalBytes}
+          />
+        )}
+
         {Boolean(shareModalState && shareModalState.items.length > 0) && (
           <ShareModal
             isOpen={shareModalState !== null && shareModalState.items.length > 0}
@@ -4201,8 +4313,8 @@ export function App() {
             isOpen={isClearSharePoolOpen}
             onClose={() => setIsClearSharePoolOpen(false)}
             onConfirm={handleClearSharePoolConfirm}
-            itemCount={Math.max(activePool?.fileCount ?? 0, files.length + folders.length)}
-            totalBytes={activePool?.totalBytes ?? files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)}
+            itemCount={sharePoolTotalItemCount}
+            totalBytes={sharePoolTotalBytes}
             mode="share_pool"
           />
         )}

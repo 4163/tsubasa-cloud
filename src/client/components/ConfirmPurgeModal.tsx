@@ -135,7 +135,7 @@ export function ConfirmPurgeModal({
           <p {...stylex.props(styles.warningDesc)}>
             {isSharePool
               ? 'All copied files and folders in _Tsubasa~ Pool share will be permanently deleted across share pool drives. Original files in your storage pools remain untouched.'
-              : `Permanently purge all ${itemCount} ${itemCount === 1 ? 'file' : 'files'}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.`}
+              : `Permanently purge ${itemCount === 1 ? 'this file' : `all ${itemCount} files`}? Storage will be permanently reclaimed from Google Drive across all connected accounts. This action cannot be undone.`}
           </p>
         </div>
 

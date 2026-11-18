@@ -1397,7 +1397,7 @@ const MemoFileRow = React.memo(function MemoFileRow({
       />
       <div
         data-row="true"
-        draggable={isTrashItem || !isTrashView}
+        draggable={!isTrashView}
         onDragStart={(e) =>
           onRowDragStart(e, {
             kind: 'file',
