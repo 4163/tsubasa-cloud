@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
+import { useDialogLifecycle } from '../hooks/useDialogLifecycle.js';
 import { IconClose } from './Icons.js';
 import { useBeforeUnload } from '../utils/useBeforeUnload.js';
 
@@ -353,16 +354,6 @@ export interface DrawerSheetProps {
   children: React.ReactNode;
 }
 
-function isOutsideDialogBounds(e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) {
-  const rect = dialog.getBoundingClientRect();
-  return (
-    e.clientX < rect.left ||
-    e.clientX > rect.right ||
-    e.clientY < rect.top ||
-    e.clientY > rect.bottom
-  );
-}
-
 export function DrawerSheet({
   isOpen,
   isLocked = false,
@@ -375,51 +366,20 @@ export function DrawerSheet({
   requestCloseRef,
   children,
 }: DrawerSheetProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const pointerDownOutsideRef = useRef(false);
-  const isClosingRef = useRef(false);
-  const isLockedRef = useRef(isLocked);
-  isLockedRef.current = isLocked;
-  const isOpenRef = useRef(isOpen);
-  isOpenRef.current = isOpen;
-  const afterCloseRef = useRef<(() => void) | null>(null);
-
   useBeforeUnload(isLocked);
 
-  const requestClose = useCallback((afterClose?: () => void) => {
-    if (isLockedRef.current || isClosingRef.current) return;
-    afterCloseRef.current = afterClose ?? null;
-    const dialog = dialogRef.current;
-    if (!dialog || !dialog.open) {
-      const cb = afterCloseRef.current;
-      afterCloseRef.current = null;
-      cb?.();
-      onClose();
-      return;
-    }
-
-    const skipExitAnimation =
-      document.body.classList.contains('resize-animation-stopper') ||
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    if (skipExitAnimation) {
-      dialog.removeAttribute('data-closing');
-      dialog.close();
-      return;
-    }
-
-    isClosingRef.current = true;
-    dialog.setAttribute('data-closing', '');
-    const animations = typeof dialog.getAnimations === 'function' ? dialog.getAnimations() : [];
-    Promise.all(animations.map((anim) => anim.finished.catch(() => {}))).then(() => {
-      if (!isClosingRef.current) return;
-      isClosingRef.current = false;
-      dialog.removeAttribute('data-closing');
-      if (dialog.open) {
-        dialog.close();
-      }
-    });
-  }, [onClose]);
+  const {
+    dialogRef,
+    requestClose,
+    handleCancel,
+    handleClose,
+    handlePointerDown,
+    handlePointerUp,
+  } = useDialogLifecycle({
+    isOpen,
+    isLocked,
+    onClose,
+  });
 
   useEffect(() => {
     if (!requestCloseRef) return;
@@ -429,88 +389,17 @@ export function DrawerSheet({
     };
   }, [requestCloseRef, requestClose]);
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    if (isOpen) {
-      isClosingRef.current = false;
-      afterCloseRef.current = null;
-      dialog.removeAttribute('data-closing');
-      if (!dialog.open) {
-        dialog.showModal();
-      }
-    } else if (dialog.open) {
-      dialog.removeAttribute('data-closing');
-      dialog.close();
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    dialog.setAttribute('closedby', isLocked ? 'none' : 'any');
-  }, [isLocked, isOpen]);
-
   if (!isOpen) return null;
-
-  const handleDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    e.preventDefault();
-    if (!isLockedRef.current) requestClose();
-  };
-
-  const handleDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
-    const dialog = e.currentTarget;
-    dialog.returnValue = '';
-    if (isLockedRef.current && isOpenRef.current) {
-      queueMicrotask(() => {
-        if (dialog.isConnected && isOpenRef.current && !dialog.open) {
-          dialog.showModal();
-        }
-      });
-      return;
-    }
-    dialog.removeAttribute('data-closing');
-    isClosingRef.current = false;
-    const afterClose = afterCloseRef.current;
-    afterCloseRef.current = null;
-    afterClose?.();
-    onClose();
-  };
-
-  const handleDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if (isLocked || 'closedBy' in HTMLDialogElement.prototype) {
-      pointerDownOutsideRef.current = false;
-      return;
-    }
-    pointerDownOutsideRef.current =
-      e.button === 0 &&
-      e.target === e.currentTarget &&
-      isOutsideDialogBounds(e, e.currentTarget);
-  };
-
-  const handleDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
-    if (isLocked || 'closedBy' in HTMLDialogElement.prototype) {
-      pointerDownOutsideRef.current = false;
-      return;
-    }
-    const startedOutside = pointerDownOutsideRef.current;
-    pointerDownOutsideRef.current = false;
-    if (!startedOutside) return;
-    if (e.target === e.currentTarget && isOutsideDialogBounds(e, e.currentTarget)) {
-      requestClose();
-    }
-  };
 
   return (
     <dialog
       ref={dialogRef}
       data-tsubasa-dialog="drawer-sheet"
       aria-label={ariaLabel}
-      onCancel={handleDialogCancel}
-      onClose={handleDialogClose}
-      onPointerDown={handleDialogPointerDown}
-      onPointerUp={handleDialogPointerUp}
+      onCancel={handleCancel}
+      onClose={handleClose}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
       {...stylex.props(styles.dialog, hideMobileBackdrop && styles.dialogHideMobileBackdrop)}
     >
       <div {...stylex.props(styles.drawerSurface)}>
