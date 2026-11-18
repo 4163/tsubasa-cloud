@@ -1724,7 +1724,6 @@ export function ExternalChangesDrawer({
           ))
         )}
 
-        {/* Scanning indicator */}
         {isScanning && !report && (
           <div {...stylex.props(styles.scanningNotice)}>
             <div {...stylex.props(styles.scanningNoticeText)}>
@@ -1733,7 +1732,6 @@ export function ExternalChangesDrawer({
           </div>
         )}
 
-        {/* Empty state when no accounts have changes */}
         {!isScanning && accounts.length === 0 && (
           <div {...stylex.props(styles.emptyNotice)}>
             <IconCheck size={28} color={colors.success} />
@@ -1746,7 +1744,6 @@ export function ExternalChangesDrawer({
           </div>
         )}
 
-        {/* Empty state for the selected account */}
         {report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
           <div {...stylex.props(styles.emptyNotice)}>
             <IconCheck size={28} color={colors.success} />

@@ -278,7 +278,7 @@ export interface ModalHeaderProps {
   headerStyle?: stylex.StyleXStyles;
 }
 
-/** Shared modal header bar with standardized `<h2>` title and optional close button. */
+/** Standardized `<h2>` modal header so all dialogs share one heading level. */
 export function ModalHeader({
   titleId,
   title,

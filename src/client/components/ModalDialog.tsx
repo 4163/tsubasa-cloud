@@ -7,6 +7,7 @@ export interface ModalDialogProps {
   isOpen: boolean;
   onClose: () => void;
   isBusy?: boolean;
+  preventUnloadWhileBusy?: boolean;
   ariaLabelledBy?: string;
   ariaLabel?: string;
   initialFocusRef?: React.RefObject<HTMLElement | null>;
@@ -69,6 +70,7 @@ export function ModalDialog({
   isOpen,
   onClose,
   isBusy = false,
+  preventUnloadWhileBusy = true,
   ariaLabelledBy,
   ariaLabel,
   initialFocusRef,
@@ -83,7 +85,7 @@ export function ModalDialog({
   const isBusyRef = useRef(isBusy);
   isBusyRef.current = isBusy;
 
-  useBeforeUnload(isOpen && isBusy);
+  useBeforeUnload(isOpen && isBusy && preventUnloadWhileBusy);
 
   useEffect(() => {
     return () => {
@@ -193,7 +195,7 @@ export function ModalDialog({
     }
     const startedOutside = pointerDownOutsideRef.current;
     pointerDownOutsideRef.current = false;
-    if (!startedOutside) return;
+    if (!startedOutside || e.button !== 0) return;
     if (e.target === e.currentTarget && isOutsideDialogBounds(e, e.currentTarget)) {
       e.currentTarget.close();
     }

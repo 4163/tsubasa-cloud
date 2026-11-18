@@ -76,7 +76,6 @@ dialog:modal::after {
   opacity: var(--surface-grain-opacity, 0.35);
 }
 
-/* Precision scrollbar contract */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

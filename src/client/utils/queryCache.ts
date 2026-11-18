@@ -281,6 +281,11 @@ export function dedupeInFlight<T>(
       return Promise.reject(err);
     }
 
+    if (signal?.aborted) {
+      controller.abort();
+      return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    }
+
     const created: InFlightEntry<T> = {
       promise: rawPromise,
       controller,

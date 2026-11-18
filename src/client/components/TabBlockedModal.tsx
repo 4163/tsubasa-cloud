@@ -269,7 +269,7 @@ const styles = stylex.create({
   },
   poolSelectChevron: {
     position: 'absolute',
-    right: '8px',
+    right: spacing.space4,
     top: '50%',
     transform: 'translateY(-50%)',
     color: colors.secondaryText,
@@ -339,8 +339,8 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: spacing.space3,
-    paddingTop: '8px',
-    paddingBottom: '8px',
+    paddingTop: spacing.space4,
+    paddingBottom: spacing.space4,
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
     borderRadius: radius.card,
@@ -1213,6 +1213,7 @@ export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
         isOpen={true}
         onClose={() => {}}
         isBusy={true}
+        preventUnloadWhileBusy={false}
         ariaLabelledBy={titleId}
         surfaceStyle={styles.surface}
       >

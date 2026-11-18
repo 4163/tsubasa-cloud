@@ -742,7 +742,7 @@ export async function extractDataTransferEntries(
     }
   }
 
-  // If no directories were dropped, use rawFiles directly (synchronous & 100% reliable)
+  // Use rawFiles directly when no directories were dropped to avoid async entry traversal.
   if (!hasDirectories && rawFiles.length > 0) {
     for (const f of rawFiles) {
       const rel = (f as any).webkitRelativePath || f.name;
@@ -1878,11 +1878,9 @@ export function FileTable({
     }
   }, [cleanPath]);
 
-  // Filter or search
   const isSearching = searchQuery.trim().length > 0;
   const searchLower = searchQuery.toLowerCase();
 
-  // Build items array
   const items = useMemo<TableItem[]>(() => {
     const result: TableItem[] = [];
 
@@ -1912,17 +1910,14 @@ export function FileTable({
       const sortedFilesList = sortFiles(matchedFiles, currentSortColumn, currentSortDirection, false);
       sortedFilesList.forEach((f) => result.push({ kind: 'file', data: f }));
     } else {
-      // Add ".." if not root
       if (cleanPath !== '/') {
         result.push({ kind: 'parent', path: getParentDir(cleanPath) });
       }
 
-      // Folders in current dir
       const dirFolders = folders.filter((f) => getParentDir(f.virtualPath) === cleanPath);
       const sortedFoldersList = sortFolders(dirFolders, currentSortColumn, currentSortDirection);
       sortedFoldersList.forEach((f) => result.push({ kind: 'folder', data: f }));
 
-      // Files in current dir
       const dirFiles = files.filter((f) => !f.isTrashed && getParentDir(f.virtualPath) === cleanPath);
       const sortedFilesList = sortFiles(dirFiles, currentSortColumn, currentSortDirection, false);
       sortedFilesList.forEach((f) => result.push({ kind: 'file', data: f }));
@@ -1931,7 +1926,6 @@ export function FileTable({
     return result;
   }, [isTrashView, isSearching, searchLower, cleanPath, files, folders, currentSortColumn, currentSortDirection]);
 
-  // Selectable items in current view
   const selectableItems = useMemo(
     () =>
       items.filter(
@@ -2161,7 +2155,7 @@ export function FileTable({
       const clientHeight = viewport.clientHeight;
       const scrollHeight = viewport.scrollHeight;
 
-      // Auto-scrolling when dragging near or outside top/bottom edges (compute nextScrollTop before writing)
+      // Compute nextScrollTop before updating viewport.scrollTop so the marquee math stays in sync.
       const topDist = latestClientY - cachedViewportRect.top;
       const bottomDist = cachedViewportRect.bottom - latestClientY;
       let nextScrollTop = curScrollTop;
@@ -2204,7 +2198,6 @@ export function FileTable({
         box.style.height = `${height}px`;
       }
 
-      // O(1) hit math for overlapping row index range
       const curItems = itemsRef.current;
       let startIdx = -1;
       let endIdx = -2;
@@ -2234,7 +2227,6 @@ export function FileTable({
         }
       }
 
-      // Keep auto-scrolling smoothly if pointer remains in edge zone
       if (nextScrollTop !== curScrollTop && marqueeRafRef.current === null) {
         marqueeRafRef.current = requestAnimationFrame(updateMarqueeFrame);
       }
@@ -2332,7 +2324,6 @@ export function FileTable({
     [hideMarqueeBox, isTrashView, onSelect]
   );
 
-  // TanStack Virtualizer
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
@@ -2402,7 +2393,6 @@ export function FileTable({
         return;
       }
 
-      // Ctrl+A / Cmd+A Select All
       if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
         if (selectableIds.length > 0) {
@@ -2417,7 +2407,6 @@ export function FileTable({
         return;
       }
 
-      // Arrow, PageUp/PageDown, Home/End navigation
       if (
         e.key === 'ArrowDown' ||
         e.key === 'ArrowUp' ||
@@ -2444,7 +2433,6 @@ export function FileTable({
           Math.floor((parentRef.current?.clientHeight ?? 0) / rowHeight) || 10
         );
 
-        // Single selection movement (without Shift)
         if (!e.shiftKey) {
           const currentIndex = getActiveIndex();
           let nextIndex: number;
@@ -2480,7 +2468,6 @@ export function FileTable({
           return;
         }
 
-        // Multi-selection range extension (with Shift)
         if (e.shiftKey) {
           let anchor = anchorIndexRef.current;
           if (anchor === -1 || (items[anchor] && items[anchor].kind === 'parent')) {
@@ -2542,7 +2529,6 @@ export function FileTable({
         }
       }
 
-      // Type-ahead prefix jump
       if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && items.length > 0) {
         if (typeAheadBufferRef.current.length === 0 && e.key.trim().length === 0) {
           return;

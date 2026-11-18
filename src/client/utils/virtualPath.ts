@@ -18,7 +18,6 @@ export function markDropHandled(event: Event | React.SyntheticEvent): void {
   handledDropEvents.add(unwrapNativeEvent(event));
 }
 
-/** Returns true if a drop event was already handled by a nested drop zone. */
 export function isDropHandled(event: Event | React.SyntheticEvent): boolean {
   return handledDropEvents.has(unwrapNativeEvent(event));
 }
@@ -30,7 +29,6 @@ export function setActiveInternalDragPayload(payload: DragMoveItem[] | null): vo
   activeInternalDragPayload = payload;
 }
 
-/** Normalizes a virtual path with a single leading slash and no trailing slashes. */
 export function normalizeVirtualPath(path: string): string {
   const trimmed = path.trim();
   if (!trimmed || trimmed === '/') return '/';
@@ -39,14 +37,12 @@ export function normalizeVirtualPath(path: string): string {
   return stripped || '/';
 }
 
-/** Returns the parent directory of a virtual path, defaulting to '/'. */
 export function getParentDir(path: string): string {
   const parts = path.split('/').filter(Boolean);
   if (parts.length <= 1) return '/';
   return `/${parts.slice(0, -1).join('/')}`;
 }
 
-/** Validates an item or folder name, returning an error string or null if valid. */
 export function getItemNameError(trimmedName: string, label = 'Name'): string | null {
   if (!trimmedName) {
     return `${label} cannot be empty`;
@@ -63,7 +59,6 @@ export function getItemNameError(trimmedName: string, label = 'Name'): string | 
   return null;
 }
 
-/** Checks whether the dragged items can be dropped onto targetVirtualPath. */
 export function canDropInternalItemsToPath(
   targetVirtualPath: string,
   payload: ReadonlyArray<Pick<DragMoveItem, 'kind' | 'virtualPath'>> | null = activeInternalDragPayload,
@@ -88,7 +83,6 @@ export function canDropInternalItemsToPath(
   );
 }
 
-/** Filters out items that cannot be moved to targetVirtualPath (same parent or folder descendant). */
 export function filterMovableItemsToPath<T extends { kind: 'file' | 'folder'; id: string }>(
   items: ReadonlyArray<T>,
   targetVirtualPath: string,
@@ -110,7 +104,6 @@ export function filterMovableItemsToPath<T extends { kind: 'file' | 'folder'; id
   return { normalizedTarget, validItems };
 }
 
-/** Rejects an invalid internal dragover event by setting dropEffect to 'none'. */
 export function rejectInvalidInternalDragOver(
   e: React.DragEvent,
   targetVirtualPath: string,
@@ -128,7 +121,6 @@ export function rejectInvalidInternalDragOver(
   return true;
 }
 
-/** Parses and validates internal drag-and-drop items from a drop event. */
 export function parseInternalDropItems(
   e: React.DragEvent,
   targetVirtualPath: string,

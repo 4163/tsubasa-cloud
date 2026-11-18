@@ -869,7 +869,6 @@ export function ActionPortal({
     return () => window.removeEventListener('dragend', handleDragEnd);
   }, []);
 
-  // Normalize path segments
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
   const segments = cleanPath.split('/').filter(Boolean);
 

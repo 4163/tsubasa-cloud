@@ -67,7 +67,6 @@ const styles = stylex.create({
   },
 });
 
-/** Styled modal `<select>` with a trailing chevron icon. */
 export function SelectField({ selectRef, children, ...selectProps }: SelectFieldProps) {
   return (
     <div {...stylex.props(styles.selectWrapper)}>

@@ -1283,7 +1283,6 @@ export function UploadDrawer({
 
   const emptyFoldersKey = useMemo(() => stagedEmptyFolders.join('\0'), [stagedEmptyFolders]);
 
-  // Reset per-session progress and conflict overrides whenever staged items change
   useEffect(() => {
     setConflictsByPath({});
     setContentMatchByKey({});
@@ -1297,7 +1296,7 @@ export function UploadDrawer({
     setSelectedAccounts({});
   }, [isOpen, normalizedItems, emptyFoldersKey, poolId]);
 
-  // Verify byte-for-byte identity only when a conflicting file shares the existing file's exact size
+  // Skip hashing unless the file size matches the existing record.
   useEffect(() => {
     if (!isOpen || conflictItems.length === 0) {
       setContentMatchByKey({});
@@ -1358,7 +1357,6 @@ export function UploadDrawer({
     };
   }, [isOpen, conflictItems, conflictsByPath]);
 
-  // Request placement plan whenever staged files or conflict choices change
   useEffect(() => {
     if (!isOpen || normalizedItems.length === 0) {
       setPreviews([]);
@@ -1498,22 +1496,27 @@ export function UploadDrawer({
               const res = await client.api.folders.$post({
                 json: { virtualPath: folderPath, name, poolId },
               });
-              if (res.ok || res.status === 409) {
+              if (res.ok) {
                 succeededCount += 1;
               } else {
                 let errMsg = `Failed to create folder "${folderPath}" (${res.status})`;
+                let errCode: string | null = null;
                 try {
                   const errData = await res.json();
-                  if (
-                    errData &&
-                    typeof errData === 'object' &&
-                    'error' in errData &&
-                    typeof errData.error === 'string'
-                  ) {
-                    errMsg = errData.error;
+                  if (errData && typeof errData === 'object') {
+                    if ('code' in errData && typeof errData.code === 'string') {
+                      errCode = errData.code;
+                    }
+                    if ('error' in errData && typeof errData.error === 'string') {
+                      errMsg = errData.error;
+                    }
                   }
                 } catch {}
-                folderError = folderError ?? errMsg;
+                if (res.status === 409 && errCode === 'FOLDER_EXISTS') {
+                  succeededCount += 1;
+                } else {
+                  folderError = folderError ?? errMsg;
+                }
               }
             } catch (err) {
               const errMsg =
@@ -2442,8 +2445,17 @@ export function UploadDrawer({
           {planError && (
             <div {...stylex.props(styles.planErrorBanner)}>
               <span {...stylex.props(styles.planErrorNotice)}>{planError}</span>
-              {!isPlanning && (
-                <DrawerButton variant="secondary" onClick={() => setPlanAttempt((n) => n + 1)}>
+              {!isPlanning && !isUploading && (
+                <DrawerButton
+                  variant="secondary"
+                  onClick={() => {
+                    if (normalizedItems.length === 0 && stagedEmptyFolders.length > 0 && !hasCreatedEmptyFolders) {
+                      void handleStartUpload();
+                    } else {
+                      setPlanAttempt((n) => n + 1);
+                    }
+                  }}
+                >
                   Retry allocation
                 </DrawerButton>
               )}

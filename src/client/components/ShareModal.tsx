@@ -660,7 +660,6 @@ export function ShareModal({
     };
   }, []);
 
-  // Reset state cleanly on close/open and run inspect on open (with signature cache)
   useEffect(() => {
     if (!isOpen || items.length === 0) {
       submittingRef.current = false;
@@ -742,7 +741,6 @@ export function ShareModal({
     inspectData && !inspectData.sharePoolFitsWithoutExpansion && inspectData.overCeilingFiles.length === 0
   );
 
-  // Debounced live validation whenever selectedAccountIds changes while expansion is needed
   useEffect(() => {
     if (!isOpen || !needsExpansion || items.length === 0) {
       setValidationData(null);
@@ -1162,7 +1160,6 @@ export function ShareModal({
         ) : (
           <form onSubmit={handleSubmit} {...stylex.props(styles.form)}>
             <div {...stylex.props(modalChromeStyles.body, modalChromeStyles.bodySpaced, styles.bodyScroll)}>
-              {/* Target item summary row */}
               <div {...stylex.props(styles.summaryRow)}>
                 <div {...stylex.props(styles.summaryMain)}>
                   <span
@@ -1214,7 +1211,6 @@ export function ShareModal({
                 </div>
               )}
 
-              {/* Conditional allocation panel */}
               {inspectData && !hasOverCeiling && inspectData.sharePoolFitsWithoutExpansion && (
                 <div {...stylex.props(styles.successStrip)}>
                   <IconCheck size={15} />

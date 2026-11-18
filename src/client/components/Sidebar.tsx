@@ -1598,7 +1598,7 @@ export function Sidebar({
             const driveUsedGb = formatGb(acc.quotaUsedBytes);
             const nonTsubasaBytes = Math.max(0, acc.quotaUsedBytes - tsubasaUsedBytes);
             const nonTsubasaGb = formatGb(nonTsubasaBytes);
-            const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024; // > 10 MB
+            const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024;
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
             const hasPoolFiles = tsubasaUsedBytes > 0;
             const canRebalance = isBreached && hasPoolFiles;

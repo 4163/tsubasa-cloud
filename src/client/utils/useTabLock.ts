@@ -183,7 +183,7 @@ function clearSessionInstanceId(instanceId: string): void {
 
 function sendServerRelease(instanceId: string): void {
   // Use sendBeacon or keepalive fetch because standard RPC requests can be cancelled during pagehide teardown.
-  const releaseUrl = String(client.api.instance.release.$url());
+  const releaseUrl = client.api.instance.release.$path();
   const payload = JSON.stringify({ instanceId });
   if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
     const sent = navigator.sendBeacon(
