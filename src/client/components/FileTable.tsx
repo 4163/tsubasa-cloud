@@ -3,21 +3,13 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import {
-  IconFolderFilled,
-  FileTypeIcon,
-  IconDownload,
-  IconTrash,
-  IconChevronRight,
   IconChevronUp,
   IconChevronDown,
-  IconRotateCcw,
   IconUpload,
   IconCheck,
   IconMinus,
-  IconShare,
-  IconLink,
 } from './Icons.js';
-import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
+import { COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
 import {
   getParentDir,
@@ -27,29 +19,40 @@ import {
   rejectInvalidInternalDragOver,
   parseInternalDropItems,
 } from '../utils/virtualPath.js';
-import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
-import { RedactedEmail } from './RedactedEmail.js';
-import type { FileRecord, FolderRecord } from '../api.js';
-import type { AccountItem } from './Sidebar.js';
+import {
+  extractDataTransferEntries,
+  isInternalItemDrag,
+  isExternalFileDrag,
+} from '../utils/dataTransfer.js';
+import {
+  sortFolders,
+  sortFiles,
+  SESSION_SORT_COL_KEY,
+  SESSION_SORT_DIR_KEY,
+  getSessionSortColumn,
+  getSessionSortDirection,
+} from '../utils/fileTableSort.js';
+import {
+  MemoParentRow,
+  MemoFolderRow,
+  MemoFileRow,
+  rowStyles,
+} from './FileTableRows.js';
+import { useMarqueeSelection } from '../hooks/useMarqueeSelection.js';
+import { useTableKeyboardNav } from '../hooks/useTableKeyboardNav.js';
+import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll.js';
+import type {
+  AccountItem,
+  ClientFileRecord,
+  ClientFolder,
+  SortColumn,
+  SortDirection,
+} from '../types.js';
 
 const TABLE_ROW_HEIGHT_DESKTOP = 36;
 const TABLE_ROW_HEIGHT_COARSE = 44;
 const TABLE_ROW_HEIGHT_MOBILE = 64;
 const DOUBLE_CLICK_MS = 500;
-
-export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'trashedAt'> & {
-  createdAt: string | Date;
-  updatedAt: string | Date;
-  trashedAt?: string | Date | null;
-};
-
-export type ClientFolder = Omit<FolderRecord, 'createdAt' | 'updatedAt'> & {
-  createdAt: string | Date;
-  updatedAt: string | Date;
-};
-
-export type SortColumn = 'name' | 'account' | 'size' | 'date';
-export type SortDirection = 'asc' | 'desc';
 
 interface FileTableProps {
   files: ClientFileRecord[];
@@ -96,6 +99,52 @@ type TableItem =
   | { kind: 'folder'; data: ClientFolder }
   | { kind: 'file'; data: ClientFileRecord }
   | { kind: 'trash'; data: ClientFileRecord };
+
+const SORTABLE_COLUMNS: ReadonlyArray<{
+  column: SortColumn;
+  label: string;
+  trashLabel?: string;
+  sortSubject: string;
+  trashSortSubject?: string;
+  ascTitleHint: string;
+  descTitleHint: string;
+  defaultTitleHint: string;
+}> = [
+  {
+    column: 'name',
+    label: 'Name',
+    sortSubject: 'Name',
+    ascTitleHint: '(Z to A)',
+    descTitleHint: '(A to Z)',
+    defaultTitleHint: '(A to Z)',
+  },
+  {
+    column: 'account',
+    label: 'Account',
+    sortSubject: 'Account',
+    ascTitleHint: '(Z to A)',
+    descTitleHint: '(A to Z)',
+    defaultTitleHint: '(A to Z)',
+  },
+  {
+    column: 'size',
+    label: 'Size',
+    sortSubject: 'Size',
+    ascTitleHint: '(largest first)',
+    descTitleHint: '(smallest first)',
+    defaultTitleHint: '(largest first)',
+  },
+  {
+    column: 'date',
+    label: 'Modified',
+    trashLabel: 'Date trashed',
+    sortSubject: 'Date modified',
+    trashSortSubject: 'Date trashed',
+    ascTitleHint: '(newest first)',
+    descTitleHint: '(oldest first)',
+    defaultTitleHint: '(newest first)',
+  },
+];
 
 const styles = stylex.create({
   container: {
@@ -218,160 +267,9 @@ const styles = stylex.create({
     flexShrink: 0,
     userSelect: 'none',
   },
-  gutterCell: {
-    width: '16px',
-    flexShrink: 0,
-    height: '100%',
-    boxSizing: 'border-box',
-    cursor: 'default',
-    backgroundColor: 'transparent',
-    userSelect: 'none',
-    '@media (max-width: 768px)': {
-      display: 'none',
-    },
-  },
-  rowWrapper: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: layout.tableRowHeight,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    borderLeftWidth: '3px',
-    borderLeftStyle: 'solid',
-    borderLeftColor: 'transparent',
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    boxSizing: 'border-box',
-    backgroundColor: {
-      default: 'transparent',
-      ':has([data-row="true"]:hover)': colors.rowHover,
-    },
-    userSelect: 'none',
-    transition: motion.transitionFast,
-    '@media (pointer: coarse)': {
-      height: '44px',
-    },
-    '@media (max-width: 768px)': {
-      height: layout.mobileRowHeight,
-    },
-  },
-  rowWrapperSelected: {
-    borderLeftColor: colors.accentGold,
-    backgroundColor: {
-      default: colors.selectionBg,
-      ':has([data-row="true"]:hover)': colors.selectionBg,
-    },
-  },
-  rowWrapperDragOver: {
-    borderLeftColor: colors.accentGold,
-    backgroundColor: {
-      default: colors.brandAccentSurface,
-      ':has([data-row="true"]:hover)': colors.brandAccentSurface,
-    },
-  },
-  rowMain: {
-    flex: 1,
-    minWidth: 0,
-    height: '100%',
-    display: 'grid',
-    gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 96px',
-    alignItems: 'center',
-    paddingLeft: '0px',
-    paddingRight: spacing.space4,
-    boxSizing: 'border-box',
-    cursor: 'default',
-    userSelect: 'none',
-    fontSize: typography.fontSizeBody,
-    color: colors.primaryText,
-    fontFamily: typography.fontFamilyBody,
-    backgroundColor: 'transparent',
-    transition: motion.transitionFast,
-    '@media (pointer: coarse)': {
-      gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 120px',
-      ':active': {
-        backgroundColor: colors.rowHover,
-        transition: motion.transitionTap,
-      },
-    },
-    '@media (max-width: 768px)': {
-      gridTemplateColumns: '36px minmax(0, 1fr) auto',
-      paddingLeft: spacing.space2,
-      paddingRight: spacing.space3,
-    },
-  },
-  rowSelected: {
-    backgroundColor: colors.selectionBg,
-  },
-  rowDragOver: {
-    backgroundColor: colors.brandAccentSurface,
-  },
-  rowCutMuted: {
-    opacity: 0.5,
-  },
-  checkboxCell: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: '100%',
-  },
-  checkbox: {
-    minWidth: '28px',
-    minHeight: '28px',
-    borderRadius: radius.compact,
-    borderWidth: '0px',
-    backgroundColor: 'transparent',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    padding: '0px',
-    color: colors.primary,
-    transition: motion.transitionFast,
-    outline: 'none',
-    boxSizing: 'border-box',
-    flexShrink: 0,
-    ':hover': {
-      backgroundColor: colors.surfaceAlt,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-2px',
-    },
-    '@media (pointer: coarse)': {
-      minWidth: '36px',
-      minHeight: '36px',
-    },
-  },
   checkboxDisabled: {
     opacity: 0.35,
     cursor: 'not-allowed',
-  },
-  checkboxBox: {
-    width: '16px',
-    height: '16px',
-    borderRadius: radius.compact,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-    pointerEvents: 'none',
-  },
-  checkboxBoxChecked: {
-    backgroundColor: colors.accentGold,
-    borderColor: colors.accentGold,
-    color: colors.accentGoldText,
   },
   marqueeBox: {
     position: 'absolute',
@@ -387,214 +285,6 @@ const styles = stylex.create({
     pointerEvents: 'none',
     zIndex: 50,
     boxSizing: 'border-box',
-  },
-  nameCell: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    userSelect: 'none',
-  },
-  itemIcon: {
-    width: '16px',
-    height: '16px',
-    flexShrink: 0,
-    color: colors.secondaryText,
-  },
-  folderIcon: {
-    color: colors.accentGold,
-  },
-  itemLabel: {
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontWeight: '400',
-    userSelect: 'none',
-  },
-  accountCell: {
-    display: 'flex',
-    alignItems: 'center',
-    minWidth: 0,
-    height: '100%',
-    paddingLeft: '2px',
-    paddingRight: spacing.space6,
-    overflow: 'hidden',
-    '@media (max-width: 768px)': {
-      display: 'none',
-    },
-  },
-  selectWrapper: {
-    position: 'relative',
-    display: 'inline-flex',
-    alignItems: 'center',
-    minWidth: 0,
-    maxWidth: '136px',
-  },
-  selectChevron: {
-    position: 'absolute',
-    right: '7px',
-    top: '50%',
-    transform: 'translateY(-50%)',
-    pointerEvents: 'none',
-    color: colors.brandAccent,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  accountSelect: {
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    MozAppearance: 'none',
-    fontSize: typography.fontSizeBadge,
-    fontFamily: typography.fontFamilyMono,
-    height: '22px',
-    lineHeight: '18px',
-    paddingTop: '1px',
-    paddingBottom: '1px',
-    paddingLeft: spacing.space2,
-    paddingRight: '22px',
-    borderRadius: radius.compact,
-    backgroundColor: colors.brandAccentSurface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    color: colors.brandAccent,
-    width: '100%',
-    maxWidth: '136px',
-    outline: 'none',
-    cursor: 'pointer',
-    boxSizing: 'border-box',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    transitionProperty: 'background-color, opacity',
-    transitionDuration: motion.durationFast,
-    transitionTimingFunction: motion.easingOut,
-    ':hover': {
-      borderColor: colors.accentGold,
-      backgroundColor: colors.surfaceAlt,
-    },
-    ':focus': {
-      borderColor: colors.focusRing,
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    ':focus-visible': {
-      borderColor: colors.focusRing,
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    '@media (pointer: coarse)': {
-      minHeight: '36px',
-    },
-  },
-  accountSelectTransferring: {
-    opacity: 0.5,
-    cursor: 'wait',
-    pointerEvents: 'none',
-  },
-  accountPill: {
-    fontSize: typography.fontSizeBadge,
-    fontFamily: typography.fontFamilyMono,
-    display: 'inline-block',
-    maxWidth: '100%',
-    height: '22px',
-    lineHeight: '18px',
-    paddingTop: '1px',
-    paddingBottom: '1px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
-    backgroundColor: colors.brandAccentSurface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    color: colors.brandAccent,
-    boxSizing: 'border-box',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    verticalAlign: 'middle',
-    cursor: 'default',
-    userSelect: 'text',
-  },
-  tabularCell: {
-    fontVariantNumeric: 'tabular-nums',
-    fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
-    paddingRight: spacing.space2,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    '@media (max-width: 768px)': {
-      display: 'none',
-    },
-  },
-  dateCell: {
-    paddingRight: spacing.space4,
-  },
-  actionsCell: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: spacing.space1,
-    '@media (max-width: 768px)': {
-      justifyContent: 'flex-end',
-    },
-  },
-  rowBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    cursor: 'pointer',
-    minWidth: '26px',
-    minHeight: '26px',
-    padding: spacing.space1,
-    color: colors.secondaryText,
-    borderRadius: radius.compact,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    outline: 'none',
-    boxSizing: 'border-box',
-    transition: motion.transitionFast,
-    ':hover': {
-      color: colors.primaryText,
-      backgroundColor: colors.surfaceAlt,
-    },
-    ':active': {
-      backgroundColor: colors.selectionBg,
-      transition: motion.transitionTap,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-2px',
-    },
-    '@media (pointer: coarse)': {
-      minWidth: '36px',
-      minHeight: '36px',
-    },
-  },
-  rowBtnDanger: {
-    ':hover': {
-      color: colors.danger,
-      backgroundColor: colors.dangerSurface,
-    },
-  },
-  rowBtnCopied: {
-    color: colors.success,
-    backgroundColor: colors.successSurface,
-  },
-  actionIcon: {
-    width: '14px',
-    height: '14px',
   },
   emptyState: {
     display: 'flex',
@@ -694,920 +384,6 @@ const styles = stylex.create({
   },
 });
 
-function formatDate(dateValue: Date | number | string | null | undefined): string {
-  if (!dateValue) return '—';
-  const d = dateValue instanceof Date ? dateValue : new Date(dateValue);
-  return isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
-}
-
-function isInternalItemDrag(e: React.DragEvent | DragEvent): boolean {
-  return Boolean(e.dataTransfer?.types?.includes('application/x-tsubasa-items'));
-}
-
-function isExternalFileDrag(e: React.DragEvent | DragEvent): boolean {
-  const types = e.dataTransfer?.types;
-  if (!types) return false;
-  return types.includes('Files') && !types.includes('application/x-tsubasa-items');
-}
-
-export async function extractDataTransferEntries(
-  dataTransfer: DataTransfer,
-  basePath: string
-): Promise<{ files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[]; basePath: string }> {
-  const cleanBase = basePath === '/' ? '' : basePath.replace(/\/+$/, '');
-  const normalizedBase = cleanBase === '' ? '/' : cleanBase.startsWith('/') ? cleanBase : `/${cleanBase}`;
-  const resultFiles: Array<{ file: File; virtualPath: string }> = [];
-  const resultEmptyFolders: string[] = [];
-
-  const rawFiles = Array.from(dataTransfer.files || []);
-  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
-
-  let hasDirectories = false;
-  const entries: any[] = [];
-  for (const it of items) {
-    if (typeof (it as any).webkitGetAsEntry === 'function') {
-      const entry = (it as any).webkitGetAsEntry();
-      if (entry) {
-        entries.push(entry);
-        if (entry.isDirectory) {
-          hasDirectories = true;
-        }
-      }
-    }
-  }
-
-  // Use rawFiles directly when no directories were dropped to avoid async entry traversal.
-  if (!hasDirectories && rawFiles.length > 0) {
-    for (const f of rawFiles) {
-      const rel = (f as any).webkitRelativePath || f.name;
-      resultFiles.push({
-        file: f,
-        virtualPath: `${cleanBase}/${rel}`.replace(/\/+/g, '/'),
-      });
-    }
-    return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
-  }
-
-  // Fallback if entries failed to extract from items
-  if (entries.length === 0 && rawFiles.length > 0) {
-    for (const f of rawFiles) {
-      const rel = (f as any).webkitRelativePath || f.name;
-      resultFiles.push({
-        file: f,
-        virtualPath: `${cleanBase}/${rel}`.replace(/\/+/g, '/'),
-      });
-    }
-    return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
-  }
-
-  async function traverse(entry: any, currentFolder: string) {
-    if (entry.isFile) {
-      await new Promise<void>((resolve) => {
-        try {
-          entry.file(
-            (f: File) => {
-              resultFiles.push({
-                file: f,
-                virtualPath: `${currentFolder}/${f.name}`.replace(/\/+/g, '/'),
-              });
-              resolve();
-            },
-            () => {
-              if (currentFolder === cleanBase) {
-                const match = rawFiles.find(
-                  (rf) => rf.name === entry.name && !(rf as any).webkitRelativePath?.includes('/')
-                );
-                if (match) {
-                  resultFiles.push({
-                    file: match,
-                    virtualPath: `${currentFolder}/${match.name}`.replace(/\/+/g, '/'),
-                  });
-                }
-              }
-              resolve();
-            }
-          );
-        } catch {
-          resolve();
-        }
-      });
-    } else if (entry.isDirectory) {
-      const nextFolder = `${currentFolder}/${entry.name}`.replace(/\/+/g, '/');
-      const dirReader = entry.createReader();
-      const childEntries: any[] = [];
-      let readError = false;
-
-      const readBatch = async (): Promise<void> => {
-        return new Promise<void>((resolve) => {
-          dirReader.readEntries(
-            async (results: any[]) => {
-              if (results && results.length > 0) {
-                childEntries.push(...results);
-                await readBatch();
-              }
-              resolve();
-            },
-            () => {
-              readError = true;
-              resolve();
-            }
-          );
-        });
-      };
-
-      await readBatch();
-
-      if (childEntries.length === 0) {
-        if (!readError) {
-          resultEmptyFolders.push(nextFolder);
-        }
-      } else {
-        for (const child of childEntries) {
-          await traverse(child, nextFolder);
-        }
-      }
-    }
-  }
-
-  for (const entry of entries) {
-    await traverse(entry, cleanBase);
-  }
-
-  return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
-}
-
-const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-
-function sortFolders(
-  foldersList: ClientFolder[],
-  column: SortColumn,
-  direction: SortDirection
-): ClientFolder[] {
-  return [...foldersList].sort((a, b) => {
-    if (column === 'name') {
-      const cmp = nameCollator.compare(a.name, b.name);
-      return direction === 'asc' ? cmp : -cmp;
-    }
-    if (column === 'date') {
-      const timeA = new Date(a.updatedAt).getTime() || 0;
-      const timeB = new Date(b.updatedAt).getTime() || 0;
-      const diff = timeA - timeB;
-      if (diff !== 0) return direction === 'asc' ? diff : -diff;
-      return nameCollator.compare(a.name, b.name);
-    }
-    return nameCollator.compare(a.name, b.name);
-  });
-}
-
-function sortFiles(
-  filesList: ClientFileRecord[],
-  column: SortColumn,
-  direction: SortDirection,
-  isTrash: boolean
-): ClientFileRecord[] {
-  return [...filesList].sort((a, b) => {
-    if (column === 'name') {
-      const cmp = nameCollator.compare(a.name, b.name);
-      return direction === 'asc' ? cmp : -cmp;
-    }
-    if (column === 'account') {
-      const cmp = nameCollator.compare(a.accountId, b.accountId);
-      if (cmp !== 0) return direction === 'asc' ? cmp : -cmp;
-      return nameCollator.compare(a.name, b.name);
-    }
-    if (column === 'size') {
-      const diff = a.sizeBytes - b.sizeBytes;
-      if (diff !== 0) return direction === 'asc' ? diff : -diff;
-      return nameCollator.compare(a.name, b.name);
-    }
-    if (column === 'date') {
-      const dateA = isTrash ? (a.trashedAt || a.updatedAt) : a.updatedAt;
-      const dateB = isTrash ? (b.trashedAt || b.updatedAt) : b.updatedAt;
-      const timeA = new Date(dateA).getTime() || 0;
-      const timeB = new Date(dateB).getTime() || 0;
-      const diff = timeA - timeB;
-      if (diff !== 0) return direction === 'asc' ? diff : -diff;
-      return nameCollator.compare(a.name, b.name);
-    }
-    return 0;
-  });
-}
-
-const SESSION_SORT_COL_KEY = 'tsubasa-filetable-sort-column';
-const SESSION_SORT_DIR_KEY = 'tsubasa-filetable-sort-direction';
-
-function getSessionSortColumn(fallback: SortColumn = 'name'): SortColumn {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const val = window.sessionStorage.getItem(SESSION_SORT_COL_KEY);
-    if (val === 'name' || val === 'account' || val === 'size' || val === 'date') {
-      return val;
-    }
-  } catch {
-    // sessionStorage not accessible
-  }
-  return fallback;
-}
-
-function getSessionSortDirection(fallback: SortDirection = 'asc'): SortDirection {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const val = window.sessionStorage.getItem(SESSION_SORT_DIR_KEY);
-    if (val === 'asc' || val === 'desc') {
-      return val;
-    }
-  } catch {
-    // sessionStorage not accessible
-  }
-  return fallback;
-}
-
-function getAccountTooltip(accountId: string, fileAcc?: AccountItem): string {
-  const email = fileAcc?.email || accountId;
-  if (fileAcc?.displayName && fileAcc.displayName !== email) {
-    return `${fileAcc.displayName} (${email})`;
-  }
-  return email;
-}
-
-interface DragItemPayload {
-  kind: 'file' | 'folder';
-  id: string;
-  name: string;
-  virtualPath: string;
-  isTrashed?: boolean;
-}
-
-interface MemoParentRowProps {
-  path: string;
-  rowIndex: number;
-  virtualSize: number;
-  virtualStart: number;
-  isSelected: boolean;
-  isDragOver: boolean;
-  isTrashView: boolean;
-  isSharePoolActive: boolean;
-  canCopy: boolean;
-  onItemClick: (id: string, e: React.MouseEvent) => void;
-  onNavigate: (path: string) => void;
-  onSetDragOverRowId: React.Dispatch<React.SetStateAction<string | null>>;
-  onRowDrop: (e: React.DragEvent, targetVirtualPath: string) => void;
-}
-
-const MemoParentRow = React.memo(function MemoParentRow({
-  path,
-  rowIndex,
-  virtualSize,
-  virtualStart,
-  isSelected,
-  isDragOver,
-  isTrashView,
-  isSharePoolActive,
-  canCopy,
-  onItemClick,
-  onNavigate,
-  onSetDragOverRowId,
-  onRowDrop,
-}: MemoParentRowProps) {
-  return (
-    <div
-      role="row"
-      aria-rowindex={rowIndex + 2}
-      aria-selected={isSelected}
-      {...stylex.props(
-        styles.rowWrapper,
-        isSelected && styles.rowWrapperSelected,
-        isDragOver && styles.rowWrapperDragOver
-      )}
-      style={{
-        height: `${virtualSize}px`,
-        transform: `translateY(${virtualStart}px)`,
-      }}
-    >
-      <div
-        data-marquee-gutter="true"
-        aria-hidden="true"
-        {...stylex.props(styles.gutterCell)}
-      />
-      <div
-        data-row="true"
-        {...stylex.props(
-          styles.rowMain,
-          isSelected && styles.rowSelected,
-          isDragOver && styles.rowDragOver
-        )}
-        onClick={(e) => {
-          e.stopPropagation();
-          onItemClick('__parent__', e);
-        }}
-        onDragOver={(e) => {
-          if (isTrashView || isSharePoolActive) return;
-          const isInternal = isInternalItemDrag(e);
-          const isCopyDrag = isInternal && (e.ctrlKey || e.altKey) && canCopy;
-          if (
-            rejectInvalidInternalDragOver(
-              e,
-              path,
-              () => onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev)),
-              isCopyDrag
-            )
-          ) {
-            return;
-          }
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.dataTransfer) {
-            e.dataTransfer.dropEffect = isInternal ? (isCopyDrag ? 'copy' : 'move') : 'copy';
-          }
-          onSetDragOverRowId('__parent__');
-        }}
-        onDragLeave={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
-            onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
-          }
-        }}
-        onDrop={(e) => {
-          const isCopyDrag = (e.ctrlKey || e.altKey) && canCopy;
-          if (isInternalItemDrag(e) && !parseInternalDropItems(e, path, isCopyDrag)) {
-            e.preventDefault();
-            e.stopPropagation();
-            markDropHandled(e);
-            setActiveInternalDragPayload(null);
-            onSetDragOverRowId(null);
-            return;
-          }
-          onSetDragOverRowId(null);
-          onRowDrop(e, path);
-        }}
-      >
-        <div role="gridcell" {...stylex.props(styles.checkboxCell)} />
-        <div role="gridcell" {...stylex.props(styles.nameCell)} title={path}>
-          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-          <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
-        </div>
-        <div role="gridcell" {...stylex.props(styles.accountCell)}>
-          <span {...stylex.props(styles.accountPill)}>Parent folder</span>
-        </div>
-        <div role="gridcell" {...stylex.props(styles.tabularCell)}>—</div>
-        <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>—</div>
-        <div role="gridcell" {...stylex.props(styles.actionsCell)}>
-          <button
-            type="button"
-            {...stylex.props(styles.rowBtn)}
-            aria-label="Open parent folder"
-            onClick={(e) => {
-              e.stopPropagation();
-              onNavigate(path);
-            }}
-          >
-            <IconChevronRight {...stylex.props(styles.actionIcon)} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-});
-
-interface MemoFolderRowProps {
-  folder: ClientFolder;
-  rowIndex: number;
-  virtualSize: number;
-  virtualStart: number;
-  isSelected: boolean;
-  isDragOver: boolean;
-  isCut: boolean;
-  folderSize: number;
-  folderBatchLinks?: Array<{ webViewLink: string; accountId: string }>;
-  isCopiedBatch: boolean;
-  isTrashView: boolean;
-  isSharePoolActive: boolean;
-  canCopy: boolean;
-  isSearching: boolean;
-  onItemClick: (id: string, e: React.MouseEvent) => void;
-  onCheckboxToggle: (id: string, e: React.MouseEvent) => void;
-  onRowDragStart: (e: React.DragEvent, item: DragItemPayload) => void;
-  onSetDragOverRowId: React.Dispatch<React.SetStateAction<string | null>>;
-  onRowDrop: (e: React.DragEvent, targetVirtualPath: string) => void;
-  onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
-  onCopyBatchLinks?: (folderId: string, folderName: string) => void;
-  onDeleteFolder?: (folder: ClientFolder) => void;
-  onNavigate: (path: string) => void;
-}
-
-const MemoFolderRow = React.memo(function MemoFolderRow({
-  folder,
-  rowIndex,
-  virtualSize,
-  virtualStart,
-  isSelected,
-  isDragOver,
-  isCut,
-  folderSize,
-  folderBatchLinks,
-  isCopiedBatch,
-  isTrashView,
-  isSharePoolActive,
-  canCopy,
-  isSearching,
-  onItemClick,
-  onCheckboxToggle,
-  onRowDragStart,
-  onSetDragOverRowId,
-  onRowDrop,
-  onShareItem,
-  onCopyBatchLinks,
-  onDeleteFolder,
-  onNavigate,
-}: MemoFolderRowProps) {
-  return (
-    <div
-      role="row"
-      aria-rowindex={rowIndex + 2}
-      aria-selected={isSelected}
-      {...stylex.props(
-        styles.rowWrapper,
-        isSelected && styles.rowWrapperSelected,
-        isDragOver && styles.rowWrapperDragOver
-      )}
-      style={{
-        height: `${virtualSize}px`,
-        transform: `translateY(${virtualStart}px)`,
-      }}
-    >
-      <div
-        data-marquee-gutter="true"
-        aria-hidden="true"
-        {...stylex.props(styles.gutterCell)}
-      />
-      <div
-        data-row="true"
-        draggable={!isTrashView}
-        onDragStart={(e) =>
-          onRowDragStart(e, {
-            kind: 'folder',
-            id: folder.id,
-            name: folder.name,
-            virtualPath: folder.virtualPath,
-          })
-        }
-        onDragOver={(e) => {
-          if (isTrashView || isSharePoolActive) return;
-          const isInternal = isInternalItemDrag(e);
-          const isCopyDrag = isInternal && (e.ctrlKey || e.altKey) && canCopy;
-          if (
-            rejectInvalidInternalDragOver(
-              e,
-              folder.virtualPath,
-              () => onSetDragOverRowId((prev) => (prev === folder.id ? null : prev)),
-              isCopyDrag
-            )
-          ) {
-            return;
-          }
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.dataTransfer) {
-            e.dataTransfer.dropEffect = isInternal ? (isCopyDrag ? 'copy' : 'move') : 'copy';
-          }
-          onSetDragOverRowId(folder.id);
-        }}
-        onDragLeave={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
-            onSetDragOverRowId((prev) => (prev === folder.id ? null : prev));
-          }
-        }}
-        onDrop={(e) => {
-          const isCopyDrag = (e.ctrlKey || e.altKey) && canCopy;
-          if (isInternalItemDrag(e) && !parseInternalDropItems(e, folder.virtualPath, isCopyDrag)) {
-            e.preventDefault();
-            e.stopPropagation();
-            markDropHandled(e);
-            setActiveInternalDragPayload(null);
-            onSetDragOverRowId(null);
-            return;
-          }
-          onSetDragOverRowId(null);
-          onRowDrop(e, folder.virtualPath);
-        }}
-        {...stylex.props(
-          styles.rowMain,
-          isSelected && styles.rowSelected,
-          isDragOver && styles.rowDragOver,
-          isCut && styles.rowCutMuted
-        )}
-        onClick={(e) => {
-          e.stopPropagation();
-          onItemClick(folder.id, e);
-        }}
-      >
-        <div role="gridcell" {...stylex.props(styles.checkboxCell)}>
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={isSelected}
-            aria-label={`Select folder ${folder.name}`}
-            {...stylex.props(styles.checkbox)}
-            onClick={(e) => onCheckboxToggle(folder.id, e)}
-          >
-            <span
-              aria-hidden="true"
-              {...stylex.props(styles.checkboxBox, isSelected && styles.checkboxBoxChecked)}
-            >
-              {isSelected && <IconCheck size={12} strokeWidth={3} />}
-            </span>
-          </button>
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.nameCell)} title={folder.virtualPath}>
-          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-          <span {...stylex.props(styles.itemLabel)}>
-            {isSearching ? folder.virtualPath : folder.name}
-          </span>
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.accountCell)}>
-          <span {...stylex.props(styles.accountPill)}>Cluster folder</span>
-        </div>
-
-        <div
-          role="gridcell"
-          {...stylex.props(styles.tabularCell)}
-          title={folderSize > 0 ? `${formatBytes(folderSize)} across descendant files` : 'Empty folder'}
-        >
-          {folderSize > 0 ? formatBytes(folderSize) : '—'}
-        </div>
-        <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>
-          {formatDate(folder.updatedAt)}
-        </div>
-        <div role="gridcell" {...stylex.props(styles.actionsCell)}>
-          {!isTrashView && !isSharePoolActive && onShareItem && (
-            <button
-              type="button"
-              {...stylex.props(styles.rowBtn)}
-              aria-label={`Share folder ${folder.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onShareItem({
-                  kind: 'folder',
-                  id: folder.id,
-                  name: folder.name,
-                  virtualPath: folder.virtualPath,
-                });
-              }}
-              onDoubleClick={(e) => e.stopPropagation()}
-            >
-              <IconShare {...stylex.props(styles.actionIcon)} />
-            </button>
-          )}
-          {folderBatchLinks && folderBatchLinks.length > 0 && onCopyBatchLinks && (
-            <button
-              type="button"
-              {...stylex.props(
-                styles.rowBtn,
-                isCopiedBatch && styles.rowBtnCopied
-              )}
-              aria-label={`Copy share link for ${folder.name}`}
-              title={
-                folderBatchLinks.length === 1
-                  ? `Copy share link: ${folderBatchLinks[0].webViewLink}`
-                  : `Copy ${folderBatchLinks.length} share links (across ${folderBatchLinks.length} drives)`
-              }
-              onClick={(e) => {
-                e.stopPropagation();
-                onCopyBatchLinks(folder.id, folder.name);
-              }}
-              onDoubleClick={(e) => e.stopPropagation()}
-            >
-              {isCopiedBatch ? (
-                <IconCheck {...stylex.props(styles.actionIcon)} />
-              ) : (
-                <IconLink {...stylex.props(styles.actionIcon)} />
-              )}
-            </button>
-          )}
-          {onDeleteFolder && (
-            <button
-              type="button"
-              {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-              aria-label="Delete folder"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteFolder(folder);
-              }}
-            >
-              <IconTrash {...stylex.props(styles.actionIcon)} />
-            </button>
-          )}
-          <button
-            type="button"
-            {...stylex.props(styles.rowBtn)}
-            aria-label="Open folder"
-            onClick={(e) => {
-              e.stopPropagation();
-              onNavigate(folder.virtualPath);
-            }}
-          >
-            <IconChevronRight {...stylex.props(styles.actionIcon)} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-});
-
-interface MemoFileRowProps {
-  file: ClientFileRecord;
-  isTrashItem: boolean;
-  rowIndex: number;
-  virtualSize: number;
-  virtualStart: number;
-  isSelected: boolean;
-  isCut: boolean;
-  fileAcc?: AccountItem;
-  accounts?: AccountItem[];
-  canTransfer: boolean;
-  isTransferring: boolean;
-  isTrashView: boolean;
-  isSharePoolActive: boolean;
-  isSearching: boolean;
-  onItemClick: (id: string, e: React.MouseEvent) => void;
-  onCheckboxToggle: (id: string, e: React.MouseEvent) => void;
-  onRowDragStart: (e: React.DragEvent, item: DragItemPayload) => void;
-  onTransferFile?: (fileId: string, targetAccountId: string) => void;
-  onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
-  onDownload: (file: ClientFileRecord) => void;
-  onTrash: (file: ClientFileRecord) => void;
-  onRestore?: (file: ClientFileRecord) => void;
-  onPermanentDelete?: (file: ClientFileRecord) => void;
-}
-
-const MemoFileRow = React.memo(function MemoFileRow({
-  file,
-  isTrashItem,
-  rowIndex,
-  virtualSize,
-  virtualStart,
-  isSelected,
-  isCut,
-  fileAcc,
-  accounts,
-  canTransfer,
-  isTransferring,
-  isTrashView,
-  isSharePoolActive,
-  isSearching,
-  onItemClick,
-  onCheckboxToggle,
-  onRowDragStart,
-  onTransferFile,
-  onShareItem,
-  onDownload,
-  onTrash,
-  onRestore,
-  onPermanentDelete,
-}: MemoFileRowProps) {
-  return (
-    <div
-      role="row"
-      aria-rowindex={rowIndex + 2}
-      aria-selected={isSelected}
-      {...stylex.props(
-        styles.rowWrapper,
-        isSelected && styles.rowWrapperSelected
-      )}
-      style={{
-        height: `${virtualSize}px`,
-        transform: `translateY(${virtualStart}px)`,
-      }}
-    >
-      <div
-        data-marquee-gutter="true"
-        aria-hidden="true"
-        {...stylex.props(styles.gutterCell)}
-      />
-      <div
-        data-row="true"
-        draggable={!isTrashView}
-        onDragStart={(e) =>
-          onRowDragStart(e, {
-            kind: 'file',
-            id: file.id,
-            name: file.name,
-            virtualPath: file.virtualPath,
-            ...(isTrashItem ? { isTrashed: true } : {}),
-          })
-        }
-        onDragOver={(e) => {
-          if (!isTrashItem && (isTrashView || isSharePoolActive)) return;
-          if (!isInternalItemDrag(e)) return;
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.dataTransfer) {
-            e.dataTransfer.dropEffect = 'none';
-          }
-        }}
-        onDrop={
-          isTrashItem
-            ? undefined
-            : (e) => {
-                if (isTrashView || isSharePoolActive) return;
-                if (!isInternalItemDrag(e)) return;
-                e.preventDefault();
-                e.stopPropagation();
-                markDropHandled(e);
-              }
-        }
-        {...stylex.props(
-          styles.rowMain,
-          isSelected && styles.rowSelected,
-          !isTrashItem && isCut && styles.rowCutMuted
-        )}
-        onClick={(e) => {
-          e.stopPropagation();
-          onItemClick(file.id, e);
-        }}
-      >
-        <div role="gridcell" {...stylex.props(styles.checkboxCell)}>
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={isSelected}
-            aria-label={isTrashItem ? `Select trashed file ${file.name}` : `Select file ${file.name}`}
-            {...stylex.props(styles.checkbox)}
-            onClick={(e) => onCheckboxToggle(file.id, e)}
-          >
-            <span
-              aria-hidden="true"
-              {...stylex.props(styles.checkboxBox, isSelected && styles.checkboxBoxChecked)}
-            >
-              {isSelected && <IconCheck size={12} strokeWidth={3} />}
-            </span>
-          </button>
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.nameCell)} title={file.virtualPath}>
-          <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(styles.itemIcon)} />
-          <span
-            {...stylex.props(styles.itemLabel)}
-            title={isTrashItem ? `Original location: ${file.virtualPath}` : undefined}
-          >
-            {isTrashItem ? file.virtualPath : isSearching ? file.virtualPath : file.name}
-          </span>
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.accountCell)}>
-          {!isTrashItem && canTransfer && accounts && onTransferFile ? (
-            <div {...stylex.props(styles.selectWrapper)}>
-              <select
-                aria-label={`Transfer ${file.name} to another account`}
-                title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
-                value={file.accountId}
-                disabled={isTransferring}
-                {...stylex.props(
-                  styles.accountSelect,
-                  isTransferring && styles.accountSelectTransferring
-                )}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  const targetId = e.target.value;
-                  if (targetId && targetId !== file.accountId) {
-                    onTransferFile(file.id, targetId);
-                  }
-                }}
-              >
-                {!fileAcc && (
-                  <option value={file.accountId} disabled>
-                    {file.accountId}
-                  </option>
-                )}
-                {accounts.map((acc) => {
-                  const { isMuted, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
-                    acc,
-                    file.sizeBytes,
-                    { isCurrent: acc.id === file.accountId }
-                  );
-
-                  return (
-                    <option key={acc.id} value={acc.id} disabled={isMuted} title={optionTitle}>
-                      {optionLabel}
-                    </option>
-                  );
-                })}
-              </select>
-              <div {...stylex.props(styles.selectChevron)}>
-                <IconChevronDown size={10} strokeWidth={2.5} />
-              </div>
-            </div>
-          ) : (
-            <RedactedEmail
-              email={fileAcc?.email || file.accountId}
-              tooltip={getAccountTooltip(file.accountId, fileAcc)}
-              style={styles.accountPill}
-            />
-          )}
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.tabularCell)}>
-          {formatBytes(file.sizeBytes)}
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>
-          {formatDate(isTrashItem ? file.trashedAt || file.updatedAt : file.updatedAt)}
-        </div>
-
-        <div role="gridcell" {...stylex.props(styles.actionsCell)}>
-          {isTrashItem ? (
-            <>
-              {onRestore && (
-                <button
-                  type="button"
-                  {...stylex.props(styles.rowBtn)}
-                  aria-label="Restore to original location"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRestore(file);
-                  }}
-                >
-                  <IconRotateCcw {...stylex.props(styles.actionIcon)} />
-                </button>
-              )}
-              {onPermanentDelete && (
-                <button
-                  type="button"
-                  {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                  aria-label="Delete permanently from Google Drive"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPermanentDelete(file);
-                  }}
-                >
-                  <IconTrash {...stylex.props(styles.actionIcon)} />
-                </button>
-              )}
-            </>
-          ) : (
-            <>
-              {!isTrashView && !isSharePoolActive && onShareItem && (
-                <button
-                  type="button"
-                  {...stylex.props(styles.rowBtn)}
-                  aria-label={`Share file ${file.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onShareItem({
-                      kind: 'file',
-                      id: file.id,
-                      name: file.name,
-                      virtualPath: file.virtualPath,
-                    });
-                  }}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                >
-                  <IconShare {...stylex.props(styles.actionIcon)} />
-                </button>
-              )}
-              <button
-                type="button"
-                {...stylex.props(styles.rowBtn)}
-                aria-label="Download file"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDownload(file);
-                }}
-              >
-                <IconDownload {...stylex.props(styles.actionIcon)} />
-              </button>
-              <button
-                type="button"
-                {...stylex.props(styles.rowBtn)}
-                aria-label="Move to trash"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTrash(file);
-                }}
-              >
-                <IconTrash {...stylex.props(styles.actionIcon)} />
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-});
-
 export function FileTable({
   files,
   folders,
@@ -1644,19 +420,14 @@ export function FileTable({
   onCopyShareLinks,
 }: FileTableProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
   const [isDropZoneActive, setIsDropZoneActive] = useState(false);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
   const [copiedBatchId, setCopiedBatchId] = useState<string | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const marqueeBoxRef = useRef<HTMLDivElement | null>(null);
-  const marqueeRafRef = useRef<number | null>(null);
-  const marqueeCleanupRef = useRef<(() => void) | null>(null);
-  const justFinishedMarquee = useRef(false);
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
-  const typeAheadBufferRef = useRef<string>('');
-  const typeAheadTimerRef = useRef<number | null>(null);
   const lastHandledScrollSeqRef = useRef<number>(0);
   // Tracked manually because native dblclick is suppressed once the clicked row unmounts mid-sequence.
   const lastClickRef = useRef<{ id: string; path: string; time: number } | null>(null);
@@ -1668,23 +439,9 @@ export function FileTable({
       ? TABLE_ROW_HEIGHT_COARSE
       : TABLE_ROW_HEIGHT_DESKTOP;
 
-  const hideMarqueeBox = useCallback(() => {
-    if (marqueeRafRef.current !== null) {
-      cancelAnimationFrame(marqueeRafRef.current);
-      marqueeRafRef.current = null;
-    }
-    if (marqueeBoxRef.current) {
-      marqueeBoxRef.current.style.display = 'none';
-    }
-  }, []);
-
   useEffect(() => {
     return () => {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      if (marqueeRafRef.current !== null) cancelAnimationFrame(marqueeRafRef.current);
-      if (typeAheadTimerRef.current !== null) window.clearTimeout(typeAheadTimerRef.current);
-      marqueeCleanupRef.current?.();
-      marqueeCleanupRef.current = null;
     };
   }, []);
 
@@ -1760,41 +517,6 @@ export function FileTable({
     }
   }, [currentSortColumn, currentSortDirection]);
 
-  useEffect(() => {
-    const handleGlobalDragEnd = () => {
-      setActiveInternalDragPayload(null);
-      setIsDropZoneActive(false);
-      setDragOverRowId(null);
-      hideMarqueeBox();
-    };
-
-    const handleGlobalDragLeave = (e: DragEvent) => {
-      if (
-        !e.relatedTarget ||
-        e.clientY <= 0 ||
-        e.clientX <= 0 ||
-        e.clientX >= window.innerWidth ||
-        e.clientY >= window.innerHeight
-      ) {
-        handleGlobalDragEnd();
-      }
-    };
-
-    const handleGlobalMouseUp = () => {
-      hideMarqueeBox();
-    };
-
-    window.addEventListener('dragleave', handleGlobalDragLeave);
-    window.addEventListener('dragend', handleGlobalDragEnd);
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-
-    return () => {
-      window.removeEventListener('dragleave', handleGlobalDragLeave);
-      window.removeEventListener('dragend', handleGlobalDragEnd);
-      window.removeEventListener('mouseup', handleGlobalMouseUp);
-    };
-  }, [hideMarqueeBox]);
-
   const handleSort = (column: SortColumn) => {
     let newDirection: SortDirection = 'asc';
     if (currentSortColumn === column) {
@@ -1865,18 +587,6 @@ export function FileTable({
     (e: React.DragEvent, targetVirtualPath: string) => processDropTarget(e, targetVirtualPath),
     [processDropTarget]
   );
-
-  useEffect(() => {
-    anchorIndexRef.current = -1;
-    focusIndexRef.current = -1;
-    lastSelectedIdRef.current = null;
-    lastClickRef.current = null;
-    typeAheadBufferRef.current = '';
-    if (typeAheadTimerRef.current !== null) {
-      window.clearTimeout(typeAheadTimerRef.current);
-      typeAheadTimerRef.current = null;
-    }
-  }, [cleanPath]);
 
   const isSearching = searchQuery.trim().length > 0;
   const searchLower = searchQuery.toLowerCase();
@@ -1967,6 +677,109 @@ export function FileTable({
   selectableItemsRef.current = selectableItems;
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
+
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 4,
+  });
+
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [rowHeight, rowVirtualizer]);
+
+  useEffect(() => {
+    if (!scrollRequest || scrollRequest.seq === lastHandledScrollSeqRef.current) return;
+    const idx = items.findIndex((it) => it.kind !== 'parent' && it.data.id === scrollRequest.id);
+    if (idx === -1) return;
+    lastHandledScrollSeqRef.current = scrollRequest.seq;
+    anchorIndexRef.current = idx;
+    focusIndexRef.current = idx;
+    lastSelectedIdRef.current = scrollRequest.id;
+    rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
+  }, [scrollRequest, items, rowVirtualizer]);
+
+  const getTotalSize = useCallback(() => rowVirtualizer.getTotalSize(), [rowVirtualizer]);
+
+  const { marqueeBoxRef, justFinishedMarquee, hideMarqueeBox, handleMouseDown } = useMarqueeSelection({
+    viewportRef: parentRef,
+    getTotalSize,
+    rowHeight,
+    itemsRef,
+    selectedIds,
+    onSelectMultiple,
+  });
+
+  const scrollToIndex = useCallback(
+    (index: number) => {
+      rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+    },
+    [rowVirtualizer]
+  );
+
+  const { resetTypeAhead } = useTableKeyboardNav({
+    parentRef,
+    items,
+    selectableIds,
+    selectedIds,
+    rowHeight,
+    scrollToIndex,
+    onSelect,
+    onSelectMultiple,
+    anchorIndexRef,
+    focusIndexRef,
+    lastSelectedIdRef,
+  });
+
+  useHorizontalWheelScroll({
+    viewportRef: parentRef,
+    headerRef,
+    allowVerticalScrollFirst: true,
+  });
+
+  useEffect(() => {
+    const handleGlobalDragEnd = () => {
+      setActiveInternalDragPayload(null);
+      setIsDropZoneActive(false);
+      setDragOverRowId(null);
+      hideMarqueeBox();
+    };
+
+    const handleGlobalDragLeave = (e: DragEvent) => {
+      if (
+        !e.relatedTarget ||
+        e.clientY <= 0 ||
+        e.clientX <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight
+      ) {
+        handleGlobalDragEnd();
+      }
+    };
+
+    const handleGlobalMouseUp = () => {
+      hideMarqueeBox();
+    };
+
+    window.addEventListener('dragleave', handleGlobalDragLeave);
+    window.addEventListener('dragend', handleGlobalDragEnd);
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+
+    return () => {
+      window.removeEventListener('dragleave', handleGlobalDragLeave);
+      window.removeEventListener('dragend', handleGlobalDragEnd);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [hideMarqueeBox]);
+
+  useEffect(() => {
+    anchorIndexRef.current = -1;
+    focusIndexRef.current = -1;
+    lastSelectedIdRef.current = null;
+    lastClickRef.current = null;
+    resetTypeAhead();
+  }, [cleanPath, resetTypeAhead]);
 
   const handleCopyBatchLinks = useCallback(
     async (folderId: string, folderName: string) => {
@@ -2090,196 +903,6 @@ export function FileTable({
     [onSelect]
   );
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-
-    const target = e.target as HTMLElement | null;
-    const isMarqueeGutter = Boolean(target?.closest('[data-marquee-gutter="true"]'));
-    if (!isMarqueeGutter) {
-      if (
-        target?.closest('button') ||
-        target?.closest('input') ||
-        target?.closest('select') ||
-        target?.closest('a') ||
-        target?.closest('[data-row="true"]') ||
-        target?.closest('[draggable="true"]')
-      ) {
-        return;
-      }
-    }
-
-    const viewport = parentRef.current;
-    if (!viewport) return;
-
-    marqueeCleanupRef.current?.();
-
-    let cachedViewportRect = viewport.getBoundingClientRect();
-    let maxContentX = viewport.scrollWidth;
-    let maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
-    let rectDirty = false;
-
-    const startClientX = e.clientX;
-    const startClientY = e.clientY;
-    const startScrollTop = viewport.scrollTop;
-    const startScrollLeft = viewport.scrollLeft;
-    const startContentX = startClientX - cachedViewportRect.left + startScrollLeft;
-    const startContentY = startClientY - cachedViewportRect.top + startScrollTop;
-
-    const isModifier = e.shiftKey || e.ctrlKey || e.metaKey;
-    const initialSelected = new Set(selectedIds);
-    initialSelected.delete('__parent__');
-    let isDragging = false;
-    let latestClientX = startClientX;
-    let latestClientY = startClientY;
-    let prevRangeStart = -1;
-    let prevRangeEnd = -2;
-    let hasAppliedSelection = false;
-
-    const onViewportChange = () => {
-      rectDirty = true;
-    };
-
-    const updateMarqueeFrame = () => {
-      marqueeRafRef.current = null;
-      if (!isDragging) return;
-
-      if (rectDirty) {
-        cachedViewportRect = viewport.getBoundingClientRect();
-        maxContentX = viewport.scrollWidth;
-        maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
-        rectDirty = false;
-      }
-
-      const curScrollTop = viewport.scrollTop;
-      const curScrollLeft = viewport.scrollLeft;
-      const clientHeight = viewport.clientHeight;
-      const scrollHeight = viewport.scrollHeight;
-
-      // Compute nextScrollTop before updating viewport.scrollTop so the marquee math stays in sync.
-      const topDist = latestClientY - cachedViewportRect.top;
-      const bottomDist = cachedViewportRect.bottom - latestClientY;
-      let nextScrollTop = curScrollTop;
-      if (topDist < 30) {
-        nextScrollTop = Math.max(0, curScrollTop - 10);
-      } else if (bottomDist < 30) {
-        nextScrollTop = Math.min(Math.max(0, scrollHeight - clientHeight), curScrollTop + 10);
-      }
-      if (nextScrollTop !== curScrollTop) {
-        viewport.scrollTop = nextScrollTop;
-      }
-
-      const clampedClientX = Math.max(
-        cachedViewportRect.left,
-        Math.min(cachedViewportRect.right, latestClientX)
-      );
-      const clampedClientY = Math.max(
-        cachedViewportRect.top,
-        Math.min(cachedViewportRect.bottom, latestClientY)
-      );
-
-      const currentContentX = clampedClientX - cachedViewportRect.left + curScrollLeft;
-      const currentContentY = clampedClientY - cachedViewportRect.top + nextScrollTop;
-
-      const boundedCurrentX = Math.max(0, Math.min(maxContentX, currentContentX));
-      const boundedCurrentY = Math.max(0, Math.min(maxContentY, currentContentY));
-      const boundedStartX = Math.max(0, Math.min(maxContentX, startContentX));
-      const boundedStartY = Math.max(0, Math.min(maxContentY, startContentY));
-
-      const left = Math.min(boundedStartX, boundedCurrentX);
-      const top = Math.min(boundedStartY, boundedCurrentY);
-      const width = Math.abs(boundedCurrentX - boundedStartX);
-      const height = Math.abs(boundedCurrentY - boundedStartY);
-
-      const box = marqueeBoxRef.current;
-      if (box) {
-        box.style.display = 'block';
-        box.style.transform = `translate(${left}px, ${top}px)`;
-        box.style.width = `${width}px`;
-        box.style.height = `${height}px`;
-      }
-
-      const curItems = itemsRef.current;
-      let startIdx = -1;
-      let endIdx = -2;
-      if (curItems.length > 0) {
-        const rawStart = Math.floor(top / rowHeight);
-        const rawEnd = height > 0 ? Math.floor((top + height - 1) / rowHeight) : rawStart;
-        if (rawEnd >= 0 && rawStart < curItems.length) {
-          startIdx = Math.max(0, rawStart);
-          endIdx = Math.min(curItems.length - 1, rawEnd);
-        }
-      }
-
-      if (!hasAppliedSelection || startIdx !== prevRangeStart || endIdx !== prevRangeEnd) {
-        hasAppliedSelection = true;
-        prevRangeStart = startIdx;
-        prevRangeEnd = endIdx;
-
-        if (onSelectMultiple) {
-          const newSelected = isModifier ? new Set(initialSelected) : new Set<string>();
-          for (let i = startIdx; i <= endIdx; i++) {
-            const item = curItems[i];
-            if (item && item.kind !== 'parent') {
-              newSelected.add(item.data.id);
-            }
-          }
-          onSelectMultiple(Array.from(newSelected), 'set');
-        }
-      }
-
-      if (nextScrollTop !== curScrollTop && marqueeRafRef.current === null) {
-        marqueeRafRef.current = requestAnimationFrame(updateMarqueeFrame);
-      }
-    };
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      latestClientX = moveEvent.clientX;
-      latestClientY = moveEvent.clientY;
-
-      if (!isDragging) {
-        const dx = latestClientX - startClientX;
-        const dy = latestClientY - startClientY;
-        if (Math.hypot(dx, dy) > 5) {
-          isDragging = true;
-        } else {
-          return;
-        }
-      }
-
-      if (marqueeRafRef.current === null) {
-        marqueeRafRef.current = requestAnimationFrame(updateMarqueeFrame);
-      }
-    };
-
-    const cleanupMarquee = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('blur', onMouseUp);
-      window.removeEventListener('resize', onViewportChange);
-      if (marqueeCleanupRef.current === cleanupMarquee) {
-        marqueeCleanupRef.current = null;
-      }
-      isDragging = false;
-      hideMarqueeBox();
-    };
-
-    const onMouseUp = () => {
-      if (isDragging) {
-        justFinishedMarquee.current = true;
-        setTimeout(() => {
-          justFinishedMarquee.current = false;
-        }, 80);
-      }
-      cleanupMarquee();
-    };
-
-    marqueeCleanupRef.current = cleanupMarquee;
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    window.addEventListener('blur', onMouseUp);
-    window.addEventListener('resize', onViewportChange, { passive: true });
-  };
-
   const handleRowDragStart = useCallback(
     (
       e: React.DragEvent,
@@ -2324,346 +947,6 @@ export function FileTable({
     [hideMarqueeBox, isTrashView, onSelect]
   );
 
-  const rowVirtualizer = useVirtualizer({
-    count: items.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => rowHeight,
-    overscan: 4,
-  });
-
-  useEffect(() => {
-    rowVirtualizer.measure();
-  }, [rowHeight, rowVirtualizer]);
-
-  useEffect(() => {
-    if (!scrollRequest || scrollRequest.seq === lastHandledScrollSeqRef.current) return;
-    const idx = items.findIndex((it) => it.kind !== 'parent' && it.data.id === scrollRequest.id);
-    if (idx === -1) return;
-    lastHandledScrollSeqRef.current = scrollRequest.seq;
-    anchorIndexRef.current = idx;
-    focusIndexRef.current = idx;
-    lastSelectedIdRef.current = scrollRequest.id;
-    rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
-  }, [scrollRequest, items, rowVirtualizer]);
-
-  const getActiveIndex = useCallback((): number => {
-    if (
-      focusIndexRef.current >= 0 &&
-      focusIndexRef.current < items.length
-    ) {
-      const focusedItem = items[focusIndexRef.current];
-      const focusedId = focusedItem.kind === 'parent' ? '__parent__' : focusedItem.data.id;
-      if (selectedIds.has(focusedId)) {
-        return focusIndexRef.current;
-      }
-    }
-    return items.findIndex((it) => {
-      const itId = it.kind === 'parent' ? '__parent__' : it.data.id;
-      return selectedIds.has(itId);
-    });
-  }, [items, selectedIds]);
-
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (parentRef.current?.closest('[inert]')) {
-        return;
-      }
-      if (document.querySelector('dialog[open], [role="dialog"]')) {
-        return;
-      }
-
-      const target = e.target;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target instanceof HTMLElement &&
-          (target.isContentEditable || Boolean(target.closest('select, input, textarea, [contenteditable="true"]'))))
-      ) {
-        return;
-      }
-
-      const activeEl = document.activeElement;
-      if (
-        activeEl instanceof HTMLInputElement ||
-        activeEl instanceof HTMLTextAreaElement ||
-        activeEl instanceof HTMLSelectElement ||
-        (activeEl instanceof HTMLElement && activeEl.isContentEditable)
-      ) {
-        return;
-      }
-
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-        e.preventDefault();
-        if (selectableIds.length > 0) {
-          if (onSelectMultiple) {
-            onSelectMultiple(selectableIds, 'set');
-          } else {
-            for (const id of selectableIds) {
-              onSelect(id, true);
-            }
-          }
-        }
-        return;
-      }
-
-      if (
-        e.key === 'ArrowDown' ||
-        e.key === 'ArrowUp' ||
-        e.key === 'Home' ||
-        e.key === 'End' ||
-        e.key === 'PageDown' ||
-        e.key === 'PageUp'
-      ) {
-        if (e.altKey || (e.ctrlKey && !e.shiftKey)) return;
-        if (items.length === 0) return;
-
-        e.preventDefault();
-
-        if (
-          parentRef.current &&
-          document.activeElement instanceof HTMLElement &&
-          parentRef.current.contains(document.activeElement)
-        ) {
-          document.activeElement.blur();
-        }
-
-        const pageStep = Math.max(
-          1,
-          Math.floor((parentRef.current?.clientHeight ?? 0) / rowHeight) || 10
-        );
-
-        if (!e.shiftKey) {
-          const currentIndex = getActiveIndex();
-          let nextIndex: number;
-
-          if (e.key === 'Home') {
-            nextIndex = 0;
-          } else if (e.key === 'End') {
-            nextIndex = items.length - 1;
-          } else if (e.key === 'PageDown') {
-            nextIndex =
-              currentIndex === -1
-                ? Math.min(items.length - 1, pageStep - 1)
-                : Math.min(items.length - 1, currentIndex + pageStep);
-          } else if (e.key === 'PageUp') {
-            nextIndex = currentIndex === -1 ? 0 : Math.max(0, currentIndex - pageStep);
-          } else if (e.key === 'ArrowDown') {
-            nextIndex = currentIndex === -1 ? 0 : Math.min(items.length - 1, currentIndex + 1);
-          } else {
-            nextIndex = currentIndex === -1 ? items.length - 1 : Math.max(0, currentIndex - 1);
-          }
-
-          const nextItem = items[nextIndex];
-          if (!nextItem) return;
-
-          const nextId = nextItem.kind === 'parent' ? '__parent__' : nextItem.data.id;
-
-          anchorIndexRef.current = nextIndex;
-          focusIndexRef.current = nextIndex;
-          lastSelectedIdRef.current = nextItem.kind === 'parent' ? null : nextId;
-
-          onSelect(nextId, false);
-          rowVirtualizer.scrollToIndex(nextIndex, { align: 'auto' });
-          return;
-        }
-
-        if (e.shiftKey) {
-          let anchor = anchorIndexRef.current;
-          if (anchor === -1 || (items[anchor] && items[anchor].kind === 'parent')) {
-            const active = getActiveIndex();
-            if (active !== -1 && items[active] && items[active].kind !== 'parent') {
-              anchor = active;
-            } else {
-              anchor = items[0]?.kind === 'parent' ? 1 : 0;
-            }
-            anchorIndexRef.current = anchor;
-            focusIndexRef.current = anchor;
-          }
-
-          if (anchor >= items.length || !items[anchor]) return;
-
-          const currentFocus = focusIndexRef.current >= 0 ? focusIndexRef.current : anchor;
-          const minAllowed = items[0]?.kind === 'parent' ? 1 : 0;
-          let newFocus: number;
-
-          if (e.key === 'Home') {
-            newFocus = minAllowed;
-          } else if (e.key === 'End') {
-            newFocus = items.length - 1;
-          } else if (e.key === 'PageDown') {
-            newFocus = Math.min(items.length - 1, currentFocus + pageStep);
-          } else if (e.key === 'PageUp') {
-            newFocus = Math.max(minAllowed, currentFocus - pageStep);
-          } else if (e.key === 'ArrowDown') {
-            newFocus = Math.min(items.length - 1, currentFocus + 1);
-          } else {
-            newFocus = Math.max(minAllowed, currentFocus - 1);
-          }
-
-          focusIndexRef.current = newFocus;
-          const focusItem = items[newFocus];
-          lastSelectedIdRef.current = focusItem && focusItem.kind !== 'parent' ? focusItem.data.id : null;
-
-          const start = Math.min(anchor, newFocus);
-          const end = Math.max(anchor, newFocus);
-          const rangeIds: string[] = [];
-
-          for (let i = start; i <= end; i++) {
-            const it = items[i];
-            if (it && it.kind !== 'parent') {
-              rangeIds.push(it.data.id);
-            }
-          }
-
-          if (onSelectMultiple) {
-            onSelectMultiple(rangeIds, 'set');
-          } else {
-            for (const id of rangeIds) {
-              onSelect(id, true);
-            }
-          }
-
-          rowVirtualizer.scrollToIndex(newFocus, { align: 'auto' });
-          return;
-        }
-      }
-
-      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && items.length > 0) {
-        if (typeAheadBufferRef.current.length === 0 && e.key.trim().length === 0) {
-          return;
-        }
-        const nowChar = e.key.toLowerCase();
-        const nextBuf = typeAheadBufferRef.current + nowChar;
-        typeAheadBufferRef.current = nextBuf;
-        if (typeAheadTimerRef.current !== null) {
-          window.clearTimeout(typeAheadTimerRef.current);
-        }
-        typeAheadTimerRef.current = window.setTimeout(() => {
-          typeAheadBufferRef.current = '';
-          typeAheadTimerRef.current = null;
-        }, 700);
-
-        const activeIdx = getActiveIndex();
-        const isRepeatedChar =
-          nextBuf.length > 1 && nextBuf.split('').every((ch) => ch === nowChar);
-
-        const findMatchIndex = (prefix: string, startIndex: number): number => {
-          for (let offset = 0; offset < items.length; offset++) {
-            const idx = (startIndex + offset) % items.length;
-            const it = items[idx];
-            if (!it || it.kind === 'parent') continue;
-            if (it.data.name.toLowerCase().startsWith(prefix)) {
-              return idx;
-            }
-          }
-          return -1;
-        };
-
-        let matchIndex = -1;
-        if (isRepeatedChar) {
-          matchIndex = findMatchIndex(nextBuf, activeIdx >= 0 ? activeIdx : 0);
-          if (matchIndex === -1) {
-            matchIndex = findMatchIndex(
-              nowChar,
-              activeIdx >= 0 ? (activeIdx + 1) % items.length : 0
-            );
-          }
-        } else {
-          matchIndex = findMatchIndex(nextBuf, activeIdx >= 0 ? activeIdx : 0);
-        }
-
-        if (matchIndex !== -1) {
-          e.preventDefault();
-          const matchItem = items[matchIndex];
-          if (matchItem && matchItem.kind !== 'parent') {
-            const matchId = matchItem.data.id;
-            anchorIndexRef.current = matchIndex;
-            focusIndexRef.current = matchIndex;
-            lastSelectedIdRef.current = matchId;
-            onSelect(matchId, false);
-            rowVirtualizer.scrollToIndex(matchIndex, { align: 'auto' });
-          }
-        }
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    items,
-    selectableIds,
-    onSelect,
-    onSelectMultiple,
-    rowVirtualizer,
-    rowHeight,
-    getActiveIndex,
-  ]);
-
-  const headerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const viewport = parentRef.current;
-    if (!viewport) return;
-
-    marqueeCleanupRef.current?.();
-    const header = headerRef.current;
-
-    const canScrollY = (el: HTMLElement, deltaY: number) => {
-      if (el.scrollHeight <= el.clientHeight) return false;
-      if (deltaY > 0) {
-        return el.scrollTop + el.clientHeight < el.scrollHeight - 1;
-      }
-      return el.scrollTop > 0;
-    };
-
-    const handleWheel = (e: WheelEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.deltaX !== 0 || e.deltaY === 0) return;
-      if (viewport.scrollWidth <= viewport.clientWidth) return;
-
-      const delta =
-        e.deltaMode === 1
-          ? e.deltaY * 40
-          : e.deltaMode === 2
-            ? e.deltaY * viewport.clientWidth
-            : e.deltaY;
-
-      const rect = viewport.getBoundingClientRect();
-      const isOverHorizontalScrollbar =
-        e.clientY >= rect.top + viewport.clientTop + viewport.clientHeight &&
-        e.clientY <= rect.bottom &&
-        e.clientX >= rect.left &&
-        e.clientX <= rect.right;
-      const isOverHeader =
-        header !== null &&
-        e.target instanceof Node &&
-        (e.currentTarget === header || header.contains(e.target));
-
-      if (!isOverHeader && !isOverHorizontalScrollbar && canScrollY(viewport, delta)) {
-        return;
-      }
-
-      const prevScrollLeft = viewport.scrollLeft;
-      viewport.scrollLeft += delta;
-      if (viewport.scrollLeft !== prevScrollLeft) {
-        if (header) {
-          header.scrollLeft = viewport.scrollLeft;
-        }
-        e.preventDefault();
-      } else if (isOverHorizontalScrollbar) {
-        e.preventDefault();
-      }
-    };
-
-    viewport.addEventListener('wheel', handleWheel, { passive: false });
-    header?.addEventListener('wheel', handleWheel, { passive: false });
-
-    return () => {
-      viewport.removeEventListener('wheel', handleWheel);
-      header?.removeEventListener('wheel', handleWheel);
-    };
-  }, []);
-
   const canTransferFiles = Boolean(!isSharePoolActive && accounts && accounts.length > 1 && onTransferFile);
 
   return (
@@ -2677,7 +960,7 @@ export function FileTable({
     >
       <div ref={headerRef} role="row" aria-rowindex={1} {...stylex.props(styles.headerRow)}>
         <div {...stylex.props(styles.headerGutter)} data-marquee-gutter="true" aria-hidden="true" />
-        <div role="columnheader" {...stylex.props(styles.checkboxCell)}>
+        <div role="columnheader" {...stylex.props(rowStyles.checkboxCell)}>
           <button
             type="button"
             role="checkbox"
@@ -2685,7 +968,7 @@ export function FileTable({
             aria-label="Select all files in current folder"
             disabled={selectableIds.length === 0}
             {...stylex.props(
-              styles.checkbox,
+              rowStyles.checkbox,
               selectableIds.length === 0 && styles.checkboxDisabled
             )}
             onClick={(e) => {
@@ -2696,8 +979,8 @@ export function FileTable({
             <span
               aria-hidden="true"
               {...stylex.props(
-                styles.checkboxBox,
-                (isAllSelected || isIndeterminate) && styles.checkboxBoxChecked
+                rowStyles.checkboxBox,
+                (isAllSelected || isIndeterminate) && rowStyles.checkboxBoxChecked
               )}
             >
               {isAllSelected && <IconCheck size={12} strokeWidth={3} />}
@@ -2705,110 +988,46 @@ export function FileTable({
             </span>
           </button>
         </div>
-        <div
-          role="columnheader"
-          aria-sort={currentSortColumn === 'name' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-          {...stylex.props(styles.headerCell)}
-        >
-          <button
-            type="button"
-            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'name' && styles.headerBtnActive)}
-            onClick={() => handleSort('name')}
-            aria-label={`Sort by Name in ${currentSortColumn === 'name' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
-            title={`Sort by Name ${currentSortColumn === 'name' ? (currentSortDirection === 'asc' ? '(Z to A)' : '(A to Z)') : '(A to Z)'}`}
-          >
-            <span>Name</span>
-            <span {...stylex.props(styles.sortSlot)}>
-              {currentSortColumn === 'name' ? (
-                currentSortDirection === 'asc' ? (
-                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                ) : (
-                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                )
-              ) : (
-                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
-              )}
-            </span>
-          </button>
-        </div>
-        <div
-          role="columnheader"
-          aria-sort={currentSortColumn === 'account' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-          {...stylex.props(styles.headerCell)}
-        >
-          <button
-            type="button"
-            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'account' && styles.headerBtnActive)}
-            onClick={() => handleSort('account')}
-            aria-label={`Sort by Account in ${currentSortColumn === 'account' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
-            title={`Sort by Account ${currentSortColumn === 'account' ? (currentSortDirection === 'asc' ? '(Z to A)' : '(A to Z)') : '(A to Z)'}`}
-          >
-            <span>Account</span>
-            <span {...stylex.props(styles.sortSlot)}>
-              {currentSortColumn === 'account' ? (
-                currentSortDirection === 'asc' ? (
-                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                ) : (
-                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                )
-              ) : (
-                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
-              )}
-            </span>
-          </button>
-        </div>
-        <div
-          role="columnheader"
-          aria-sort={currentSortColumn === 'size' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-          {...stylex.props(styles.headerCell)}
-        >
-          <button
-            type="button"
-            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'size' && styles.headerBtnActive)}
-            onClick={() => handleSort('size')}
-            aria-label={`Sort by Size in ${currentSortColumn === 'size' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
-            title={`Sort by Size ${currentSortColumn === 'size' ? (currentSortDirection === 'asc' ? '(largest first)' : '(smallest first)') : '(largest first)'}`}
-          >
-            <span>Size</span>
-            <span {...stylex.props(styles.sortSlot)}>
-              {currentSortColumn === 'size' ? (
-                currentSortDirection === 'asc' ? (
-                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                ) : (
-                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                )
-              ) : (
-                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
-              )}
-            </span>
-          </button>
-        </div>
-        <div
-          role="columnheader"
-          aria-sort={currentSortColumn === 'date' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-          {...stylex.props(styles.headerCell)}
-        >
-          <button
-            type="button"
-            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'date' && styles.headerBtnActive)}
-            onClick={() => handleSort('date')}
-            aria-label={`Sort by ${isTrashView ? 'Date trashed' : 'Date modified'} in ${currentSortColumn === 'date' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
-            title={`Sort by ${isTrashView ? 'Date trashed' : 'Date modified'} ${currentSortColumn === 'date' ? (currentSortDirection === 'asc' ? '(newest first)' : '(oldest first)') : '(newest first)'}`}
-          >
-            <span>{isTrashView ? 'Date trashed' : 'Modified'}</span>
-            <span {...stylex.props(styles.sortSlot)}>
-              {currentSortColumn === 'date' ? (
-                currentSortDirection === 'asc' ? (
-                  <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                ) : (
-                  <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
-                )
-              ) : (
-                <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
-              )}
-            </span>
-          </button>
-        </div>
+        {SORTABLE_COLUMNS.map((col) => {
+          const isActive = currentSortColumn === col.column;
+          const label = isTrashView && col.trashLabel ? col.trashLabel : col.label;
+          const subject = isTrashView && col.trashSortSubject ? col.trashSortSubject : col.sortSubject;
+          const titleHint = isActive
+            ? currentSortDirection === 'asc'
+              ? col.ascTitleHint
+              : col.descTitleHint
+            : col.defaultTitleHint;
+
+          return (
+            <div
+              key={col.column}
+              role="columnheader"
+              aria-sort={isActive ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+              {...stylex.props(styles.headerCell)}
+            >
+              <button
+                type="button"
+                {...stylex.props(styles.headerBtn, styles.headerBtnLeft, isActive && styles.headerBtnActive)}
+                onClick={() => handleSort(col.column)}
+                aria-label={`Sort by ${subject} in ${isActive && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
+                title={`Sort by ${subject} ${titleHint}`}
+              >
+                <span>{label}</span>
+                <span {...stylex.props(styles.sortSlot)}>
+                  {isActive ? (
+                    currentSortDirection === 'asc' ? (
+                      <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                    ) : (
+                      <IconChevronDown size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon)} />
+                    )
+                  ) : (
+                    <IconChevronUp size={12} strokeWidth={2.5} {...stylex.props(styles.sortIcon, styles.sortIconHidden)} aria-hidden="true" />
+                  )}
+                </span>
+              </button>
+            </div>
+          );
+        })}
         <div role="columnheader" {...stylex.props(styles.headerCell)}>Actions</div>
       </div>
 

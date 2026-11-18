@@ -6,42 +6,21 @@ import {
   IconFolderPlus,
   IconRefreshCw,
   IconTrash,
-  IconRotateCcw,
-  IconEdit,
-  IconCopy,
-  IconScissors,
-  IconClipboard,
   IconFolder,
-  IconShare,
-  IconLink,
-  IconCheck,
 } from './Icons.js';
-import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
 import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
-
-export interface ActionPortalClipboard {
-  mode: 'cut' | 'copy';
-  items: Array<{
-    kind: 'file' | 'folder';
-    id: string;
-    name: string;
-    virtualPath: string;
-  }>;
-}
-
-export interface SelectedAccountGroup {
-  accountId: string;
-  accountName: string;
-  fileIds: string[];
-  totalBytes: number;
-}
-
-export interface SelectedShareBatch {
-  batchFolderName: string;
-  linksCount: number;
-}
-
-const ACTIVE_SHARE_COPY_KEY = '__active__';
+import type {
+  ActionPortalClipboard,
+  SelectedAccountGroup,
+  SelectedShareBatch,
+} from '../types.js';
+import {
+  SelectionBatchBar,
+  ClipboardPasteBar,
+  SharePoolBar,
+  actionButtonStyles,
+} from './ActionPortalBars.js';
+import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll.js';
 
 interface ActionPortalProps {
   currentPath: string;
@@ -164,105 +143,7 @@ const styles = stylex.create({
     color: colors.dimText,
     userSelect: 'none',
   },
-  focusRing: {
-    outline: 'none',
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-2px',
-    },
-  },
-  primaryBtn: {
-    height: '32px',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderRadius: radius.button,
-    backgroundColor: colors.brandAccent,
-    color: colors.brandAccentText,
-    borderWidth: '0px',
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    fontWeight: typography.fontWeightTitle,
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-    transitionProperty: 'background-color, transform',
-    transitionDuration: motion.durationFast,
-    transitionTimingFunction: motion.easingOut,
-    ':hover': {
-      backgroundColor: colors.brandAccentHover,
-    },
-    ':active': {
-      transform: 'scale(0.98)',
-    },
-    '@media (pointer: coarse)': {
-      height: 'auto',
-      minHeight: '44px',
-    },
-  },
-  secondaryBtn: {
-    height: '32px',
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.button,
-    backgroundColor: 'transparent',
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeBody,
-    fontWeight: '500',
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-    transitionProperty: 'background-color, border-color, color, opacity',
-    transitionDuration: motion.durationFast,
-    transitionTimingFunction: motion.easingOut,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.brandAccent,
-      color: colors.brandAccent,
-    },
-    ':active': {
-      backgroundColor: colors.selectionBg,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-    '@media (pointer: coarse)': {
-      height: 'auto',
-      minHeight: '44px',
-    },
-  },
   hiddenInput: {
-    display: 'none',
-  },
-  btnIcon: {
-    width: '14px',
-    height: '14px',
-    flexShrink: 0,
-  },
-  iconOnlyBtn: {
-    width: '32px',
-    paddingLeft: spacing.space0,
-    paddingRight: spacing.space0,
-    justifyContent: 'center',
-    '@media (pointer: coarse)': {
-      width: '44px',
-      minWidth: '44px',
-      minHeight: '44px',
-    },
-  },
-  compactHiddenLabel: {
     display: 'none',
   },
   emptyTrashBtn: {
@@ -296,156 +177,6 @@ const styles = stylex.create({
       height: 'auto',
       minHeight: '44px',
     },
-  },
-  selectionBadgeSize: {
-    color: colors.secondaryText,
-    fontVariantNumeric: 'tabular-nums',
-    fontSize: typography.fontSizeMeta,
-  },
-  selectionBadgeBtnSize: {
-    color: colors.accentGoldText,
-    fontVariantNumeric: 'tabular-nums',
-    fontSize: typography.fontSizeMeta,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  },
-  badgeTruncateText: {
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    minWidth: '3.5ch',
-    flexShrink: 1,
-  },
-  badgeStaticText: {
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  },
-  badgeStaticWrap: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  },
-  badgeNoShrink: {
-    flexShrink: 0,
-  },
-  shareBatchBtn: {
-    flexShrink: 1,
-    overflow: 'hidden',
-  },
-  shareBatchTextWrap: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    minWidth: 0,
-    flexShrink: 1,
-    overflow: 'hidden',
-  },
-  selectionBadgeBtn: {
-    height: '32px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    fontSize: typography.fontSizeBody,
-    fontFamily: typography.fontFamilyBody,
-    fontWeight: typography.fontWeightTitle,
-    color: colors.accentGoldText,
-    backgroundColor: colors.accentGold,
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.button,
-    borderWidth: '0px',
-    userSelect: 'none',
-    boxSizing: 'border-box',
-    whiteSpace: 'nowrap',
-    flexShrink: 1,
-    overflow: 'hidden',
-    cursor: 'pointer',
-    transitionProperty: 'background-color, transform',
-    transitionDuration: motion.durationFast,
-    transitionTimingFunction: motion.easingOut,
-    ':hover': {
-      backgroundColor: colors.accentGoldHover,
-    },
-    ':active': {
-      transform: 'scale(0.98)',
-    },
-    '@media (pointer: coarse)': {
-      height: 'auto',
-      minHeight: '44px',
-    },
-  },
-  selectionBadge: {
-    height: '32px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    paddingLeft: spacing.space4,
-    paddingRight: spacing.space4,
-    borderRadius: radius.button,
-    backgroundColor: colors.surface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    color: colors.primaryText,
-    fontSize: typography.fontSizeBody,
-    fontWeight: typography.fontWeightTitle,
-    userSelect: 'none',
-    boxSizing: 'border-box',
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-    '@media (pointer: coarse)': {
-      height: 'auto',
-      minHeight: '44px',
-    },
-  },
-  deleteSelectedBtn: {
-    color: colors.dangerTextOnSurface,
-    borderColor: colors.border,
-    ':hover': {
-      backgroundColor: colors.dangerSurface,
-      borderColor: colors.danger,
-      color: colors.dangerTextOnSurface,
-    },
-  },
-  clearBtn: {
-    height: '32px',
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    color: colors.secondaryText,
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-    fontSize: typography.fontSizeBody,
-    fontFamily: typography.fontFamilyBody,
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    transitionProperty: 'background-color, color',
-    transitionDuration: motion.durationFast,
-    transitionTimingFunction: motion.easingOut,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      color: colors.primaryText,
-    },
-    ':active': {
-      backgroundColor: colors.selectionBg,
-    },
-    '@media (pointer: coarse)': {
-      height: 'auto',
-      minHeight: '44px',
-    },
-  },
-  clusterDivider: {
-    width: '1px',
-    height: '20px',
-    backgroundColor: colors.borderSubtle,
-    marginLeft: spacing.space2,
-    marginRight: spacing.space2,
-    flexShrink: 0,
   },
 });
 
@@ -487,8 +218,10 @@ export function ActionPortal({
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const portalRef = useRef<HTMLDivElement | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [copiedKeys, setCopiedKeys] = useState<Set<string>>(new Set());
-  const copyTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [copyFeedbackVersion, setCopyFeedbackVersion] = useState<number>(0);
+  const handleCopyStateChange = useCallback(() => {
+    setCopyFeedbackVersion((v) => v + 1);
+  }, []);
   const [compact, setCompact] = useState<boolean>(false);
   const compactRef = useRef<boolean>(false);
   compactRef.current = compact;
@@ -515,7 +248,7 @@ export function ActionPortal({
     isSharePoolActive && (sharePoolItemCount ?? 0) > 0 ? 1 : 0,
     isSharePoolActive ? activeShareLinksCount : 0,
     isSyncing ? 1 : 0,
-    copiedKeys.size,
+    copyFeedbackVersion,
     onRestoreSelected ? 1 : 0,
     onRenamePrompt ? 1 : 0,
     onCutSelected ? 1 : 0,
@@ -725,143 +458,14 @@ export function ActionPortal({
       });
     }
 
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.deltaX !== 0 || e.deltaY === 0) return;
-      if (el.scrollWidth <= el.clientWidth) return;
-
-      const delta =
-        e.deltaMode === 1
-          ? e.deltaY * 40
-          : e.deltaMode === 2
-            ? e.deltaY * el.clientWidth
-            : e.deltaY;
-
-      const prevScrollLeft = el.scrollLeft;
-      el.scrollLeft += delta;
-      if (el.scrollLeft !== prevScrollLeft) {
-        e.preventDefault();
-      }
-    };
-    el.addEventListener('wheel', handleWheel, { passive: false });
-
     return () => {
       cancelled = true;
       if (rafId !== 0) cancelAnimationFrame(rafId);
       observer?.disconnect();
-      el.removeEventListener('wheel', handleWheel);
     };
   }, [syncBadgeFloorWidths, reconcileOverflow]);
 
-  const clearCopyFeedbackTimers = () => {
-    for (const timer of copyTimersRef.current.values()) {
-      clearTimeout(timer);
-    }
-    copyTimersRef.current.clear();
-  };
-
-  const markKeyCopied = (key: string) => {
-    setCopiedKeys((prev) => {
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-    const existing = copyTimersRef.current.get(key);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      copyTimersRef.current.delete(key);
-      setCopiedKeys((prev) => {
-        if (!prev.has(key)) return prev;
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
-    }, COPY_FEEDBACK_DURATION_MS);
-    copyTimersRef.current.set(key, timer);
-  };
-
-  function renderShareCopyButton(
-    copyKey: string,
-    defaultLabel: string,
-    copiedLabel: string,
-    title: string,
-    onCopy: () => Promise<boolean> | void,
-    linksCount: number,
-    batchInfo?: { batchFolderName: string; linksCount: number; showBatchName: boolean }
-  ) {
-    const isCopied = copiedKeys.has(copyKey);
-    const isTruncatedBatch = Boolean(batchInfo?.showBatchName);
-    const isIconOnly = !isTruncatedBatch && compact && linksCount <= 1;
-    return (
-      <button
-        key={copyKey}
-        type="button"
-        data-badge-btn={isTruncatedBatch ? 'true' : undefined}
-        data-compact-btn={isTruncatedBatch || linksCount > 1 ? undefined : 'secondary'}
-        {...stylex.props(
-          styles.secondaryBtn,
-          styles.focusRing,
-          isTruncatedBatch && styles.shareBatchBtn,
-          isIconOnly && styles.iconOnlyBtn
-        )}
-        onClick={async () => {
-          try {
-            const result = await onCopy();
-            if (result !== false) {
-              markKeyCopied(copyKey);
-            }
-          } catch {
-            /* copy failed; leave button un-marked */
-          }
-        }}
-        title={isTruncatedBatch || isIconOnly ? title : undefined}
-        aria-label={title}
-      >
-        {isCopied ? (
-          <IconCheck {...stylex.props(styles.btnIcon)} />
-        ) : (
-          <IconLink {...stylex.props(styles.btnIcon)} />
-        )}
-        {isTruncatedBatch && batchInfo ? (
-          <span {...stylex.props(styles.shareBatchTextWrap)}>
-            <span data-badge-static="true" {...stylex.props(styles.badgeStaticText)}>
-              {isCopied ? 'Copied\u00A0' : 'Copy\u00A0'}
-            </span>
-            <span data-badge-truncate="true" {...stylex.props(styles.badgeTruncateText)}>
-              {batchInfo.batchFolderName}
-            </span>
-            {!isCopied && batchInfo.linksCount > 1 && (
-              <span data-badge-static="true" {...stylex.props(styles.badgeStaticText)}>
-                {`\u00A0(${batchInfo.linksCount})`}
-              </span>
-            )}
-          </span>
-        ) : (
-          <>
-            <span
-              data-compact-label="true"
-              {...stylex.props(compact && styles.compactHiddenLabel)}
-            >
-              {isCopied ? copiedLabel : defaultLabel}
-            </span>
-            {compact && linksCount > 1 && (
-              <span data-compact-short="true">{`(${linksCount})`}</span>
-            )}
-          </>
-        )}
-      </button>
-    );
-  }
-
-  useEffect(() => {
-    setCopiedKeys(new Set());
-    clearCopyFeedbackTimers();
-  }, [currentPath, activeShareLinksCount, isSharePoolActive]);
-
-  useEffect(() => {
-    return () => {
-      clearCopyFeedbackTimers();
-    };
-  }, []);
+  useHorizontalWheelScroll({ viewportRef: portalRef });
 
   useEffect(() => {
     const handleDragEnd = () => setDragOverIndex(null);
@@ -871,9 +475,7 @@ export function ActionPortal({
 
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
   const segments = cleanPath.split('/').filter(Boolean);
-
-  const groupedFilesCount = selectedAccountGroups?.reduce((sum, g) => sum + g.fileIds.length, 0) ?? 0;
-  const nonGroupedCount = selectedCount - groupedFilesCount;
+  const shareResetTrigger = `${currentPath}|${activeShareLinksCount}|${isSharePoolActive ? 1 : 0}`;
 
   function handleBreadcrumbClick(index: number) {
     if (index === -1) {
@@ -950,7 +552,7 @@ export function ActionPortal({
           type="button"
           {...stylex.props(
             styles.crumbBtn,
-            styles.focusRing,
+            actionButtonStyles.focusRing,
             !isTrashView && segments.length === 0 && styles.crumbActive,
             dragOverIndex === -1 && styles.crumbDragOver
           )}
@@ -983,7 +585,7 @@ export function ActionPortal({
                   type="button"
                   {...stylex.props(
                     styles.crumbBtn,
-                    styles.focusRing,
+                    actionButtonStyles.focusRing,
                     isLast && styles.crumbActive,
                     dragOverIndex === idx && styles.crumbDragOver
                   )}
@@ -1002,288 +604,49 @@ export function ActionPortal({
         )}
       </nav>
 
-      {selectedCount > 0 && (
-        <>
-          {!isSharePoolActive && selectedAccountGroups && selectedAccountGroups.length > 0 ? (
-            <>
-              {selectedAccountGroups.map((group) => {
-                const canTruncateName = group.accountName.length > 3;
-                return (
-                  <button
-                    key={group.accountId}
-                    type="button"
-                    data-badge-btn={canTruncateName ? 'true' : undefined}
-                    {...stylex.props(
-                      styles.selectionBadgeBtn,
-                      styles.focusRing,
-                      !canTruncateName && styles.badgeNoShrink
-                    )}
-                    onClick={() => onOpenMoveFilesModal?.(group)}
-                    title={`${group.accountName} · ${group.fileIds.length} selected · ${formatBytes(group.totalBytes)}. Click to move selected files to another account`}
-                  >
-                    {canTruncateName ? (
-                      <span data-badge-truncate="true" {...stylex.props(styles.badgeTruncateText)}>
-                        {group.accountName}
-                      </span>
-                    ) : (
-                      <span {...stylex.props(styles.badgeStaticText)}>
-                        {group.accountName}
-                      </span>
-                    )}
-                    <span
-                      data-badge-static={canTruncateName ? 'true' : undefined}
-                      {...stylex.props(styles.badgeStaticWrap)}
-                    >
-                      <span>
-                        {'· '}
-                        <span
-                          data-compact-label="true"
-                          {...stylex.props(compact && styles.compactHiddenLabel)}
-                        >
-                          {`${group.fileIds.length} selected`}
-                        </span>
-                        {compact && (
-                          <span data-compact-short="true">{`(${group.fileIds.length})`}</span>
-                        )}
-                      </span>
-                      <span {...stylex.props(styles.selectionBadgeBtnSize)}>
-                        · {formatBytes(group.totalBytes)}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-              {nonGroupedCount > 0 && (
-                <span {...stylex.props(styles.selectionBadge)}>
-                  <span>
-                    {nonGroupedCount} folder{nonGroupedCount === 1 ? '' : 's'}
-                  </span>
-                </span>
-              )}
-            </>
-          ) : (
-            <span {...stylex.props(styles.selectionBadge)}>
-              <span>
-                <span
-                  data-compact-label="true"
-                  {...stylex.props(compact && styles.compactHiddenLabel)}
-                >
-                  {`${selectedCount} selected`}
-                </span>
-                {compact && (
-                  <span data-compact-short="true">{`(${selectedCount})`}</span>
-                )}
-              </span>
-              {selectedTotalBytes > 0 && (
-                <span {...stylex.props(styles.selectionBadgeSize)}>
-                  · {formatBytes(selectedTotalBytes)}
-                </span>
-              )}
-            </span>
-          )}
+      <SelectionBatchBar
+        selectedCount={selectedCount}
+        selectedTotalBytes={selectedTotalBytes}
+        selectedAccountGroups={selectedAccountGroups}
+        onOpenMoveFilesModal={onOpenMoveFilesModal}
+        onClearSelection={onClearSelection}
+        onDeleteSelected={onDeleteSelected}
+        onRenamePrompt={onRenamePrompt}
+        onRestoreSelected={onRestoreSelected}
+        onCutSelected={onCutSelected}
+        onCopySelected={onCopySelected}
+        onShareSelected={onShareSelected}
+        isTrashView={isTrashView}
+        isSharePoolActive={isSharePoolActive}
+        selectedShareBatches={selectedShareBatches}
+        onCopyShareBatchLinks={onCopyShareBatchLinks}
+        compact={compact}
+        shareResetTrigger={shareResetTrigger}
+        onCopyStateChange={handleCopyStateChange}
+      />
 
-          {isTrashView && onRestoreSelected && (
-            <button
-              type="button"
-              data-compact-btn="primary"
-              {...stylex.props(styles.primaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
-              onClick={onRestoreSelected}
-              aria-label="Restore selected items"
-            >
-              <IconRotateCcw {...stylex.props(styles.btnIcon)} />
-              <span
-                data-compact-label="true"
-                {...stylex.props(compact && styles.compactHiddenLabel)}
-              >
-                Restore
-              </span>
-            </button>
-          )}
-
-          {!isTrashView && !isSharePoolActive && selectedCount === 1 && onRenamePrompt && (
-            <button
-              type="button"
-              data-compact-btn="secondary"
-              {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
-              onClick={onRenamePrompt}
-              aria-label="Rename item"
-              title="Rename item (F2)"
-            >
-              <IconEdit {...stylex.props(styles.btnIcon)} />
-              <span
-                data-compact-label="true"
-                {...stylex.props(compact && styles.compactHiddenLabel)}
-              >
-                Rename
-              </span>
-            </button>
-          )}
-
-          {!isTrashView && !isSharePoolActive && onCutSelected && (
-            <button
-              type="button"
-              data-compact-btn="secondary"
-              {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
-              onClick={onCutSelected}
-              aria-label="Cut selected items"
-              title="Cut selected items (Ctrl+X)"
-            >
-              <IconScissors {...stylex.props(styles.btnIcon)} />
-              <span
-                data-compact-label="true"
-                {...stylex.props(compact && styles.compactHiddenLabel)}
-              >
-                Cut
-              </span>
-            </button>
-          )}
-
-          {!isTrashView && !isSharePoolActive && onCopySelected && (
-            <button
-              type="button"
-              data-compact-btn="secondary"
-              {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
-              onClick={onCopySelected}
-              aria-label="Copy selected items"
-              title="Copy selected items (Ctrl+C)"
-            >
-              <IconCopy {...stylex.props(styles.btnIcon)} />
-              <span
-                data-compact-label="true"
-                {...stylex.props(compact && styles.compactHiddenLabel)}
-              >
-                Copy
-              </span>
-            </button>
-          )}
-
-          {!isTrashView && !isSharePoolActive && onShareSelected && (
-            <button
-              type="button"
-              data-compact-btn="secondary"
-              {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
-              onClick={onShareSelected}
-              aria-label="Share selected items"
-            >
-              <IconShare {...stylex.props(styles.btnIcon)} />
-              <span
-                data-compact-label="true"
-                {...stylex.props(compact && styles.compactHiddenLabel)}
-              >
-                Share
-              </span>
-            </button>
-          )}
-
-          {isSharePoolActive &&
-            !isTrashView &&
-            selectedShareBatches &&
-            selectedShareBatches.length > 0 &&
-            onCopyShareBatchLinks &&
-            selectedShareBatches.map((batch) => {
-              const showBatchName = selectedShareBatches.length > 1;
-              const defaultLabel = showBatchName
-                ? batch.linksCount > 1
-                  ? `Copy ${batch.batchFolderName} (${batch.linksCount})`
-                  : `Copy ${batch.batchFolderName}`
-                : batch.linksCount > 1
-                  ? `Copy links (${batch.linksCount})`
-                  : 'Copy link';
-              const copiedLabel = showBatchName ? `Copied ${batch.batchFolderName}` : 'Link copied';
-              const title =
-                batch.linksCount > 1
-                  ? `Copy ${batch.linksCount} share links for ${batch.batchFolderName}`
-                  : `Copy share link for ${batch.batchFolderName}`;
-
-              return renderShareCopyButton(
-                batch.batchFolderName,
-                defaultLabel,
-                copiedLabel,
-                title,
-                () => onCopyShareBatchLinks(batch.batchFolderName),
-                batch.linksCount,
-                {
-                  batchFolderName: batch.batchFolderName,
-                  linksCount: batch.linksCount,
-                  showBatchName,
-                }
-              );
-            })}
-
-          {onDeleteSelected && (
-            <button
-              type="button"
-              data-compact-btn="secondary"
-              {...stylex.props(
-                styles.secondaryBtn,
-                styles.focusRing,
-                styles.deleteSelectedBtn,
-                compact && styles.iconOnlyBtn
-              )}
-              onClick={onDeleteSelected}
-              aria-label={isTrashView ? 'Purge selected items' : 'Delete selected items'}
-              title="Delete selected (Delete)"
-            >
-              <IconTrash {...stylex.props(styles.btnIcon)} />
-              <span
-                data-compact-label="true"
-                {...stylex.props(compact && styles.compactHiddenLabel)}
-              >
-                {isTrashView ? 'Purge' : 'Delete'}
-              </span>
-            </button>
-          )}
-
-          {onClearSelection && (
-            <button
-              type="button"
-              {...stylex.props(styles.clearBtn, styles.focusRing)}
-              onClick={onClearSelection}
-              aria-label="Deselect all"
-              title="Deselect all (Esc)"
-            >
-              Clear
-            </button>
-          )}
-          <div {...stylex.props(styles.clusterDivider)} />
-        </>
-      )}
-
-      {clipboard && !isTrashView && !isSharePoolActive && onPaste && (
-        <>
-          <button
-            type="button"
-            data-compact-btn="secondary"
-            {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
-            onClick={onPaste}
-            aria-label={`Paste ${clipboard.items.length} item(s)`}
-            title={`Paste ${clipboard.items.length} item(s) (${clipboard.mode === 'cut' ? 'move' : 'copy'}) into ${cleanPath}`}
-          >
-            <IconClipboard {...stylex.props(styles.btnIcon)} />
-            <span
-              data-compact-label="true"
-              {...stylex.props(compact && styles.compactHiddenLabel)}
-            >
-              {`Paste (${clipboard.items.length})`}
-            </span>
-          </button>
-          <div {...stylex.props(styles.clusterDivider)} />
-        </>
-      )}
+      <ClipboardPasteBar
+        clipboard={clipboard}
+        isTrashView={isTrashView}
+        isSharePoolActive={isSharePoolActive}
+        onPaste={onPaste}
+        cleanPath={cleanPath}
+        compact={compact}
+      />
 
       {isTrashView ? (
         <button
           type="button"
           data-compact-btn="secondary"
-          {...stylex.props(styles.emptyTrashBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
+          {...stylex.props(styles.emptyTrashBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
           onClick={onEmptyTrash}
           disabled={trashedCount === 0}
           aria-label="Empty trash"
         >
-          <IconTrash {...stylex.props(styles.btnIcon)} />
+          <IconTrash {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
             data-compact-label="true"
-            {...stylex.props(compact && styles.compactHiddenLabel)}
+            {...stylex.props(compact && actionButtonStyles.compactHiddenLabel)}
           >
             Empty trash
           </span>
@@ -1323,14 +686,14 @@ export function ActionPortal({
               <button
                 type="button"
                 data-compact-btn="primary"
-                {...stylex.props(styles.primaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
+                {...stylex.props(actionButtonStyles.primaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Upload file"
               >
-                <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
+                <IconUpload strokeWidth={2.5} {...stylex.props(actionButtonStyles.btnIcon)} />
                 <span
                   data-compact-label="true"
-                  {...stylex.props(compact && styles.compactHiddenLabel)}
+                  {...stylex.props(compact && actionButtonStyles.compactHiddenLabel)}
                 >
                   Upload file
                 </span>
@@ -1339,14 +702,14 @@ export function ActionPortal({
               <button
                 type="button"
                 data-compact-btn="secondary"
-                {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
+                {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
                 onClick={() => folderInputRef.current?.click()}
                 aria-label="Upload folder"
               >
-                <IconFolderPlus {...stylex.props(styles.btnIcon)} />
+                <IconFolderPlus {...stylex.props(actionButtonStyles.btnIcon)} />
                 <span
                   data-compact-label="true"
-                  {...stylex.props(compact && styles.compactHiddenLabel)}
+                  {...stylex.props(compact && actionButtonStyles.compactHiddenLabel)}
                 >
                   Upload folder
                 </span>
@@ -1355,14 +718,14 @@ export function ActionPortal({
               <button
                 type="button"
                 data-compact-btn="secondary"
-                {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
+                {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
                 onClick={onCreateFolderPrompt}
                 aria-label="New folder"
               >
-                <IconFolder {...stylex.props(styles.btnIcon)} />
+                <IconFolder {...stylex.props(actionButtonStyles.btnIcon)} />
                 <span
                   data-compact-label="true"
-                  {...stylex.props(compact && styles.compactHiddenLabel)}
+                  {...stylex.props(compact && actionButtonStyles.compactHiddenLabel)}
                 >
                   New folder
                 </span>
@@ -1370,45 +733,29 @@ export function ActionPortal({
 
               <button
                 type="button"
-                {...stylex.props(styles.secondaryBtn, styles.focusRing)}
+                {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing)}
                 onClick={onSyncAll}
                 disabled={isSyncing}
                 aria-label={isSyncing ? 'Fetching Drive changes' : 'Fetch Drive changes'}
                 title="Fetch external changes from Google Drive and scan .oauths/ credentials"
               >
-                <IconRefreshCw {...stylex.props(styles.btnIcon)} />
+                <IconRefreshCw {...stylex.props(actionButtonStyles.btnIcon)} />
                 {isSyncing ? 'Fetching...' : 'Fetch Drive changes'}
               </button>
             </>
           )}
 
-          {isSharePoolActive &&
-            !isTrashView &&
-            activeShareLinksCount > 0 &&
-            onCopyActiveShareLinks &&
-            renderShareCopyButton(
-              ACTIVE_SHARE_COPY_KEY,
-              activeShareLinksCount > 1 ? `Copy links (${activeShareLinksCount})` : 'Copy link',
-              'Link copied',
-              activeShareLinksCount > 1
-                ? `Copy ${activeShareLinksCount} share links for this folder`
-                : 'Copy share link for this folder',
-              onCopyActiveShareLinks,
-              activeShareLinksCount
-            )}
-
-          {isSharePoolActive && (sharePoolItemCount ?? 0) > 0 && onClearSharePool && (
-            <button
-              type="button"
-              {...stylex.props(styles.emptyTrashBtn, styles.focusRing)}
-              onClick={onClearSharePool}
-              aria-label="Clear share pool"
-              title="Permanently delete all copied files and folders in Share Pool"
-            >
-              <IconTrash {...stylex.props(styles.btnIcon)} />
-              Clear share pool
-            </button>
-          )}
+          <SharePoolBar
+            isSharePoolActive={isSharePoolActive}
+            isTrashView={isTrashView}
+            activeShareLinksCount={activeShareLinksCount}
+            onCopyActiveShareLinks={onCopyActiveShareLinks}
+            sharePoolItemCount={sharePoolItemCount ?? 0}
+            onClearSharePool={onClearSharePool}
+            compact={compact}
+            shareResetTrigger={shareResetTrigger}
+            onCopyStateChange={handleCopyStateChange}
+          />
         </>
       )}
     </div>
