@@ -32,7 +32,7 @@ function listScreenshots() {
       const bp = m[2];
       const id = `${dir.name}/${state}`;
       if (!byState.has(id)) {
-        byState.set(id, { id, modal: dir.name, state, urls: {} });
+        byState.set(id, { id, group: dir.name, state, urls: {} });
       }
       const darkFile = file.replace(/\.png$/, '--dark.png');
       byState.get(id).urls[bp] = {
@@ -55,7 +55,10 @@ function readNotes() {
   } catch {}
   const merged = {};
   for (const [key, val] of Object.entries(raw.byImage || {})) {
-    const cleanKey = key.replace(/--(desktop-16x9|mobile)\.png$/, '');
+    const stripped = key.replace(/\.png$/, '');
+    const cleanKey = /--(desktop-16x9|mobile)$/.test(stripped)
+      ? stripped
+      : `${stripped}--desktop-16x9`;
     if (!merged[cleanKey]) {
       merged[cleanKey] = { general: '', regions: [] };
     }
@@ -88,7 +91,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Tsubasa~ Modal Audit Annotator</title>
+<title>Tsubasa~ Frontend Audit Annotator</title>
 <style>
   :root {
     --bg: #eef2ec;
@@ -163,7 +166,7 @@ const HTML = `<!DOCTYPE html>
     overflow-y: auto;
     padding: 8px 0;
   }
-  .modal-group-title {
+  .group-title {
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
@@ -336,10 +339,10 @@ const HTML = `<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>Tsubasa~ Modal Audit Annotator</h1>
+    <h1>Tsubasa~ Frontend Audit Annotator</h1>
     <div class="header-actions">
       <span class="status-pill" id="saveStatus">Loaded</span>
-      <button id="bpToggle">Breakpoint: desktop-16x9</button>
+      <button id="bpToggle">Breakpoint: desktop-16x9 (1366x768)</button>
       <button id="themeToggle">Theme: Light</button>
       <button class="primary" id="copyMdBtn">Copy Markdown Summary</button>
     </div>
@@ -350,7 +353,7 @@ const HTML = `<!DOCTYPE html>
   <main class="canvas-area">
     <div class="stage-toolbar" id="stageToolbar">Drag on the screenshot to draw a marquee box and attach a note.</div>
     <div class="image-stage" id="imageStage">
-      <img id="previewImg" alt="Modal screenshot" draggable="false" />
+      <img id="previewImg" alt="Frontend screenshot" draggable="false" />
       <div id="regionsOverlay"></div>
       <div id="marqueePreview" class="marquee-box" style="display:none;"></div>
     </div>
@@ -359,16 +362,20 @@ const HTML = `<!DOCTYPE html>
   <aside class="inspector">
     <div class="inspector-section">
       <h2>General Notes (This Screenshot)</h2>
-      <textarea id="imageGeneralNotes" placeholder="Overall layout, spacing, contrast, or alignment notes for this modal state..."></textarea>
+      <textarea id="imageGeneralNotes" placeholder="Overall layout, spacing, contrast, or alignment notes for this screen or state..."></textarea>
     </div>
     <div class="inspector-section">
-      <h2>Global Audit Notes (All Modals)</h2>
-      <textarea id="globalNotes" placeholder="Cross-cutting feedback across all modals..."></textarea>
+      <h2>Global Audit Notes (All Screens)</h2>
+      <textarea id="globalNotes" placeholder="Cross-cutting feedback across all screens..."></textarea>
     </div>
     <div class="regions-list" id="regionsList"></div>
   </aside>
 
 <script>
+const BREAKPOINTS = {
+  'desktop-16x9': { label: 'desktop-16x9 (1366x768)' },
+  mobile: { label: 'mobile (390x844)' },
+};
 let screenshots = [];
 let notes = { byImage: {}, globalNotes: '' };
 let currentBreakpoint = 'desktop-16x9';
@@ -378,11 +385,16 @@ let selectedRegionId = null;
 let dragStart = null;
 let saveTimer = null;
 
-function ensureImageEntry(id) {
-  if (!notes.byImage[id]) {
-    notes.byImage[id] = { general: '', regions: [] };
+function noteKey(id, bp = currentBreakpoint) {
+  return id + '--' + bp;
+}
+
+function ensureImageEntry(id, bp = currentBreakpoint) {
+  const key = noteKey(id, bp);
+  if (!notes.byImage[key]) {
+    notes.byImage[key] = { general: '', regions: [] };
   }
-  return notes.byImage[id];
+  return notes.byImage[key];
 }
 
 function scheduleSave() {
@@ -406,20 +418,20 @@ function renderSidebar() {
   const sb = document.getElementById('sidebar');
   sb.innerHTML = '';
   const list = visibleScreenshots();
-  const byModal = new Map();
+  const byGroup = new Map();
   for (const item of list) {
-    if (!byModal.has(item.modal)) byModal.set(item.modal, []);
-    byModal.get(item.modal).push(item);
+    if (!byGroup.has(item.group)) byGroup.set(item.group, []);
+    byGroup.get(item.group).push(item);
   }
-  for (const [modal, items] of byModal.entries()) {
+  for (const [group, items] of byGroup.entries()) {
     const title = document.createElement('div');
-    title.className = 'modal-group-title';
-    title.textContent = modal;
+    title.className = 'group-title';
+    title.textContent = group;
     sb.appendChild(title);
     for (const item of items) {
       const row = document.createElement('div');
       row.className = 'nav-item' + (item.id === currentId ? ' active' : '');
-      const entry = notes.byImage[item.id];
+      const entry = notes.byImage[noteKey(item.id)];
       const count = (entry?.regions?.length || 0) + (entry?.general?.trim() ? 1 : 0);
       row.innerHTML = '<span>' + item.state + '</span>' +
         (count > 0 ? '<span class="badge has-notes">' + count + '</span>' : '');
@@ -513,14 +525,19 @@ function getScreenshotUrl(item) {
   return bpUrls.light;
 }
 
+function updateStagePreview(item) {
+  document.getElementById('previewImg').src = getScreenshotUrl(item) + '?t=' + Date.now();
+  const bpLabel = BREAKPOINTS[currentBreakpoint]?.label || currentBreakpoint;
+  document.getElementById('stageToolbar').textContent =
+    item.group + ' / ' + item.state + ' (' + bpLabel + ', ' + currentTheme + ') · Drag on image to select area';
+}
+
 function selectScreenshot(id) {
   currentId = id;
   selectedRegionId = null;
   const item = screenshots.find((s) => s.id === id);
   if (!item) return;
-  document.getElementById('previewImg').src = getScreenshotUrl(item) + '?t=' + Date.now();
-  document.getElementById('stageToolbar').textContent =
-    item.modal + ' — ' + item.state + ' (' + currentBreakpoint + ', ' + currentTheme + ') · Drag on image to select area';
+  updateStagePreview(item);
   const entry = ensureImageEntry(id);
   document.getElementById('imageGeneralNotes').value = entry.general || '';
   renderSidebar();
@@ -604,12 +621,17 @@ document.getElementById('globalNotes').addEventListener('input', (e) => {
 
 document.getElementById('bpToggle').addEventListener('click', () => {
   currentBreakpoint = currentBreakpoint === 'desktop-16x9' ? 'mobile' : 'desktop-16x9';
-  document.getElementById('bpToggle').textContent = 'Breakpoint: ' + currentBreakpoint;
-  const item = screenshots.find((s) => s.id === currentId) || visibleScreenshots()[0];
+  document.getElementById('bpToggle').textContent = 'Breakpoint: ' + BREAKPOINTS[currentBreakpoint].label;
+  const visible = visibleScreenshots();
+  const item = visible.find((s) => s.id === currentId) || visible[0];
   if (item) {
-    document.getElementById('previewImg').src = getScreenshotUrl(item) + '?t=' + Date.now();
-    document.getElementById('stageToolbar').textContent =
-      item.modal + ' — ' + item.state + ' (' + currentBreakpoint + ', ' + currentTheme + ') · Drag on image to select area';
+    selectScreenshot(item.id);
+  } else {
+    currentId = null;
+    selectedRegionId = null;
+    document.getElementById('imageGeneralNotes').value = '';
+    renderSidebar();
+    renderRegions();
   }
 });
 
@@ -618,15 +640,11 @@ document.getElementById('themeToggle').addEventListener('click', () => {
   document.documentElement.setAttribute('data-theme', currentTheme);
   document.getElementById('themeToggle').textContent = 'Theme: ' + (currentTheme === 'dark' ? 'Dark' : 'Light');
   const item = screenshots.find((s) => s.id === currentId);
-  if (item) {
-    document.getElementById('previewImg').src = getScreenshotUrl(item) + '?t=' + Date.now();
-    document.getElementById('stageToolbar').textContent =
-      item.modal + ' — ' + item.state + ' (' + currentBreakpoint + ', ' + currentTheme + ') · Drag on image to select area';
-  }
+  if (item) updateStagePreview(item);
 });
 
 document.getElementById('copyMdBtn').addEventListener('click', async () => {
-  const lines = ['# Modal Audit Notes', ''];
+  const lines = ['# Frontend Audit Notes', ''];
   if (notes.globalNotes?.trim()) {
     lines.push('## Global Notes', notes.globalNotes.trim(), '');
   }
@@ -655,7 +673,7 @@ async function init() {
     selectScreenshot(first.id);
   } else {
     renderSidebar();
-    document.getElementById('stageToolbar').textContent = 'No screenshots found. Place *--desktop-16x9.png or *--mobile.png captures in subdirectories and reload.';
+    document.getElementById('stageToolbar').textContent = 'No screenshots found. Place *--desktop-16x9.png (1366x768) or *--mobile.png (390x844) captures in subdirectories and reload.';
   }
 }
 
@@ -720,5 +738,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Modal audit annotator listening on http://localhost:${PORT}`);
+  console.log(`Frontend audit annotator listening on http://localhost:${PORT}`);
 });
