@@ -8,14 +8,7 @@ import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import { SelectField } from './SelectField.js';
-import type { AccountItem } from './Sidebar.js';
-
-export interface MoveFileItem {
-  id: string;
-  name: string;
-  virtualPath?: string;
-  sizeBytes: number;
-}
+import type { AccountItem, MoveFileItem } from '../types.js';
 
 export interface MoveFilesModalProps {
   isOpen: boolean;

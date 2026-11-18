@@ -4,12 +4,7 @@ import { IconEdit } from './Icons.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import { getItemNameError } from '../utils/virtualPath.js';
-
-export interface RenameTarget {
-  kind: 'file' | 'folder' | 'pool';
-  id: string;
-  name: string;
-}
+import type { RenameTarget } from '../types.js';
 
 interface RenameModalProps {
   isOpen: boolean;

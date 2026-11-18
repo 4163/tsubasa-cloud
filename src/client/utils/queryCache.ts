@@ -1,60 +1,12 @@
-import type { InferResponseType } from 'hono/client';
-import { client } from '../api.js';
-import type { ClientFileRecord, ClientFolder } from '../components/FileTable.js';
-import type { DiscrepancyReport } from '../components/ExternalChangesDrawer.js';
-import type { AccountTransferStats } from '../components/Sidebar.js';
-
-export type { DiscrepancyReport };
-
-export type StoredShareLink = InferResponseType<typeof client.api.share.links.$get, 200>['links'][number];
-export type ShareInspectResponse = InferResponseType<typeof client.api.share.inspect.$post, 200>;
-
-export interface AccountSummary {
-  id: string;
-  email: string;
-  displayName: string;
-  avatarUrl: string | null;
-  quotaLimitBytes: number;
-  quotaUsedBytes: number;
-  usableLimitBytes: number;
-  headroomBytes: number;
-  tsubasaUsedBytes?: number;
-  syncState: string;
-  isDisabled?: boolean;
-  transferStats?: AccountTransferStats;
-  poolId?: number;
-  canSwitchPool?: boolean;
-}
-
-export interface StorageOverview {
-  totalAccounts: number;
-  totalLimitBytes: number;
-  totalUsedBytes: number;
-  totalHeadroomBytes: number;
-  totalTsubasaUsedBytes?: number;
-  systemStorage?: {
-    systemFilesCount: number;
-    systemBytesTotal: number;
-  };
-  clusterTransfer?: {
-    totalUploadedBytes24h: number;
-    totalRemainingUploadBytes24h: number;
-    dailyUploadLimitBytes: number;
-    rateLimitedAccountsCount: number;
-  };
-  accounts: AccountSummary[];
-}
-
-export interface DiscoveredAccount {
-  accountId: string;
-  clientId: string;
-  authorized: boolean;
-  sourceFile: string;
-  isDisabled?: boolean;
-  mtimeMs?: number;
-  poolId?: number;
-  canSwitchPool?: boolean;
-}
+import type {
+  ClientFileRecord,
+  ClientFolder,
+  DiscrepancyReport,
+  DiscoveredAccount,
+  ShareInspectResponse,
+  StorageOverview,
+  StoredShareLink,
+} from '../types.js';
 
 export interface PoolCacheEntry {
   files: ClientFileRecord[];

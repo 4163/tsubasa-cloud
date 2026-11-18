@@ -5,7 +5,7 @@ import { IconAlertTriangle, IconTrash } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
-import type { AccountItem } from './Sidebar.js';
+import type { AccountItem } from '../types.js';
 
 interface ConfirmDriveActionModalProps {
   isOpen: boolean;
