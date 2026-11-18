@@ -169,6 +169,7 @@ const styles = stylex.create({
     // Intentionally widened Account/Date/Actions columns vs docs/styling-guide.md for inline transfer selects and action buttons
     gridTemplateColumns: '16px 40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'stretch',
+    marginLeft: layout.ditherStripHeight,
     paddingLeft: '0px',
     paddingRight: spacing.space4,
     fontSize: typography.fontSizeTableHeader,
@@ -258,7 +259,6 @@ const styles = stylex.create({
     flex: 1,
     overflowY: 'auto',
     position: 'relative',
-    contain: 'strict',
     userSelect: 'none',
   },
   virtualTrack: {
@@ -292,12 +292,15 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: '100%',
-    width: '100%',
+    marginLeft: layout.ditherStripHeight,
     padding: spacing.space10,
     textAlign: 'center',
     color: colors.secondaryText,
     gap: spacing.space2,
     boxSizing: 'border-box',
+    '@media (max-width: 768px)': {
+      marginLeft: '0px',
+    },
   },
   emptyTitle: {
     fontFamily: typography.fontFamilyBrand,
@@ -318,15 +321,17 @@ const styles = stylex.create({
     flexDirection: 'column',
     minHeight: '100%',
     width: '100%',
-    minWidth: '829px',
+    minWidth: '835px',
+    paddingLeft: layout.ditherStripHeight,
     position: 'relative',
     boxSizing: 'border-box',
     userSelect: 'none',
     '@media (pointer: coarse)': {
-      minWidth: '853px',
+      minWidth: '859px',
     },
     '@media (max-width: 768px)': {
       minWidth: 0,
+      paddingLeft: '0px',
     },
   },
   emptyDropZone: {
@@ -1075,6 +1080,7 @@ export function FileTable({
           }
         }}
       >
+        <div ref={marqueeBoxRef} {...stylex.props(styles.marqueeBox)} aria-hidden="true" />
         {items.length === 0 ? (
           <div
             {...stylex.props(
@@ -1148,7 +1154,6 @@ export function FileTable({
           </div>
         ) : (
           <div {...stylex.props(styles.tableBodyContainer)}>
-            <div ref={marqueeBoxRef} {...stylex.props(styles.marqueeBox)} aria-hidden="true" />
             <div
               {...stylex.props(styles.virtualTrack)}
               style={{ height: `${rowVirtualizer.getTotalSize()}px` }}

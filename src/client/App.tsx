@@ -7,7 +7,7 @@ import React, {
   useState,
 } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { colors, darkColors, motion, radius, spacing, typography } from './tokens.stylex.js';
+import { colors, darkColors, layout, motion, radius, spacing, typography } from './tokens.stylex.js';
 import { Header } from './components/Header.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ActionPortal } from './components/ActionPortal.js';
@@ -61,6 +61,16 @@ const styles = stylex.create({
     minWidth: 0,
     overflow: 'hidden',
     position: 'relative',
+  },
+  workspaceTopChrome: {
+    display: 'flex',
+    flexDirection: 'column',
+    flexShrink: 0,
+    minWidth: 0,
+    marginLeft: layout.ditherStripHeight,
+    '@media (max-width: 768px)': {
+      marginLeft: '0px',
+    },
   },
   workspaceErrorRegion: {
     paddingTop: spacing.space2,
@@ -969,74 +979,76 @@ export function App() {
         onDropExternalToRoot={isSharePoolActive ? undefined : handleDropExternalToRoot}
       />
 
-      <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
-
       <div {...stylex.props(styles.mainWorkspace)}>
-        <Header
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          theme={themeChoice}
-          onThemeChange={handleThemeChange}
-          onToggleMobileMenu={handleToggleMobileMenu}
-          isMobileMenuOpen={isMobileOpen}
-        />
+        <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
 
-        <ActionPortal
-          currentPath={currentPath}
-          onNavigatePath={handleNavigatePath}
-          onUploadFiles={handleUploadFiles}
-          onCreateFolderPrompt={handleOpenNewFolder}
-          onSyncAll={handleSyncAll}
-          isSyncing={isSyncing}
-          isTrashView={currentNav === 'trash'}
-          trashedCount={displayedTrashedFiles.length}
-          onEmptyTrash={handleOpenEmptyTrash}
-          selectedCount={actionableSelectedCount}
-          selectedTotalBytes={selectedTotalBytes}
-          selectedAccountGroups={selectedAccountGroups}
-          onOpenMoveFilesModal={isSharePoolActive ? undefined : handleOpenMoveFilesModal}
-          onClearSelection={handleClearSelection}
-          onDeleteSelected={handleDeleteSelected}
-          onRenamePrompt={isSharePoolActive ? undefined : handleOpenRenameSelected}
-          onRestoreSelected={handleBatchRestore}
-          onCutSelected={isSharePoolActive ? undefined : handleCutSelected}
-          onCopySelected={isSharePoolActive ? undefined : handleCopySelected}
-          clipboard={isSharePoolActive ? null : clipboard}
-          onPaste={isSharePoolActive ? undefined : handlePaste}
-          onMoveItemsToPath={isSharePoolActive ? undefined : handleMoveItems}
-          onCopyItemsToPath={isSharePoolActive ? undefined : handleCopyItems}
-          onDropExternalToPath={isSharePoolActive ? undefined : handleDropExternalToPath}
-          onShareSelected={isSharePoolActive ? undefined : handleShareSelected}
-          isSharePoolActive={isSharePoolActive}
-          sharePoolItemCount={isSharePoolDataReady ? sharePoolTotalItemCount : 0}
-          onClearSharePool={isSharePoolDataReady ? handleOpenClearSharePool : undefined}
-          activeShareLinksCount={activeBatchLinks.length}
-          onCopyActiveShareLinks={
-            activeBatchLinks.length > 0 && activeBatchFolderName ? handleCopyActiveShareLinks : undefined
-          }
-          selectedShareBatches={selectedShareBatches}
-          onCopyShareBatchLinks={handleCopyBatchLinks}
-        />
+        <div {...stylex.props(styles.workspaceTopChrome)}>
+          <Header
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            theme={themeChoice}
+            onThemeChange={handleThemeChange}
+            onToggleMobileMenu={handleToggleMobileMenu}
+            isMobileMenuOpen={isMobileOpen}
+          />
 
-        {workspaceError && (
-          <div {...stylex.props(styles.workspaceErrorRegion)}>
-            <div {...stylex.props(styles.workspaceErrorBanner)} role="alert">
-              <div {...stylex.props(styles.workspaceErrorContent)}>
-                <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
-                <span {...stylex.props(styles.workspaceErrorText)}>{workspaceError}</span>
+          <ActionPortal
+            currentPath={currentPath}
+            onNavigatePath={handleNavigatePath}
+            onUploadFiles={handleUploadFiles}
+            onCreateFolderPrompt={handleOpenNewFolder}
+            onSyncAll={handleSyncAll}
+            isSyncing={isSyncing}
+            isTrashView={currentNav === 'trash'}
+            trashedCount={displayedTrashedFiles.length}
+            onEmptyTrash={handleOpenEmptyTrash}
+            selectedCount={actionableSelectedCount}
+            selectedTotalBytes={selectedTotalBytes}
+            selectedAccountGroups={selectedAccountGroups}
+            onOpenMoveFilesModal={isSharePoolActive ? undefined : handleOpenMoveFilesModal}
+            onClearSelection={handleClearSelection}
+            onDeleteSelected={handleDeleteSelected}
+            onRenamePrompt={isSharePoolActive ? undefined : handleOpenRenameSelected}
+            onRestoreSelected={handleBatchRestore}
+            onCutSelected={isSharePoolActive ? undefined : handleCutSelected}
+            onCopySelected={isSharePoolActive ? undefined : handleCopySelected}
+            clipboard={isSharePoolActive ? null : clipboard}
+            onPaste={isSharePoolActive ? undefined : handlePaste}
+            onMoveItemsToPath={isSharePoolActive ? undefined : handleMoveItems}
+            onCopyItemsToPath={isSharePoolActive ? undefined : handleCopyItems}
+            onDropExternalToPath={isSharePoolActive ? undefined : handleDropExternalToPath}
+            onShareSelected={isSharePoolActive ? undefined : handleShareSelected}
+            isSharePoolActive={isSharePoolActive}
+            sharePoolItemCount={isSharePoolDataReady ? sharePoolTotalItemCount : 0}
+            onClearSharePool={isSharePoolDataReady ? handleOpenClearSharePool : undefined}
+            activeShareLinksCount={activeBatchLinks.length}
+            onCopyActiveShareLinks={
+              activeBatchLinks.length > 0 && activeBatchFolderName ? handleCopyActiveShareLinks : undefined
+            }
+            selectedShareBatches={selectedShareBatches}
+            onCopyShareBatchLinks={handleCopyBatchLinks}
+          />
+
+          {workspaceError && (
+            <div {...stylex.props(styles.workspaceErrorRegion)}>
+              <div {...stylex.props(styles.workspaceErrorBanner)} role="alert">
+                <div {...stylex.props(styles.workspaceErrorContent)}>
+                  <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
+                  <span {...stylex.props(styles.workspaceErrorText)}>{workspaceError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceError(null)}
+                  aria-label="Dismiss error"
+                  {...stylex.props(styles.workspaceErrorDismissBtn)}
+                >
+                  <IconClose size={14} />
+                  <span>Dismiss</span>
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setWorkspaceError(null)}
-                aria-label="Dismiss error"
-                {...stylex.props(styles.workspaceErrorDismissBtn)}
-              >
-                <IconClose size={14} />
-                <span>Dismiss</span>
-              </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div {...stylex.props(styles.fileTableStage)}>
           {hasVisitedFiles && (

@@ -8,10 +8,13 @@ interface DitherDividerProps {
 
 const styles = stylex.create({
   vertical: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 15,
     width: layout.ditherStripHeight,
     height: '100%',
-    flexShrink: 0,
-    position: 'relative',
     userSelect: 'none',
     pointerEvents: 'none',
     backgroundRepeat: 'repeat',

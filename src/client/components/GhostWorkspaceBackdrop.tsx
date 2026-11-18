@@ -489,12 +489,17 @@ const styles = stylex.create({
     backgroundColor: colors.progressTrack,
   },
   placeholderMain: {
+    position: 'relative',
     display: 'flex',
     flexDirection: 'column',
     flex: 1,
     minWidth: 0,
     height: '100%',
     overflow: 'hidden',
+    paddingLeft: layout.ditherStripHeight,
+    '@media (max-width: 768px)': {
+      paddingLeft: '0px',
+    },
   },
   placeholderHeader: {
     height: layout.headerHeight,
@@ -967,9 +972,9 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
         </div>
       </aside>
 
-      <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
-
       <div {...stylex.props(styles.placeholderMain)}>
+        <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
+
         <header {...stylex.props(styles.placeholderHeader)}>
           <div {...stylex.props(styles.headerLeftGroup)}>
             <div {...stylex.props(styles.searchBar)}>
