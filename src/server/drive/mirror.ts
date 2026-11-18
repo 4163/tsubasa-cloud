@@ -162,21 +162,39 @@ export async function ensureRemoteFolderHierarchy(
           }
 
           const escapedName = segment.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-          const query = `mimeType = 'application/vnd.google-apps.folder' and name = '${escapedName}' and '${parentIdForSegment}' in parents and trashed = false`;
+          const query = `mimeType = 'application/vnd.google-apps.folder' and name = '${escapedName}' and '${parentIdForSegment}' in parents`;
 
           const searchRes = await withDriveRetry(() =>
             drive.files.list({
               q: query,
               spaces: 'drive',
-              fields: 'files(id, name)',
-              pageSize: 1,
+              fields: 'files(id, name, trashed)',
+              pageSize: 10,
               supportsAllDrives: false,
             })
           );
 
-          let folderId: string | null = null;
-          if (searchRes.data.files && searchRes.data.files.length > 0) {
-            folderId = searchRes.data.files[0]?.id || null;
+          const matchedFiles = searchRes.data.files ?? [];
+          const selectedMatch =
+            matchedFiles.find((f) => f.id && !f.trashed) ?? matchedFiles.find((f) => f.id && f.trashed);
+
+          const matchedId = selectedMatch?.id ?? null;
+          let folderId: string | null = matchedId;
+
+          if (matchedId && selectedMatch?.trashed === true) {
+            await withDriveRetry(() =>
+              drive.files.update({
+                fileId: matchedId,
+                requestBody: {
+                  trashed: false,
+                  appProperties: {
+                    tsubasa_managed: 'true',
+                    tsubasa_folder_path: pathForSegment,
+                  },
+                },
+                supportsAllDrives: false,
+              })
+            );
           }
 
           if (!folderId) {

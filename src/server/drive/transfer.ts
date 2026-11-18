@@ -947,6 +947,50 @@ export async function restoreFile(fileId: string): Promise<FileRecord> {
   return updated;
 }
 
+function cleanupOrphanedShareLinksForPool(poolId: number): void {
+  sqlite
+    .prepare(
+      `DELETE FROM share_links
+       WHERE pool_id = ?
+         AND (
+           (
+             share_links.files_count > 0
+             AND NOT EXISTS (
+               SELECT 1 FROM files fi
+               WHERE fi.pool_id = share_links.pool_id
+                 AND fi.account_id = share_links.account_id
+                 AND (
+                   fi.virtual_path = '/' || share_links.batch_folder_name
+                   OR (
+                     fi.virtual_path >= '/' || share_links.batch_folder_name || '/'
+                     AND fi.virtual_path < '/' || share_links.batch_folder_name || '0'
+                   )
+                 )
+             )
+           )
+           OR (
+             NOT EXISTS (
+               SELECT 1 FROM folders f
+               WHERE f.pool_id = share_links.pool_id
+                 AND f.virtual_path = '/' || share_links.batch_folder_name
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM files fi
+               WHERE fi.pool_id = share_links.pool_id
+                 AND (
+                   fi.virtual_path = '/' || share_links.batch_folder_name
+                   OR (
+                     fi.virtual_path >= '/' || share_links.batch_folder_name || '/'
+                     AND fi.virtual_path < '/' || share_links.batch_folder_name || '0'
+                   )
+                 )
+             )
+           )
+         )`
+    )
+    .run(poolId);
+}
+
 export async function purgeFile(fileId: string): Promise<FileRecord> {
   let purgedFile: FileRecord | undefined;
 
@@ -957,6 +1001,7 @@ export async function purgeFile(fileId: string): Promise<FileRecord> {
     }
 
     sqlite.prepare('DELETE FROM files WHERE id = ?').run(fileId);
+    cleanupOrphanedShareLinksForPool(purgedFile.poolId);
 
     sqlite
       .prepare(
@@ -1016,8 +1061,13 @@ export async function emptyTrash(poolId?: number): Promise<{ filesPurged: number
     }
 
     const deleteFileStmt = sqlite.prepare('DELETE FROM files WHERE id = ?');
+    const touchedPoolIds = new Set<number>();
     for (const f of trashedFiles) {
       deleteFileStmt.run(f.id);
+      touchedPoolIds.add(f.poolId);
+    }
+    for (const pid of touchedPoolIds) {
+      cleanupOrphanedShareLinksForPool(pid);
     }
 
     const decrementQuotaStmt = sqlite.prepare(

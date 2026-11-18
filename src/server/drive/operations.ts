@@ -2159,7 +2159,11 @@ export async function trashFolder(
   sqlite.transaction(() => {
     stmts.trashFilesInFolder.run(poolId, lower, upper, folderId);
     stmts.deleteFoldersInTree.run(poolId, normPath, lower, upper);
-    stmts.deleteShareLinksForFolder.run(poolId, normPath);
+    const remainingFiles =
+      (stmts.countAllFilesInSubtree.get(poolId, lower, upper, folderId) as { cnt: number } | undefined)?.cnt ?? 0;
+    if (remainingFiles === 0) {
+      stmts.deleteShareLinksForFolder.run(poolId, normPath);
+    }
 
     const filesByAccount = new Map<string, Array<{ id: string; driveFileId: string }>>();
     for (const f of descendantFiles) {

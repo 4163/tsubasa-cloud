@@ -1194,9 +1194,9 @@ export async function clearSharePool(sharePoolId: number): Promise<ClearSharePoo
     const topFolderRows = sqlite
       .prepare('SELECT name, virtual_path as virtualPath FROM folders WHERE pool_id = ? AND parent_folder_id IS NULL')
       .all(sharePoolId) as Array<{ name: string; virtualPath: string }>;
-    const topFileRows = sqlite
-      .prepare('SELECT account_id as accountId, name, virtual_path as virtualPath FROM files WHERE pool_id = ? AND folder_id IS NULL')
-      .all(sharePoolId) as Array<{ accountId: string; name: string; virtualPath: string }>;
+    const allFileRows = sqlite
+      .prepare('SELECT account_id as accountId, virtual_path as virtualPath FROM files WHERE pool_id = ?')
+      .all(sharePoolId) as Array<{ accountId: string; virtualPath: string }>;
 
     const folderIdsByAccount = new Map<string, Set<string>>();
     const folderNamesByAccount = new Map<string, Set<string>>();
@@ -1228,8 +1228,8 @@ export async function clearSharePool(sharePoolId: number): Promise<ClearSharePoo
       }
     }
 
-    for (const row of topFileRows) {
-      const topName = row.name || normalizeVirtualPath(row.virtualPath).split('/').filter(Boolean)[0];
+    for (const row of allFileRows) {
+      const topName = normalizeVirtualPath(row.virtualPath).split('/').filter(Boolean)[0];
       if (topName) {
         let names = folderNamesByAccount.get(row.accountId);
         if (!names) {
@@ -1237,6 +1237,7 @@ export async function clearSharePool(sharePoolId: number): Promise<ClearSharePoo
           folderNamesByAccount.set(row.accountId, names);
         }
         names.add(topName);
+        poolWideTopNames.add(topName);
       }
     }
 
@@ -1363,11 +1364,30 @@ export function listSharePoolLinks(poolId?: number): StoredShareLink[] {
          a.display_name as accountDisplayName,
          sl.drive_folder_id as driveFolderId,
          sl.web_view_link as webViewLink,
-         sl.files_count as filesCount,
-         sl.bytes_allocated as bytesAllocated
+         CASE WHEN sl.files_count = 0 THEN 0 ELSE COUNT(fi.id) END as filesCount,
+         CASE WHEN sl.files_count = 0 THEN 0 ELSE COALESCE(SUM(fi.size_bytes), 0) END as bytesAllocated
        FROM share_links sl
        INNER JOIN accounts a ON a.id = sl.account_id
+       LEFT JOIN files fi
+         ON sl.files_count > 0
+        AND fi.pool_id = sl.pool_id
+        AND fi.account_id = sl.account_id
+        AND fi.is_trashed = 0
+        AND (
+          fi.virtual_path = '/' || sl.batch_folder_name
+          OR (
+            fi.virtual_path >= '/' || sl.batch_folder_name || '/'
+            AND fi.virtual_path < '/' || sl.batch_folder_name || '0'
+          )
+        )
        WHERE sl.pool_id = ?
+         AND EXISTS (
+           SELECT 1 FROM folders f
+           WHERE f.pool_id = sl.pool_id
+             AND f.virtual_path = '/' || sl.batch_folder_name
+         )
+       GROUP BY sl.id
+       HAVING sl.files_count = 0 OR COUNT(fi.id) > 0
        ORDER BY sl.batch_folder_name DESC, a.email ASC`
     )
     .all(resolvedPoolId) as StoredShareLink[];
