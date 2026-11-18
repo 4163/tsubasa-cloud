@@ -1,18 +1,18 @@
+import { clearOrphanAppProperties } from './appProperties.js';
 import {
-  clearOrphanAppProperties,
   getDriveClient,
   refreshAccountLiveQuota,
-  resolveRemoteFolderTree,
-  withDriveRetry,
 } from './client.js';
+import { resolveRemoteFolderTree } from './remoteTree.js';
+import { withDriveRetry } from './errors.js';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
-import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
+import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outboxQueue.js';
 import { accounts, files } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import path from 'node:path';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
-import { normalizeVirtualPath } from './mirror.js';
-import { invalidateDiscrepancyCache } from './detector.js';
+import { normalizeVirtualPath } from '../virtualPath.js';
+import { invalidateDiscrepancyCache } from './discrepancyCache.js';
 
 export function formatFolderId(poolId: number, virtualPath: string): string {
   return `${poolId}:${virtualPath}`;

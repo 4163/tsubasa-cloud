@@ -1,10 +1,10 @@
+import { clearOrphanAppProperties } from './appProperties.js';
 import {
-  clearOrphanAppProperties,
   getDriveClient,
   refreshAccountLiveQuota,
-  resolveRemoteParentPath,
-  withDriveRetry,
 } from './client.js';
+import { withDriveRetry } from './errors.js';
+import { resolveRemoteParentPath } from './remoteTree.js';
 import {
   runColdReconciliationLocked,
   runWithAccountSyncLock,
@@ -17,13 +17,13 @@ import {
 import {
   evictRemoteFolderByDriveId,
   getCachedVirtualPathByDriveId,
-  normalizeVirtualPath,
   setCachedRemoteFolder,
 } from './mirror.js';
+import { normalizeVirtualPath } from '../virtualPath.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
-import { invalidateDiscrepancyCache } from './detector.js';
+import { invalidateDiscrepancyCache } from './discrepancyCache.js';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
-import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
+import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outboxQueue.js';
 import { accounts } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 
