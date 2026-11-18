@@ -149,7 +149,7 @@ const styles = stylex.create({
     inset: 0,
     backgroundColor: colors.modalBackdrop,
     pointerEvents: 'none',
-    zIndex: 5,
+    zIndex: 10000,
   },
   brandHeader: {
     padding: spacing.space6,
