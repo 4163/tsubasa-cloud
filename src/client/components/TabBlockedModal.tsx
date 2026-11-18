@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors, layout, spacing, radius, typography } from '../tokens.stylex.js';
 import {
@@ -22,6 +22,8 @@ import {
 } from './Icons.js';
 import type { TabOwnerKind } from '../utils/useTabLock.js';
 import { DitherDivider } from './DitherDivider.js';
+import { ModalDialog } from './ModalDialog.js';
+import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export type EffectiveTheme = 'light' | 'dark';
@@ -61,6 +63,7 @@ function readInitialTheme(): EffectiveTheme {
 function applyDocumentTheme(theme: EffectiveTheme): void {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-theme', theme);
+  // Intentional pre-hydration/standalone blocked-shell theme sync matching index.html and tokens.stylex.ts before StyleX mounts.
   document.documentElement.style.backgroundColor = theme === 'dark' ? '#0b1412' : '#eef2ec';
   document.documentElement.style.color = theme === 'dark' ? '#e5f2eb' : '#111d18';
   if (theme === 'dark') {
@@ -177,7 +180,7 @@ const styles = stylex.create({
   brandTitleGroup: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: spacing.space1,
     minWidth: 0,
   },
   brandWordmark: {
@@ -187,13 +190,13 @@ const styles = stylex.create({
     color: colors.primaryText,
     letterSpacing: '0.02em',
     margin: 0,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBrand,
   },
   brandSubtitle: {
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     fontFamily: typography.fontFamilyBody,
-    lineHeight: '1.3',
+    lineHeight: typography.lineHeightMeta,
   },
   poolSection: {
     paddingTop: spacing.space3,
@@ -231,12 +234,12 @@ const styles = stylex.create({
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     fontSize: typography.fontSizeBadge,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightBadge,
     color: colors.secondaryText,
     display: 'inline-flex',
     alignItems: 'center',
@@ -266,7 +269,7 @@ const styles = stylex.create({
   },
   poolSelectChevron: {
     position: 'absolute',
-    right: '8px',
+    right: spacing.space4,
     top: '50%',
     transform: 'translateY(-50%)',
     color: colors.secondaryText,
@@ -336,8 +339,8 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: spacing.space3,
-    paddingTop: '8px',
-    paddingBottom: '8px',
+    paddingTop: spacing.space4,
+    paddingBottom: spacing.space4,
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
     borderRadius: radius.card,
@@ -363,22 +366,22 @@ const styles = stylex.create({
   addAccountTextCol: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: spacing.space1,
     minWidth: 0,
     flex: 1,
   },
   addAccountLabel: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBadge,
   },
   addAccountSub: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeBadge,
     color: colors.secondaryText,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBadge,
   },
   accountList: {
     display: 'flex',
@@ -421,7 +424,7 @@ const styles = stylex.create({
   accountTextGroup: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: spacing.space1,
     minWidth: 0,
   },
   accountNameBar: {
@@ -437,7 +440,7 @@ const styles = stylex.create({
   authPill: {
     fontSize: typography.fontSizeBadge,
     color: colors.success,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightBadge,
     flexShrink: 0,
   },
   storageSection: {
@@ -453,14 +456,14 @@ const styles = stylex.create({
   },
   storageLabel: {
     fontFamily: typography.fontFamilyBody,
-    fontSize: '10px',
-    fontWeight: '600',
+    fontSize: typography.fontSizeBadge,
+    fontWeight: typography.fontWeightBadge,
     color: colors.secondaryText,
     textTransform: 'uppercase',
     letterSpacing: '0.03em',
     display: 'flex',
     alignItems: 'center',
-    gap: '4px',
+    gap: spacing.space2,
   },
   storageValueBar: {
     height: '10px',
@@ -489,15 +492,15 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: spacing.space2,
-    marginTop: '2px',
+    marginTop: spacing.space1,
   },
   accountMiniChip: {
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     borderRadius: radius.compact,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     fontSize: typography.fontSizeBadge,
@@ -530,7 +533,7 @@ const styles = stylex.create({
     fontSize: typography.fontSizeMeta,
     color: colors.primaryText,
     fontVariantNumeric: 'tabular-nums',
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
   },
   footerHeadroom: {
     fontSize: typography.fontSizeBadge,
@@ -635,8 +638,8 @@ const styles = stylex.create({
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
     borderRadius: radius.button,
-    padding: '2px',
-    gap: '2px',
+    padding: spacing.space1,
+    gap: spacing.space1,
     boxSizing: 'border-box',
   },
   themeBtn: {
@@ -649,7 +652,7 @@ const styles = stylex.create({
     paddingRight: spacing.space3,
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '4px',
+    gap: spacing.space2,
     boxSizing: 'border-box',
   },
   themeBtnActive: {
@@ -659,7 +662,7 @@ const styles = stylex.create({
   githubChip: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: spacing.space3,
     height: '28px',
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
@@ -918,43 +921,8 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 110,
-    padding: spacing.space4,
-    boxSizing: 'border-box',
-  },
-  modal: {
+  surface: {
     width: '440px',
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.card,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    zIndex: 120,
-    boxSizing: 'border-box',
-  },
-  header: {
-    height: '48px',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-    backgroundColor: colors.surface,
-    flexShrink: 0,
   },
   iconWrap: {
     color: colors.warning,
@@ -962,21 +930,6 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-  },
-  title: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightTitle,
-    lineHeight: typography.lineHeightSection,
-    color: colors.primaryText,
-    margin: 0,
-  },
-  body: {
-    padding: spacing.space5,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: spacing.space4,
-    backgroundColor: colors.surface,
   },
   noticeBox: {
     padding: spacing.space4,
@@ -1022,6 +975,7 @@ interface TabBlockedModalProps {
 export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
   const effectiveTheme = useResolvedTheme();
   const isElectronOwner = ownerKind === 'electron';
+  const titleId = useId();
 
   return (
     <div
@@ -1255,40 +1209,41 @@ export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
         </div>
       </div>
 
-      <div {...stylex.props(styles.backdrop)}>
-        <div
-          {...stylex.props(styles.modal)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="tsubasa-tab-blocked-title"
-        >
-          <div {...stylex.props(styles.header)}>
+      <ModalDialog
+        isOpen={true}
+        onClose={() => {}}
+        isBusy={true}
+        preventUnloadWhileBusy={false}
+        ariaLabelledBy={titleId}
+        surfaceStyle={styles.surface}
+      >
+        <ModalHeader
+          titleId={titleId}
+          title="Tsubasa~ Cloud is already open"
+          icon={
             <span {...stylex.props(styles.iconWrap)} aria-hidden="true">
               <IconAlertTriangle size={16} />
             </span>
-            <h2 id="tsubasa-tab-blocked-title" {...stylex.props(styles.title)}>
-              Tsubasa~ Cloud is already open
-            </h2>
-          </div>
+          }
+        />
 
-          <div {...stylex.props(styles.body)}>
-            <div {...stylex.props(styles.noticeBox)}>
-              <p {...stylex.props(styles.leadText)}>
-                {isElectronOwner
-                  ? 'The Tsubasa~ Cloud desktop app is already running.'
-                  : 'Another Tsubasa~ Cloud tab is already open.'}
-              </p>
-              <p {...stylex.props(styles.bodyText)}>
-                This tab is blocked so it cannot conflict with active uploads, syncs, or database writes.
-              </p>
-            </div>
-
-            <p {...stylex.props(styles.instructionText)}>
-              Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.
+        <div {...stylex.props(modalChromeStyles.body, modalChromeStyles.bodySpaced)}>
+          <div {...stylex.props(styles.noticeBox)}>
+            <p {...stylex.props(styles.leadText)}>
+              {isElectronOwner
+                ? 'The Tsubasa~ Cloud desktop app is already running.'
+                : 'Another Tsubasa~ Cloud tab is already open.'}
+            </p>
+            <p {...stylex.props(styles.bodyText)}>
+              This tab is blocked so it cannot conflict with active uploads, syncs, or database writes.
             </p>
           </div>
+
+          <p {...stylex.props(styles.instructionText)}>
+            Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.
+          </p>
         </div>
-      </div>
+      </ModalDialog>
     </div>
   );
 }

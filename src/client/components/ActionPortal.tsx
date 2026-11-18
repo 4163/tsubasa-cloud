@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
-import { colors, spacing, radius, layout, typography } from '../tokens.stylex.js';
+import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import {
   IconUpload,
   IconFolderPlus,
@@ -17,6 +17,7 @@ import {
   IconCheck,
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
+import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
 
 export interface ActionPortalClipboard {
   mode: 'cut' | 'copy';
@@ -65,6 +66,7 @@ interface ActionPortalProps {
   clipboard?: ActionPortalClipboard | null;
   onPaste?: () => void;
   onMoveItemsToPath?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => void;
+  onCopyItemsToPath?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => void;
   onDropExternalToPath?: (targetPath: string, dataTransfer: DataTransfer) => void;
   onShareSelected?: () => void;
   isSharePoolActive?: boolean;
@@ -91,6 +93,12 @@ const styles = stylex.create({
     gap: spacing.space3,
     flexWrap: 'nowrap',
     overflowX: 'hidden',
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: layout.actionsPortalHeight,
+      paddingTop: spacing.space1,
+      paddingBottom: spacing.space1,
+    },
   },
   portalCompact: {
     overflowX: 'auto',
@@ -108,6 +116,8 @@ const styles = stylex.create({
     flexShrink: 0,
   },
   crumbBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
     backgroundColor: 'transparent',
     borderWidth: '1px',
     borderStyle: 'solid',
@@ -121,12 +131,18 @@ const styles = stylex.create({
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
+    transitionProperty: 'background-color, color, border-color',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
     },
     ':active': {
       backgroundColor: colors.selectionBg,
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
     },
   },
   crumbActive: {
@@ -149,6 +165,7 @@ const styles = stylex.create({
     userSelect: 'none',
   },
   focusRing: {
+    outline: 'none',
     ':focus-visible': {
       outlineWidth: '2px',
       outlineStyle: 'solid',
@@ -173,11 +190,18 @@ const styles = stylex.create({
     gap: spacing.space2,
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, transform',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.brandAccentHover,
     },
     ':active': {
       transform: 'scale(0.98)',
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   secondaryBtn: {
@@ -199,6 +223,9 @@ const styles = stylex.create({
     gap: spacing.space2,
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, border-color, color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.rowHover,
       borderColor: colors.brandAccent,
@@ -210,6 +237,10 @@ const styles = stylex.create({
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   hiddenInput: {
@@ -225,6 +256,11 @@ const styles = stylex.create({
     paddingLeft: spacing.space0,
     paddingRight: spacing.space0,
     justifyContent: 'center',
+    '@media (pointer: coarse)': {
+      width: '44px',
+      minWidth: '44px',
+      minHeight: '44px',
+    },
   },
   compactHiddenLabel: {
     display: 'none',
@@ -246,12 +282,19 @@ const styles = stylex.create({
     gap: spacing.space2,
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.dangerHover,
     },
     ':disabled': {
       opacity: 0.5,
       cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   selectionBadgeSize: {
@@ -318,12 +361,18 @@ const styles = stylex.create({
     flexShrink: 1,
     overflow: 'hidden',
     cursor: 'pointer',
+    transitionProperty: 'background-color, transform',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      backgroundColor: colors.accentGold,
-      opacity: 0.9,
+      backgroundColor: colors.accentGoldHover,
     },
     ':active': {
       transform: 'scale(0.98)',
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   selectionBadge: {
@@ -345,14 +394,18 @@ const styles = stylex.create({
     boxSizing: 'border-box',
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
+    },
   },
   deleteSelectedBtn: {
-    color: colors.danger,
+    color: colors.dangerTextOnSurface,
     borderColor: colors.border,
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
-      color: colors.danger,
+      color: colors.dangerTextOnSurface,
     },
   },
   clearBtn: {
@@ -371,12 +424,19 @@ const styles = stylex.create({
     paddingLeft: spacing.space3,
     paddingRight: spacing.space3,
     borderRadius: radius.button,
+    transitionProperty: 'background-color, color',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
       backgroundColor: colors.rowHover,
       color: colors.primaryText,
     },
     ':active': {
       backgroundColor: colors.selectionBg,
+    },
+    '@media (pointer: coarse)': {
+      height: 'auto',
+      minHeight: '44px',
     },
   },
   clusterDivider: {
@@ -412,6 +472,7 @@ export function ActionPortal({
   clipboard,
   onPaste,
   onMoveItemsToPath,
+  onCopyItemsToPath,
   onDropExternalToPath,
   onShareSelected,
   isSharePoolActive = false,
@@ -470,11 +531,9 @@ export function ActionPortal({
 
   const styledBadgeBtnsRef = useRef<Set<HTMLElement>>(new Set());
 
+  // Compute badge floor widths once per layout signature so badges truncate
+  // down to 3.5ch before toolbar buttons collapse to icon-only.
   const syncBadgeFloorWidths = useCallback((container: HTMLElement) => {
-    const badgeButtons = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-badge-btn="true"]')
-    );
-
     if (styledBadgeBtnsRef.current.size > 0) {
       for (const prevBtn of styledBadgeBtnsRef.current) {
         prevBtn.style.minWidth = '';
@@ -482,6 +541,9 @@ export function ActionPortal({
       styledBadgeBtnsRef.current.clear();
     }
 
+    const badgeButtons = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-badge-btn="true"]')
+    );
     if (badgeButtons.length === 0) return;
 
     const floors: Array<{ btn: HTMLElement; minWidth: string }> = [];
@@ -534,6 +596,13 @@ export function ActionPortal({
 
     const prevWidth = container.style.width;
     container.style.width = 'max-content';
+    for (const label of compactLabels) {
+      label.style.display = 'inline';
+    }
+    for (const shortEl of compactShorts) {
+      shortEl.style.display = 'none';
+    }
+    syncBadgeFloorWidths(container);
     for (const badgeBtn of styledBadgeBtnsRef.current) {
       badgeBtn.style.maxWidth = badgeBtn.style.minWidth;
     }
@@ -542,12 +611,6 @@ export function ActionPortal({
       btn.style.width = 'auto';
       btn.style.paddingLeft = pad;
       btn.style.paddingRight = pad;
-    }
-    for (const label of compactLabels) {
-      label.style.display = 'inline';
-    }
-    for (const shortEl of compactShorts) {
-      shortEl.style.display = 'none';
     }
 
     const expandedWidth = Math.ceil(container.getBoundingClientRect().width);
@@ -567,14 +630,14 @@ export function ActionPortal({
     for (const shortEl of compactShorts) {
       shortEl.style.display = '';
     }
+    syncBadgeFloorWidths(container);
 
     return expandedWidth;
-  }, []);
+  }, [syncBadgeFloorWidths]);
 
   const reconcileOverflow = useCallback(() => {
     const el = portalRef.current;
     if (!el) return;
-    syncBadgeFloorWidths(el);
 
     const { scrollWidth, clientWidth } = el;
     if (clientWidth === 0) return;
@@ -616,25 +679,39 @@ export function ActionPortal({
         collapseThresholdRef.current = expandedWidth;
       }
     }
-  }, [syncBadgeFloorWidths, measureExpandedScrollWidth]);
+  }, [measureExpandedScrollWidth]);
 
-  const prevSignatureRef = useRef<string>(layoutSignature);
+  const prevSignatureRef = useRef<string | null>(null);
+  const prevCompactRef = useRef<boolean>(compact);
   useLayoutEffect(() => {
-    if (prevSignatureRef.current !== layoutSignature) {
+    const el = portalRef.current;
+    if (!el) return;
+    const signatureChanged = prevSignatureRef.current !== layoutSignature;
+    const compactChanged = prevCompactRef.current !== compact;
+    if (signatureChanged) {
       prevSignatureRef.current = layoutSignature;
       collapseThresholdRef.current = 0;
     }
+    if (signatureChanged || compactChanged) {
+      prevCompactRef.current = compact;
+      syncBadgeFloorWidths(el);
+    }
     reconcileOverflow();
-  }, [layoutSignature, compact, reconcileOverflow]);
+  }, [layoutSignature, compact, syncBadgeFloorWidths, reconcileOverflow]);
 
   useEffect(() => {
     const el = portalRef.current;
     if (!el) return;
 
+    let rafId = 0;
     let observer: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       observer = new ResizeObserver(() => {
-        reconcileOverflow();
+        if (rafId !== 0) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          reconcileOverflow();
+        });
       });
       observer.observe(el);
     }
@@ -642,7 +719,9 @@ export function ActionPortal({
     let cancelled = false;
     if (typeof document !== 'undefined' && document.fonts?.ready) {
       void document.fonts.ready.then(() => {
-        if (!cancelled) reconcileOverflow();
+        if (cancelled) return;
+        syncBadgeFloorWidths(el);
+        reconcileOverflow();
       });
     }
 
@@ -667,10 +746,11 @@ export function ActionPortal({
 
     return () => {
       cancelled = true;
+      if (rafId !== 0) cancelAnimationFrame(rafId);
       observer?.disconnect();
       el.removeEventListener('wheel', handleWheel);
     };
-  }, [reconcileOverflow]);
+  }, [syncBadgeFloorWidths, reconcileOverflow]);
 
   const clearCopyFeedbackTimers = () => {
     for (const timer of copyTimersRef.current.values()) {
@@ -724,12 +804,16 @@ export function ActionPortal({
           isIconOnly && styles.iconOnlyBtn
         )}
         onClick={async () => {
-          const result = await onCopy();
-          if (result !== false) {
-            markKeyCopied(copyKey);
+          try {
+            const result = await onCopy();
+            if (result !== false) {
+              markKeyCopied(copyKey);
+            }
+          } catch {
+            /* copy failed; leave button un-marked */
           }
         }}
-        title={title}
+        title={isTruncatedBatch || isIconOnly ? title : undefined}
         aria-label={title}
       >
         {isCopied ? (
@@ -785,7 +869,6 @@ export function ActionPortal({
     return () => window.removeEventListener('dragend', handleDragEnd);
   }, []);
 
-  // Normalize path segments
   const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
   const segments = cleanPath.split('/').filter(Boolean);
 
@@ -807,9 +890,22 @@ export function ActionPortal({
     const hasFiles = e.dataTransfer?.types?.includes('Files');
     if (!hasTsubasa && !hasFiles) return;
 
+    const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
+    const isCopyDrag = hasTsubasa && (e.ctrlKey || e.altKey) && Boolean(onCopyItemsToPath);
+    if (
+      rejectInvalidInternalDragOver(
+        e,
+        targetPath,
+        () => setDragOverIndex((prev) => (prev === index ? null : prev)),
+        isCopyDrag
+      )
+    ) {
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = hasTsubasa ? 'move' : 'copy';
+    e.dataTransfer.dropEffect = hasTsubasa ? (isCopyDrag ? 'copy' : 'move') : 'copy';
     setDragOverIndex(index);
   }
 
@@ -825,19 +921,21 @@ export function ActionPortal({
     if (isSharePoolActive) return;
     e.preventDefault();
     e.stopPropagation();
-    (e.nativeEvent as any).__tsubasaHandled = true;
+    markDropHandled(e);
     setDragOverIndex(null);
     const targetPath = index === -1 ? '/' : '/' + segments.slice(0, index + 1).join('/');
 
     if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
-      try {
-        const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+      const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItemsToPath);
+      const parsed = parseInternalDropItems(e, targetPath, isCopyDrag);
+      if (parsed) {
+        if (isCopyDrag) {
+          onCopyItemsToPath?.(parsed, targetPath);
+        } else {
           onMoveItemsToPath?.(parsed, targetPath);
-          return;
         }
-      } catch {}
+      }
+      return;
     }
 
     if (e.dataTransfer.types.includes('Files') && e.dataTransfer.files.length > 0) {
@@ -852,6 +950,7 @@ export function ActionPortal({
           type="button"
           {...stylex.props(
             styles.crumbBtn,
+            styles.focusRing,
             !isTrashView && segments.length === 0 && styles.crumbActive,
             dragOverIndex === -1 && styles.crumbDragOver
           )}
@@ -859,7 +958,6 @@ export function ActionPortal({
           onDragOver={(e) => handleBreadcrumbDragOver(e, -1)}
           onDragLeave={(e) => handleBreadcrumbDragLeave(e, -1)}
           onDrop={(e) => handleBreadcrumbDrop(e, -1)}
-          title="All files (/)"
         >
           All files
         </button>
@@ -885,6 +983,7 @@ export function ActionPortal({
                   type="button"
                   {...stylex.props(
                     styles.crumbBtn,
+                    styles.focusRing,
                     isLast && styles.crumbActive,
                     dragOverIndex === idx && styles.crumbDragOver
                   )}
@@ -935,7 +1034,18 @@ export function ActionPortal({
                       data-badge-static={canTruncateName ? 'true' : undefined}
                       {...stylex.props(styles.badgeStaticWrap)}
                     >
-                      <span>· {group.fileIds.length} selected</span>
+                      <span>
+                        {'· '}
+                        <span
+                          data-compact-label="true"
+                          {...stylex.props(compact && styles.compactHiddenLabel)}
+                        >
+                          {`${group.fileIds.length} selected`}
+                        </span>
+                        {compact && (
+                          <span data-compact-short="true">{`(${group.fileIds.length})`}</span>
+                        )}
+                      </span>
                       <span {...stylex.props(styles.selectionBadgeBtnSize)}>
                         · {formatBytes(group.totalBytes)}
                       </span>
@@ -953,7 +1063,17 @@ export function ActionPortal({
             </>
           ) : (
             <span {...stylex.props(styles.selectionBadge)}>
-              <span>{selectedCount} selected</span>
+              <span>
+                <span
+                  data-compact-label="true"
+                  {...stylex.props(compact && styles.compactHiddenLabel)}
+                >
+                  {`${selectedCount} selected`}
+                </span>
+                {compact && (
+                  <span data-compact-short="true">{`(${selectedCount})`}</span>
+                )}
+              </span>
               {selectedTotalBytes > 0 && (
                 <span {...stylex.props(styles.selectionBadgeSize)}>
                   · {formatBytes(selectedTotalBytes)}
@@ -969,7 +1089,6 @@ export function ActionPortal({
               {...stylex.props(styles.primaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
               onClick={onRestoreSelected}
               aria-label="Restore selected items"
-              title="Restore selected items to their original locations"
             >
               <IconRotateCcw {...stylex.props(styles.btnIcon)} />
               <span
@@ -1045,7 +1164,6 @@ export function ActionPortal({
               {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
               onClick={onShareSelected}
               aria-label="Share selected items"
-              title="Share selected items via Google Drive"
             >
               <IconShare {...stylex.props(styles.btnIcon)} />
               <span
@@ -1161,7 +1279,6 @@ export function ActionPortal({
           onClick={onEmptyTrash}
           disabled={trashedCount === 0}
           aria-label="Empty trash"
-          title="Empty trash"
         >
           <IconTrash {...stylex.props(styles.btnIcon)} />
           <span
@@ -1192,7 +1309,8 @@ export function ActionPortal({
                 ref={folderInputRef}
                 type="file"
                 multiple
-                {...({ webkitdirectory: '', directory: '' } as any)}
+                webkitdirectory=""
+                directory=""
                 {...stylex.props(styles.hiddenInput)}
                 onChange={(e) => {
                   if (e.target.files && e.target.files.length > 0) {
@@ -1208,7 +1326,6 @@ export function ActionPortal({
                 {...stylex.props(styles.primaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Upload file"
-                title="Upload files to current folder"
               >
                 <IconUpload strokeWidth={2.5} {...stylex.props(styles.btnIcon)} />
                 <span
@@ -1225,7 +1342,6 @@ export function ActionPortal({
                 {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
                 onClick={() => folderInputRef.current?.click()}
                 aria-label="Upload folder"
-                title="Upload an entire folder with nested files and structure"
               >
                 <IconFolderPlus {...stylex.props(styles.btnIcon)} />
                 <span
@@ -1242,7 +1358,6 @@ export function ActionPortal({
                 {...stylex.props(styles.secondaryBtn, styles.focusRing, compact && styles.iconOnlyBtn)}
                 onClick={onCreateFolderPrompt}
                 aria-label="New folder"
-                title="Create new directory in current location"
               >
                 <IconFolder {...stylex.props(styles.btnIcon)} />
                 <span

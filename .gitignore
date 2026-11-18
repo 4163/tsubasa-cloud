@@ -25,3 +25,6 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+
+.agents/modal-audit/**/*.png
+.agents/modal-audit/*.json

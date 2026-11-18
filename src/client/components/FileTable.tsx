@@ -19,13 +19,23 @@ import {
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import {
+  getParentDir,
+  normalizeVirtualPath,
+  markDropHandled,
+  setActiveInternalDragPayload,
+  rejectInvalidInternalDragOver,
+  parseInternalDropItems,
+} from '../utils/virtualPath.js';
+import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { RedactedEmail } from './RedactedEmail.js';
-
-const TABLE_ROW_HEIGHT_DESKTOP = 36;
-const TABLE_ROW_HEIGHT_MOBILE = 64;
-const DOUBLE_CLICK_MS = 500;
 import type { FileRecord, FolderRecord } from '../api.js';
 import type { AccountItem } from './Sidebar.js';
+
+const TABLE_ROW_HEIGHT_DESKTOP = 36;
+const TABLE_ROW_HEIGHT_COARSE = 44;
+const TABLE_ROW_HEIGHT_MOBILE = 64;
+const DOUBLE_CLICK_MS = 500;
 
 export type ClientFileRecord = Omit<FileRecord, 'createdAt' | 'updatedAt' | 'trashedAt'> & {
   createdAt: string | Date;
@@ -58,12 +68,19 @@ interface FileTableProps {
   onRestore?: (file: ClientFileRecord) => void;
   onPermanentDelete?: (file: ClientFileRecord) => void;
   onDropFiles?: (files: File[]) => void;
-  onStageDroppedUpload?: (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }) => void;
+  onStageDroppedUpload?: (dropped: {
+    files: Array<{ file: File; virtualPath: string }>;
+    emptyFolders: string[];
+    basePath?: string;
+  }) => void;
   onMoveItems?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => Promise<void> | void;
+  onCopyItems?: (items: Array<{ kind: 'file' | 'folder'; id: string }>, targetPath: string) => Promise<void> | void;
+  scrollRequest?: { id: string; seq: number } | null;
   clipboard?: { mode: 'cut' | 'copy'; items: Array<{ kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }> } | null;
   accounts?: AccountItem[];
   onTransferFile?: (fileId: string, targetAccountId: string) => Promise<void>;
   transferringFileId?: string | null;
+  transferringFileIds?: ReadonlySet<string>;
   sortColumn?: SortColumn;
   sortDirection?: SortDirection;
   onSortChange?: (column: SortColumn, direction: SortDirection) => void;
@@ -100,7 +117,8 @@ const styles = stylex.create({
     borderLeftColor: 'transparent',
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
-    gridTemplateColumns: '16px 40px minmax(240px, 3fr) 140px 110px 140px 90px',
+    // Intentionally widened Account/Date/Actions columns vs docs/styling-guide.md for inline transfer selects and action buttons
+    gridTemplateColumns: '16px 40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'stretch',
     paddingLeft: '0px',
     paddingRight: spacing.space4,
@@ -111,6 +129,9 @@ const styles = stylex.create({
     boxSizing: 'border-box',
     overflow: 'hidden',
     flexShrink: 0,
+    '@media (pointer: coarse)': {
+      gridTemplateColumns: '16px 40px minmax(240px, 3fr) 160px 110px 156px 120px',
+    },
     '@media (max-width: 768px)': {
       display: 'none',
     },
@@ -120,9 +141,6 @@ const styles = stylex.create({
     height: '100%',
     boxSizing: 'border-box',
   },
-  colRight: {
-    textAlign: 'right',
-  },
   headerCell: {
     height: '100%',
     display: 'flex',
@@ -130,15 +148,12 @@ const styles = stylex.create({
     minWidth: 0,
     boxSizing: 'border-box',
   },
-  headerCellRight: {
-    justifyContent: 'flex-end',
-  },
   headerBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: spacing.space1,
     height: '100%',
-    paddingLeft: spacing.space2,
+    paddingLeft: spacing.space1,
     paddingRight: spacing.space2,
     backgroundColor: 'transparent',
     borderWidth: '0px',
@@ -163,15 +178,12 @@ const styles = stylex.create({
     ':focus-visible': {
       outlineWidth: '2px',
       outlineStyle: 'solid',
-      outlineColor: colors.accentGold,
+      outlineColor: colors.focusRing,
       outlineOffset: '-2px',
     },
   },
   headerBtnLeft: {
     marginLeft: '-4px',
-  },
-  headerBtnRight: {
-    marginRight: '-4px',
   },
   headerBtnActive: {
     color: colors.primaryText,
@@ -240,6 +252,9 @@ const styles = stylex.create({
     },
     userSelect: 'none',
     transition: motion.transitionFast,
+    '@media (pointer: coarse)': {
+      height: '44px',
+    },
     '@media (max-width: 768px)': {
       height: layout.mobileRowHeight,
     },
@@ -263,7 +278,7 @@ const styles = stylex.create({
     minWidth: 0,
     height: '100%',
     display: 'grid',
-    gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
+    gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'center',
     paddingLeft: '0px',
     paddingRight: spacing.space4,
@@ -275,16 +290,17 @@ const styles = stylex.create({
     fontFamily: typography.fontFamilyBody,
     backgroundColor: 'transparent',
     transition: motion.transitionFast,
-    '@media (max-width: 768px)': {
-      gridTemplateColumns: '36px minmax(0, 1fr) auto',
-      paddingLeft: spacing.space2,
-      paddingRight: spacing.space3,
-    },
     '@media (pointer: coarse)': {
+      gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 120px',
       ':active': {
         backgroundColor: colors.rowHover,
         transition: motion.transitionTap,
       },
+    },
+    '@media (max-width: 768px)': {
+      gridTemplateColumns: '36px minmax(0, 1fr) auto',
+      paddingLeft: spacing.space2,
+      paddingRight: spacing.space3,
     },
   },
   rowSelected: {
@@ -304,13 +320,11 @@ const styles = stylex.create({
     height: '100%',
   },
   checkbox: {
-    width: '16px',
-    height: '16px',
+    minWidth: '28px',
+    minHeight: '28px',
     borderRadius: radius.compact,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -322,40 +336,53 @@ const styles = stylex.create({
     boxSizing: 'border-box',
     flexShrink: 0,
     ':hover': {
-      borderColor: colors.accentGold,
       backgroundColor: colors.surfaceAlt,
     },
     ':focus-visible': {
       outlineWidth: '2px',
       outlineStyle: 'solid',
-      outlineColor: colors.accentGold,
-      outlineOffset: '1px',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
     },
-  },
-  checkboxChecked: {
-    backgroundColor: colors.accentGold,
-    borderColor: colors.accentGold,
-    color: colors.accentGoldText,
-    ':hover': {
-      backgroundColor: colors.accentGold,
-      borderColor: colors.accentGold,
-      opacity: 0.9,
+    '@media (pointer: coarse)': {
+      minWidth: '36px',
+      minHeight: '36px',
     },
   },
   checkboxDisabled: {
     opacity: 0.35,
     cursor: 'not-allowed',
-    ':hover': {
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
+  },
+  checkboxBox: {
+    width: '16px',
+    height: '16px',
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxSizing: 'border-box',
+    transition: motion.transitionFast,
+    pointerEvents: 'none',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: colors.accentGold,
+    borderColor: colors.accentGold,
+    color: colors.accentGoldText,
   },
   marqueeBox: {
     position: 'absolute',
+    top: 0,
+    left: 0,
+    display: 'none',
+    willChange: 'transform, width, height',
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.accentGold,
-    backgroundColor: 'rgba(222, 183, 108, 0.14)',
+    backgroundColor: colors.accentGoldMarqueeBg,
     borderRadius: radius.compact,
     pointerEvents: 'none',
     zIndex: 50,
@@ -392,8 +419,8 @@ const styles = stylex.create({
     alignItems: 'center',
     minWidth: 0,
     height: '100%',
-    paddingLeft: spacing.space1,
-    paddingRight: spacing.space1,
+    paddingLeft: '2px',
+    paddingRight: spacing.space6,
     overflow: 'hidden',
     '@media (max-width: 768px)': {
       display: 'none',
@@ -404,7 +431,7 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     minWidth: 0,
-    maxWidth: '130px',
+    maxWidth: '136px',
   },
   selectChevron: {
     position: 'absolute',
@@ -416,6 +443,61 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  accountSelect: {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    fontSize: typography.fontSizeBadge,
+    fontFamily: typography.fontFamilyMono,
+    height: '22px',
+    lineHeight: '18px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    paddingLeft: spacing.space2,
+    paddingRight: '22px',
+    borderRadius: radius.compact,
+    backgroundColor: colors.brandAccentSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    color: colors.brandAccent,
+    width: '100%',
+    maxWidth: '136px',
+    outline: 'none',
+    cursor: 'pointer',
+    boxSizing: 'border-box',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
+    ':hover': {
+      borderColor: colors.accentGold,
+      backgroundColor: colors.surfaceAlt,
+    },
+    ':focus': {
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    ':focus-visible': {
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
+    },
+  },
+  accountSelectTransferring: {
+    opacity: 0.5,
+    cursor: 'wait',
+    pointerEvents: 'none',
   },
   accountPill: {
     fontSize: typography.fontSizeBadge,
@@ -442,72 +524,44 @@ const styles = stylex.create({
     cursor: 'default',
     userSelect: 'text',
   },
-  accountSelect: {
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    MozAppearance: 'none',
-    fontSize: typography.fontSizeBadge,
-    fontFamily: typography.fontFamilyMono,
-    height: '22px',
-    lineHeight: '18px',
-    paddingTop: '1px',
-    paddingBottom: '1px',
-    paddingLeft: spacing.space2,
-    paddingRight: '22px',
-    borderRadius: radius.compact,
-    backgroundColor: colors.brandAccentSurface,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    color: colors.brandAccent,
-    width: '100%',
-    maxWidth: '130px',
-    outline: 'none',
-    cursor: 'pointer',
-    boxSizing: 'border-box',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    transition: motion.transitionFast,
-    ':hover': {
-      borderColor: colors.accentGold,
-      backgroundColor: colors.surfaceAlt,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.accentGold,
-      outlineOffset: '0px',
-    },
-  },
-  accountSelectTransferring: {
-    opacity: 0.5,
-    cursor: 'wait',
-    pointerEvents: 'none',
-  },
   tabularCell: {
     fontVariantNumeric: 'tabular-nums',
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
+    paddingRight: spacing.space2,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     '@media (max-width: 768px)': {
       display: 'none',
     },
   },
+  dateCell: {
+    paddingRight: spacing.space4,
+  },
   actionsCell: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: spacing.space2,
+    justifyContent: 'flex-start',
+    gap: spacing.space1,
+    '@media (max-width: 768px)': {
+      justifyContent: 'flex-end',
+    },
   },
   rowBtn: {
     backgroundColor: 'transparent',
     borderWidth: '0px',
     cursor: 'pointer',
+    minWidth: '26px',
+    minHeight: '26px',
     padding: spacing.space1,
     color: colors.secondaryText,
     borderRadius: radius.compact,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    outline: 'none',
+    boxSizing: 'border-box',
     transition: motion.transitionFast,
     ':hover': {
       color: colors.primaryText,
@@ -516,6 +570,16 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '36px',
+      minHeight: '36px',
     },
   },
   rowBtnDanger: {
@@ -564,10 +628,13 @@ const styles = stylex.create({
     flexDirection: 'column',
     minHeight: '100%',
     width: '100%',
-    minWidth: '787px',
+    minWidth: '829px',
     position: 'relative',
     boxSizing: 'border-box',
     userSelect: 'none',
+    '@media (pointer: coarse)': {
+      minWidth: '853px',
+    },
     '@media (max-width: 768px)': {
       minWidth: 0,
     },
@@ -595,7 +662,7 @@ const styles = stylex.create({
     borderWidth: '2px',
     borderStyle: 'dashed',
     borderColor: colors.accentGold,
-    backgroundColor: 'rgba(222, 183, 108, 0.10)',
+    backgroundColor: colors.accentGoldDropBg,
     pointerEvents: 'none',
     userSelect: 'none',
     padding: spacing.space6,
@@ -607,30 +674,14 @@ const styles = stylex.create({
     color: colors.primaryText,
     letterSpacing: '0.02em',
     margin: 0,
-    lineHeight: '1.2',
+    lineHeight: typography.lineHeightBrand,
   },
   dropSubtitle: {
     fontFamily: typography.fontFamilyBody,
     fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
     margin: 0,
-    lineHeight: '1.4',
-  },
-  dropTargetBadge: {
-    fontFamily: typography.fontFamilyMono,
-    fontSize: typography.fontSizeBadge,
-    fontWeight: typography.fontWeightBadge,
-    color: colors.primaryText,
-    backgroundColor: colors.selectionBg,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    paddingTop: '2px',
-    paddingBottom: '2px',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    borderRadius: radius.compact,
-    marginTop: spacing.space1,
+    lineHeight: typography.lineHeightBody,
   },
   loadingSpinner: {
     position: 'relative',
@@ -642,16 +693,6 @@ const styles = stylex.create({
     backgroundColor: colors.progressTrack,
   },
 });
-
-function getParentDir(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  if (parts.length <= 1) return '/';
-  return '/' + parts.slice(0, -1).join('/');
-}
-
-function formatGbCompact(bytes: number): string {
-  return (bytes / (1024 * 1024 * 1024)).toFixed(1);
-}
 
 function formatDate(dateValue: Date | number | string | null | undefined): string {
   if (!dateValue) return '—';
@@ -678,8 +719,9 @@ function isExternalFileDrag(e: React.DragEvent | DragEvent): boolean {
 export async function extractDataTransferEntries(
   dataTransfer: DataTransfer,
   basePath: string
-): Promise<{ files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }> {
-  const cleanBase = basePath === '/' ? '' : basePath;
+): Promise<{ files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[]; basePath: string }> {
+  const cleanBase = basePath === '/' ? '' : basePath.replace(/\/+$/, '');
+  const normalizedBase = cleanBase === '' ? '/' : cleanBase.startsWith('/') ? cleanBase : `/${cleanBase}`;
   const resultFiles: Array<{ file: File; virtualPath: string }> = [];
   const resultEmptyFolders: string[] = [];
 
@@ -700,7 +742,7 @@ export async function extractDataTransferEntries(
     }
   }
 
-  // If no directories were dropped, use rawFiles directly (synchronous & 100% reliable)
+  // Use rawFiles directly when no directories were dropped to avoid async entry traversal.
   if (!hasDirectories && rawFiles.length > 0) {
     for (const f of rawFiles) {
       const rel = (f as any).webkitRelativePath || f.name;
@@ -709,7 +751,7 @@ export async function extractDataTransferEntries(
         virtualPath: `${cleanBase}/${rel}`.replace(/\/+/g, '/'),
       });
     }
-    return { files: resultFiles, emptyFolders: resultEmptyFolders };
+    return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
   }
 
   // Fallback if entries failed to extract from items
@@ -721,7 +763,7 @@ export async function extractDataTransferEntries(
         virtualPath: `${cleanBase}/${rel}`.replace(/\/+/g, '/'),
       });
     }
-    return { files: resultFiles, emptyFolders: resultEmptyFolders };
+    return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
   }
 
   async function traverse(entry: any, currentFolder: string) {
@@ -737,12 +779,16 @@ export async function extractDataTransferEntries(
               resolve();
             },
             () => {
-              const match = rawFiles.find((rf) => rf.name === entry.name);
-              if (match) {
-                resultFiles.push({
-                  file: match,
-                  virtualPath: `${currentFolder}/${match.name}`.replace(/\/+/g, '/'),
-                });
+              if (currentFolder === cleanBase) {
+                const match = rawFiles.find(
+                  (rf) => rf.name === entry.name && !(rf as any).webkitRelativePath?.includes('/')
+                );
+                if (match) {
+                  resultFiles.push({
+                    file: match,
+                    virtualPath: `${currentFolder}/${match.name}`.replace(/\/+/g, '/'),
+                  });
+                }
               }
               resolve();
             }
@@ -755,6 +801,7 @@ export async function extractDataTransferEntries(
       const nextFolder = `${currentFolder}/${entry.name}`.replace(/\/+/g, '/');
       const dirReader = entry.createReader();
       const childEntries: any[] = [];
+      let readError = false;
 
       const readBatch = async (): Promise<void> => {
         return new Promise<void>((resolve) => {
@@ -766,7 +813,10 @@ export async function extractDataTransferEntries(
               }
               resolve();
             },
-            () => resolve()
+            () => {
+              readError = true;
+              resolve();
+            }
           );
         });
       };
@@ -774,7 +824,9 @@ export async function extractDataTransferEntries(
       await readBatch();
 
       if (childEntries.length === 0) {
-        resultEmptyFolders.push(nextFolder);
+        if (!readError) {
+          resultEmptyFolders.push(nextFolder);
+        }
       } else {
         for (const child of childEntries) {
           await traverse(child, nextFolder);
@@ -787,7 +839,7 @@ export async function extractDataTransferEntries(
     await traverse(entry, cleanBase);
   }
 
-  return { files: resultFiles, emptyFolders: resultEmptyFolders };
+  return { files: resultFiles, emptyFolders: resultEmptyFolders, basePath: normalizedBase };
 }
 
 const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -884,6 +936,678 @@ function getAccountTooltip(accountId: string, fileAcc?: AccountItem): string {
   return email;
 }
 
+interface DragItemPayload {
+  kind: 'file' | 'folder';
+  id: string;
+  name: string;
+  virtualPath: string;
+  isTrashed?: boolean;
+}
+
+interface MemoParentRowProps {
+  path: string;
+  rowIndex: number;
+  virtualSize: number;
+  virtualStart: number;
+  isSelected: boolean;
+  isDragOver: boolean;
+  isTrashView: boolean;
+  isSharePoolActive: boolean;
+  canCopy: boolean;
+  onItemClick: (id: string, e: React.MouseEvent) => void;
+  onNavigate: (path: string) => void;
+  onSetDragOverRowId: React.Dispatch<React.SetStateAction<string | null>>;
+  onRowDrop: (e: React.DragEvent, targetVirtualPath: string) => void;
+}
+
+const MemoParentRow = React.memo(function MemoParentRow({
+  path,
+  rowIndex,
+  virtualSize,
+  virtualStart,
+  isSelected,
+  isDragOver,
+  isTrashView,
+  isSharePoolActive,
+  canCopy,
+  onItemClick,
+  onNavigate,
+  onSetDragOverRowId,
+  onRowDrop,
+}: MemoParentRowProps) {
+  return (
+    <div
+      role="row"
+      aria-rowindex={rowIndex + 2}
+      aria-selected={isSelected}
+      {...stylex.props(
+        styles.rowWrapper,
+        isSelected && styles.rowWrapperSelected,
+        isDragOver && styles.rowWrapperDragOver
+      )}
+      style={{
+        height: `${virtualSize}px`,
+        transform: `translateY(${virtualStart}px)`,
+      }}
+    >
+      <div
+        data-marquee-gutter="true"
+        aria-hidden="true"
+        {...stylex.props(styles.gutterCell)}
+      />
+      <div
+        data-row="true"
+        {...stylex.props(
+          styles.rowMain,
+          isSelected && styles.rowSelected,
+          isDragOver && styles.rowDragOver
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          onItemClick('__parent__', e);
+        }}
+        onDragOver={(e) => {
+          if (isTrashView || isSharePoolActive) return;
+          const isInternal = isInternalItemDrag(e);
+          const isCopyDrag = isInternal && (e.ctrlKey || e.altKey) && canCopy;
+          if (
+            rejectInvalidInternalDragOver(
+              e,
+              path,
+              () => onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev)),
+              isCopyDrag
+            )
+          ) {
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = isInternal ? (isCopyDrag ? 'copy' : 'move') : 'copy';
+          }
+          onSetDragOverRowId('__parent__');
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+            onSetDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
+          }
+        }}
+        onDrop={(e) => {
+          const isCopyDrag = (e.ctrlKey || e.altKey) && canCopy;
+          if (isInternalItemDrag(e) && !parseInternalDropItems(e, path, isCopyDrag)) {
+            e.preventDefault();
+            e.stopPropagation();
+            markDropHandled(e);
+            setActiveInternalDragPayload(null);
+            onSetDragOverRowId(null);
+            return;
+          }
+          onSetDragOverRowId(null);
+          onRowDrop(e, path);
+        }}
+      >
+        <div role="gridcell" {...stylex.props(styles.checkboxCell)} />
+        <div role="gridcell" {...stylex.props(styles.nameCell)} title={path}>
+          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
+          <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
+        </div>
+        <div role="gridcell" {...stylex.props(styles.accountCell)}>
+          <span {...stylex.props(styles.accountPill)}>Parent folder</span>
+        </div>
+        <div role="gridcell" {...stylex.props(styles.tabularCell)}>—</div>
+        <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>—</div>
+        <div role="gridcell" {...stylex.props(styles.actionsCell)}>
+          <button
+            type="button"
+            {...stylex.props(styles.rowBtn)}
+            aria-label="Open parent folder"
+            onClick={(e) => {
+              e.stopPropagation();
+              onNavigate(path);
+            }}
+          >
+            <IconChevronRight {...stylex.props(styles.actionIcon)} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface MemoFolderRowProps {
+  folder: ClientFolder;
+  rowIndex: number;
+  virtualSize: number;
+  virtualStart: number;
+  isSelected: boolean;
+  isDragOver: boolean;
+  isCut: boolean;
+  folderSize: number;
+  folderBatchLinks?: Array<{ webViewLink: string; accountId: string }>;
+  isCopiedBatch: boolean;
+  isTrashView: boolean;
+  isSharePoolActive: boolean;
+  canCopy: boolean;
+  isSearching: boolean;
+  onItemClick: (id: string, e: React.MouseEvent) => void;
+  onCheckboxToggle: (id: string, e: React.MouseEvent) => void;
+  onRowDragStart: (e: React.DragEvent, item: DragItemPayload) => void;
+  onSetDragOverRowId: React.Dispatch<React.SetStateAction<string | null>>;
+  onRowDrop: (e: React.DragEvent, targetVirtualPath: string) => void;
+  onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
+  onCopyBatchLinks?: (folderId: string, folderName: string) => void;
+  onDeleteFolder?: (folder: ClientFolder) => void;
+  onNavigate: (path: string) => void;
+}
+
+const MemoFolderRow = React.memo(function MemoFolderRow({
+  folder,
+  rowIndex,
+  virtualSize,
+  virtualStart,
+  isSelected,
+  isDragOver,
+  isCut,
+  folderSize,
+  folderBatchLinks,
+  isCopiedBatch,
+  isTrashView,
+  isSharePoolActive,
+  canCopy,
+  isSearching,
+  onItemClick,
+  onCheckboxToggle,
+  onRowDragStart,
+  onSetDragOverRowId,
+  onRowDrop,
+  onShareItem,
+  onCopyBatchLinks,
+  onDeleteFolder,
+  onNavigate,
+}: MemoFolderRowProps) {
+  return (
+    <div
+      role="row"
+      aria-rowindex={rowIndex + 2}
+      aria-selected={isSelected}
+      {...stylex.props(
+        styles.rowWrapper,
+        isSelected && styles.rowWrapperSelected,
+        isDragOver && styles.rowWrapperDragOver
+      )}
+      style={{
+        height: `${virtualSize}px`,
+        transform: `translateY(${virtualStart}px)`,
+      }}
+    >
+      <div
+        data-marquee-gutter="true"
+        aria-hidden="true"
+        {...stylex.props(styles.gutterCell)}
+      />
+      <div
+        data-row="true"
+        draggable={!isTrashView}
+        onDragStart={(e) =>
+          onRowDragStart(e, {
+            kind: 'folder',
+            id: folder.id,
+            name: folder.name,
+            virtualPath: folder.virtualPath,
+          })
+        }
+        onDragOver={(e) => {
+          if (isTrashView || isSharePoolActive) return;
+          const isInternal = isInternalItemDrag(e);
+          const isCopyDrag = isInternal && (e.ctrlKey || e.altKey) && canCopy;
+          if (
+            rejectInvalidInternalDragOver(
+              e,
+              folder.virtualPath,
+              () => onSetDragOverRowId((prev) => (prev === folder.id ? null : prev)),
+              isCopyDrag
+            )
+          ) {
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = isInternal ? (isCopyDrag ? 'copy' : 'move') : 'copy';
+          }
+          onSetDragOverRowId(folder.id);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+            onSetDragOverRowId((prev) => (prev === folder.id ? null : prev));
+          }
+        }}
+        onDrop={(e) => {
+          const isCopyDrag = (e.ctrlKey || e.altKey) && canCopy;
+          if (isInternalItemDrag(e) && !parseInternalDropItems(e, folder.virtualPath, isCopyDrag)) {
+            e.preventDefault();
+            e.stopPropagation();
+            markDropHandled(e);
+            setActiveInternalDragPayload(null);
+            onSetDragOverRowId(null);
+            return;
+          }
+          onSetDragOverRowId(null);
+          onRowDrop(e, folder.virtualPath);
+        }}
+        {...stylex.props(
+          styles.rowMain,
+          isSelected && styles.rowSelected,
+          isDragOver && styles.rowDragOver,
+          isCut && styles.rowCutMuted
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          onItemClick(folder.id, e);
+        }}
+      >
+        <div role="gridcell" {...stylex.props(styles.checkboxCell)}>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={isSelected}
+            aria-label={`Select folder ${folder.name}`}
+            {...stylex.props(styles.checkbox)}
+            onClick={(e) => onCheckboxToggle(folder.id, e)}
+          >
+            <span
+              aria-hidden="true"
+              {...stylex.props(styles.checkboxBox, isSelected && styles.checkboxBoxChecked)}
+            >
+              {isSelected && <IconCheck size={12} strokeWidth={3} />}
+            </span>
+          </button>
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.nameCell)} title={folder.virtualPath}>
+          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
+          <span {...stylex.props(styles.itemLabel)}>
+            {isSearching ? folder.virtualPath : folder.name}
+          </span>
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.accountCell)}>
+          <span {...stylex.props(styles.accountPill)}>Cluster folder</span>
+        </div>
+
+        <div
+          role="gridcell"
+          {...stylex.props(styles.tabularCell)}
+          title={folderSize > 0 ? `${formatBytes(folderSize)} across descendant files` : 'Empty folder'}
+        >
+          {folderSize > 0 ? formatBytes(folderSize) : '—'}
+        </div>
+        <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>
+          {formatDate(folder.updatedAt)}
+        </div>
+        <div role="gridcell" {...stylex.props(styles.actionsCell)}>
+          {!isTrashView && !isSharePoolActive && onShareItem && (
+            <button
+              type="button"
+              {...stylex.props(styles.rowBtn)}
+              aria-label={`Share folder ${folder.name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onShareItem({
+                  kind: 'folder',
+                  id: folder.id,
+                  name: folder.name,
+                  virtualPath: folder.virtualPath,
+                });
+              }}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <IconShare {...stylex.props(styles.actionIcon)} />
+            </button>
+          )}
+          {folderBatchLinks && folderBatchLinks.length > 0 && onCopyBatchLinks && (
+            <button
+              type="button"
+              {...stylex.props(
+                styles.rowBtn,
+                isCopiedBatch && styles.rowBtnCopied
+              )}
+              aria-label={`Copy share link for ${folder.name}`}
+              title={
+                folderBatchLinks.length === 1
+                  ? `Copy share link: ${folderBatchLinks[0].webViewLink}`
+                  : `Copy ${folderBatchLinks.length} share links (across ${folderBatchLinks.length} drives)`
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopyBatchLinks(folder.id, folder.name);
+              }}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {isCopiedBatch ? (
+                <IconCheck {...stylex.props(styles.actionIcon)} />
+              ) : (
+                <IconLink {...stylex.props(styles.actionIcon)} />
+              )}
+            </button>
+          )}
+          {onDeleteFolder && (
+            <button
+              type="button"
+              {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+              aria-label="Delete folder"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteFolder(folder);
+              }}
+            >
+              <IconTrash {...stylex.props(styles.actionIcon)} />
+            </button>
+          )}
+          <button
+            type="button"
+            {...stylex.props(styles.rowBtn)}
+            aria-label="Open folder"
+            onClick={(e) => {
+              e.stopPropagation();
+              onNavigate(folder.virtualPath);
+            }}
+          >
+            <IconChevronRight {...stylex.props(styles.actionIcon)} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface MemoFileRowProps {
+  file: ClientFileRecord;
+  isTrashItem: boolean;
+  rowIndex: number;
+  virtualSize: number;
+  virtualStart: number;
+  isSelected: boolean;
+  isCut: boolean;
+  fileAcc?: AccountItem;
+  accounts?: AccountItem[];
+  canTransfer: boolean;
+  isTransferring: boolean;
+  isTrashView: boolean;
+  isSharePoolActive: boolean;
+  isSearching: boolean;
+  onItemClick: (id: string, e: React.MouseEvent) => void;
+  onCheckboxToggle: (id: string, e: React.MouseEvent) => void;
+  onRowDragStart: (e: React.DragEvent, item: DragItemPayload) => void;
+  onTransferFile?: (fileId: string, targetAccountId: string) => void;
+  onShareItem?: (item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string }) => void;
+  onDownload: (file: ClientFileRecord) => void;
+  onTrash: (file: ClientFileRecord) => void;
+  onRestore?: (file: ClientFileRecord) => void;
+  onPermanentDelete?: (file: ClientFileRecord) => void;
+}
+
+const MemoFileRow = React.memo(function MemoFileRow({
+  file,
+  isTrashItem,
+  rowIndex,
+  virtualSize,
+  virtualStart,
+  isSelected,
+  isCut,
+  fileAcc,
+  accounts,
+  canTransfer,
+  isTransferring,
+  isTrashView,
+  isSharePoolActive,
+  isSearching,
+  onItemClick,
+  onCheckboxToggle,
+  onRowDragStart,
+  onTransferFile,
+  onShareItem,
+  onDownload,
+  onTrash,
+  onRestore,
+  onPermanentDelete,
+}: MemoFileRowProps) {
+  return (
+    <div
+      role="row"
+      aria-rowindex={rowIndex + 2}
+      aria-selected={isSelected}
+      {...stylex.props(
+        styles.rowWrapper,
+        isSelected && styles.rowWrapperSelected
+      )}
+      style={{
+        height: `${virtualSize}px`,
+        transform: `translateY(${virtualStart}px)`,
+      }}
+    >
+      <div
+        data-marquee-gutter="true"
+        aria-hidden="true"
+        {...stylex.props(styles.gutterCell)}
+      />
+      <div
+        data-row="true"
+        draggable={!isTrashView}
+        onDragStart={(e) =>
+          onRowDragStart(e, {
+            kind: 'file',
+            id: file.id,
+            name: file.name,
+            virtualPath: file.virtualPath,
+            ...(isTrashItem ? { isTrashed: true } : {}),
+          })
+        }
+        onDragOver={(e) => {
+          if (!isTrashItem && (isTrashView || isSharePoolActive)) return;
+          if (!isInternalItemDrag(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'none';
+          }
+        }}
+        onDrop={
+          isTrashItem
+            ? undefined
+            : (e) => {
+                if (isTrashView || isSharePoolActive) return;
+                if (!isInternalItemDrag(e)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                markDropHandled(e);
+              }
+        }
+        {...stylex.props(
+          styles.rowMain,
+          isSelected && styles.rowSelected,
+          !isTrashItem && isCut && styles.rowCutMuted
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          onItemClick(file.id, e);
+        }}
+      >
+        <div role="gridcell" {...stylex.props(styles.checkboxCell)}>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={isSelected}
+            aria-label={isTrashItem ? `Select trashed file ${file.name}` : `Select file ${file.name}`}
+            {...stylex.props(styles.checkbox)}
+            onClick={(e) => onCheckboxToggle(file.id, e)}
+          >
+            <span
+              aria-hidden="true"
+              {...stylex.props(styles.checkboxBox, isSelected && styles.checkboxBoxChecked)}
+            >
+              {isSelected && <IconCheck size={12} strokeWidth={3} />}
+            </span>
+          </button>
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.nameCell)} title={file.virtualPath}>
+          <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(styles.itemIcon)} />
+          <span
+            {...stylex.props(styles.itemLabel)}
+            title={isTrashItem ? `Original location: ${file.virtualPath}` : undefined}
+          >
+            {isTrashItem ? file.virtualPath : isSearching ? file.virtualPath : file.name}
+          </span>
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.accountCell)}>
+          {!isTrashItem && canTransfer && accounts && onTransferFile ? (
+            <div {...stylex.props(styles.selectWrapper)}>
+              <select
+                aria-label={`Transfer ${file.name} to another account`}
+                title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
+                value={file.accountId}
+                disabled={isTransferring}
+                {...stylex.props(
+                  styles.accountSelect,
+                  isTransferring && styles.accountSelectTransferring
+                )}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  const targetId = e.target.value;
+                  if (targetId && targetId !== file.accountId) {
+                    onTransferFile(file.id, targetId);
+                  }
+                }}
+              >
+                {!fileAcc && (
+                  <option value={file.accountId} disabled>
+                    {file.accountId}
+                  </option>
+                )}
+                {accounts.map((acc) => {
+                  const { isMuted, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
+                    acc,
+                    file.sizeBytes,
+                    { isCurrent: acc.id === file.accountId }
+                  );
+
+                  return (
+                    <option key={acc.id} value={acc.id} disabled={isMuted} title={optionTitle}>
+                      {optionLabel}
+                    </option>
+                  );
+                })}
+              </select>
+              <div {...stylex.props(styles.selectChevron)}>
+                <IconChevronDown size={10} strokeWidth={2.5} />
+              </div>
+            </div>
+          ) : (
+            <RedactedEmail
+              email={fileAcc?.email || file.accountId}
+              tooltip={getAccountTooltip(file.accountId, fileAcc)}
+              style={styles.accountPill}
+            />
+          )}
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.tabularCell)}>
+          {formatBytes(file.sizeBytes)}
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.tabularCell, styles.dateCell)}>
+          {formatDate(isTrashItem ? file.trashedAt || file.updatedAt : file.updatedAt)}
+        </div>
+
+        <div role="gridcell" {...stylex.props(styles.actionsCell)}>
+          {isTrashItem ? (
+            <>
+              {onRestore && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.rowBtn)}
+                  aria-label="Restore to original location"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRestore(file);
+                  }}
+                >
+                  <IconRotateCcw {...stylex.props(styles.actionIcon)} />
+                </button>
+              )}
+              {onPermanentDelete && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
+                  aria-label="Delete permanently from Google Drive"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPermanentDelete(file);
+                  }}
+                >
+                  <IconTrash {...stylex.props(styles.actionIcon)} />
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              {!isTrashView && !isSharePoolActive && onShareItem && (
+                <button
+                  type="button"
+                  {...stylex.props(styles.rowBtn)}
+                  aria-label={`Share file ${file.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onShareItem({
+                      kind: 'file',
+                      id: file.id,
+                      name: file.name,
+                      virtualPath: file.virtualPath,
+                    });
+                  }}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <IconShare {...stylex.props(styles.actionIcon)} />
+                </button>
+              )}
+              <button
+                type="button"
+                {...stylex.props(styles.rowBtn)}
+                aria-label="Download file"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDownload(file);
+                }}
+              >
+                <IconDownload {...stylex.props(styles.actionIcon)} />
+              </button>
+              <button
+                type="button"
+                {...stylex.props(styles.rowBtn)}
+                aria-label="Move to trash"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTrash(file);
+                }}
+              >
+                <IconTrash {...stylex.props(styles.actionIcon)} />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export function FileTable({
   files,
   folders,
@@ -903,10 +1627,13 @@ export function FileTable({
   onDropFiles,
   onStageDroppedUpload,
   onMoveItems,
+  onCopyItems,
+  scrollRequest,
   clipboard,
   accounts = [],
   onTransferFile,
   transferringFileId = null,
+  transferringFileIds,
   sortColumn: sortColumnProp,
   sortDirection: sortDirectionProp,
   onSortChange,
@@ -921,19 +1648,43 @@ export function FileTable({
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
   const [copiedBatchId, setCopiedBatchId] = useState<string | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const marqueeBoxRef = useRef<HTMLDivElement | null>(null);
+  const marqueeRafRef = useRef<number | null>(null);
+  const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const justFinishedMarquee = useRef(false);
   const lastSelectedIdRef = useRef<string | null>(null);
   const anchorIndexRef = useRef<number>(-1);
   const focusIndexRef = useRef<number>(-1);
+  const typeAheadBufferRef = useRef<string>('');
+  const typeAheadTimerRef = useRef<number | null>(null);
+  const lastHandledScrollSeqRef = useRef<number>(0);
   // Tracked manually because native dblclick is suppressed once the clicked row unmounts mid-sequence.
   const lastClickRef = useRef<{ id: string; path: string; time: number } | null>(null);
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const rowHeight = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT_DESKTOP;
+  const isCoarsePointer = useMediaQuery('(pointer: coarse)');
+  const rowHeight = isMobile
+    ? TABLE_ROW_HEIGHT_MOBILE
+    : isCoarsePointer
+      ? TABLE_ROW_HEIGHT_COARSE
+      : TABLE_ROW_HEIGHT_DESKTOP;
+
+  const hideMarqueeBox = useCallback(() => {
+    if (marqueeRafRef.current !== null) {
+      cancelAnimationFrame(marqueeRafRef.current);
+      marqueeRafRef.current = null;
+    }
+    if (marqueeBoxRef.current) {
+      marqueeBoxRef.current.style.display = 'none';
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      if (marqueeRafRef.current !== null) cancelAnimationFrame(marqueeRafRef.current);
+      if (typeAheadTimerRef.current !== null) window.clearTimeout(typeAheadTimerRef.current);
+      marqueeCleanupRef.current?.();
+      marqueeCleanupRef.current = null;
     };
   }, []);
 
@@ -1011,9 +1762,10 @@ export function FileTable({
 
   useEffect(() => {
     const handleGlobalDragEnd = () => {
+      setActiveInternalDragPayload(null);
       setIsDropZoneActive(false);
       setDragOverRowId(null);
-      setMarqueeRect(null);
+      hideMarqueeBox();
     };
 
     const handleGlobalDragLeave = (e: DragEvent) => {
@@ -1029,7 +1781,7 @@ export function FileTable({
     };
 
     const handleGlobalMouseUp = () => {
-      setMarqueeRect(null);
+      hideMarqueeBox();
     };
 
     window.addEventListener('dragleave', handleGlobalDragLeave);
@@ -1041,7 +1793,7 @@ export function FileTable({
       window.removeEventListener('dragend', handleGlobalDragEnd);
       window.removeEventListener('mouseup', handleGlobalMouseUp);
     };
-  }, []);
+  }, [hideMarqueeBox]);
 
   const handleSort = (column: SortColumn) => {
     let newDirection: SortDirection = 'asc';
@@ -1063,29 +1815,36 @@ export function FileTable({
     onSortChange?.(column, newDirection);
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
-    if (isTrashView || isSharePoolActive) return;
-    e.preventDefault();
-    e.stopPropagation();
-    (e.nativeEvent as any).__tsubasaHandled = true;
-    setIsDropZoneActive(false);
-    setDragOverRowId(null);
+  const cleanPath = normalizeVirtualPath(currentPath);
 
-    if (e.dataTransfer) {
+  const processDropTarget = useCallback(
+    async (e: React.DragEvent, targetVirtualPath: string) => {
+      if (isTrashView || isSharePoolActive) return;
+      e.preventDefault();
+      e.stopPropagation();
+      markDropHandled(e);
+      setActiveInternalDragPayload(null);
+      setIsDropZoneActive(false);
+      setDragOverRowId(null);
+
+      if (!e.dataTransfer) return;
+
       if (isInternalItemDrag(e)) {
-        try {
-          const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            onMoveItems?.(parsed, cleanPath);
-            return;
+        const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+        const parsed = parseInternalDropItems(e, targetVirtualPath, isCopyDrag);
+        if (parsed) {
+          if (isCopyDrag) {
+            onCopyItems?.(parsed, targetVirtualPath);
+          } else {
+            onMoveItems?.(parsed, targetVirtualPath);
           }
-        } catch {}
+        }
+        return;
       }
 
       if (isExternalFileDrag(e)) {
         if (onStageDroppedUpload) {
-          const extracted = await extractDataTransferEntries(e.dataTransfer, cleanPath);
+          const extracted = await extractDataTransferEntries(e.dataTransfer, targetVirtualPath);
           if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
             onStageDroppedUpload(extracted);
           }
@@ -1093,54 +1852,35 @@ export function FileTable({
           onDropFiles(Array.from(e.dataTransfer.files));
         }
       }
-    }
-  };
+    },
+    [isTrashView, isSharePoolActive, onMoveItems, onCopyItems, onStageDroppedUpload, onDropFiles]
+  );
 
-  const handleRowDrop = async (e: React.DragEvent, targetVirtualPath: string) => {
-    if (isTrashView || isSharePoolActive) return;
-    e.preventDefault();
-    e.stopPropagation();
-    (e.nativeEvent as any).__tsubasaHandled = true;
-    setIsDropZoneActive(false);
-    setDragOverRowId(null);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => processDropTarget(e, cleanPath),
+    [processDropTarget, cleanPath]
+  );
 
-    if (isInternalItemDrag(e)) {
-      try {
-        const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          onMoveItems?.(parsed, targetVirtualPath);
-          return;
-        }
-      } catch {}
-    }
-
-    if (isExternalFileDrag(e)) {
-      if (onStageDroppedUpload) {
-        const extracted = await extractDataTransferEntries(e.dataTransfer, targetVirtualPath);
-        if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
-          onStageDroppedUpload(extracted);
-        }
-      } else if (onDropFiles && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        onDropFiles(Array.from(e.dataTransfer.files));
-      }
-    }
-  };
-
-  const cleanPath = currentPath.trim() === '' ? '/' : currentPath;
+  const handleRowDrop = useCallback(
+    (e: React.DragEvent, targetVirtualPath: string) => processDropTarget(e, targetVirtualPath),
+    [processDropTarget]
+  );
 
   useEffect(() => {
     anchorIndexRef.current = -1;
     focusIndexRef.current = -1;
     lastSelectedIdRef.current = null;
     lastClickRef.current = null;
+    typeAheadBufferRef.current = '';
+    if (typeAheadTimerRef.current !== null) {
+      window.clearTimeout(typeAheadTimerRef.current);
+      typeAheadTimerRef.current = null;
+    }
   }, [cleanPath]);
 
-  // Filter or search
   const isSearching = searchQuery.trim().length > 0;
   const searchLower = searchQuery.toLowerCase();
 
-  // Build items array
   const items = useMemo<TableItem[]>(() => {
     const result: TableItem[] = [];
 
@@ -1170,17 +1910,14 @@ export function FileTable({
       const sortedFilesList = sortFiles(matchedFiles, currentSortColumn, currentSortDirection, false);
       sortedFilesList.forEach((f) => result.push({ kind: 'file', data: f }));
     } else {
-      // Add ".." if not root
       if (cleanPath !== '/') {
         result.push({ kind: 'parent', path: getParentDir(cleanPath) });
       }
 
-      // Folders in current dir
       const dirFolders = folders.filter((f) => getParentDir(f.virtualPath) === cleanPath);
       const sortedFoldersList = sortFolders(dirFolders, currentSortColumn, currentSortDirection);
       sortedFoldersList.forEach((f) => result.push({ kind: 'folder', data: f }));
 
-      // Files in current dir
       const dirFiles = files.filter((f) => !f.isTrashed && getParentDir(f.virtualPath) === cleanPath);
       const sortedFilesList = sortFiles(dirFiles, currentSortColumn, currentSortDirection, false);
       sortedFilesList.forEach((f) => result.push({ kind: 'file', data: f }));
@@ -1189,7 +1926,6 @@ export function FileTable({
     return result;
   }, [isTrashView, isSearching, searchLower, cleanPath, files, folders, currentSortColumn, currentSortDirection]);
 
-  // Selectable items in current view
   const selectableItems = useMemo(
     () =>
       items.filter(
@@ -1199,9 +1935,53 @@ export function FileTable({
     [items]
   );
   const selectableIds = useMemo(() => selectableItems.map((item) => item.data.id), [selectableItems]);
-  const selectedInViewCount = selectableIds.filter((id) => selectedIds.has(id)).length;
+  const selectedInViewCount = useMemo(
+    () => selectableIds.reduce((count, id) => (selectedIds.has(id) ? count + 1 : count), 0),
+    [selectableIds, selectedIds]
+  );
   const isAllSelected = selectableIds.length > 0 && selectedInViewCount === selectableIds.length;
   const isIndeterminate = selectedInViewCount > 0 && !isAllSelected;
+
+  const accountById = useMemo(() => {
+    const map = new Map<string, AccountItem>();
+    for (const acc of accounts) {
+      map.set(acc.id, acc);
+    }
+    return map;
+  }, [accounts]);
+
+  const clipboardCutIds = useMemo(() => {
+    const set = new Set<string>();
+    if (clipboard?.mode === 'cut') {
+      for (const ci of clipboard.items) {
+        set.add(ci.id);
+      }
+    }
+    return set;
+  }, [clipboard]);
+
+  // Keep latest values in refs so row callbacks stay identity-stable for React.memo rows.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const selectableItemsRef = useRef(selectableItems);
+  selectableItemsRef.current = selectableItems;
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+
+  const handleCopyBatchLinks = useCallback(
+    async (folderId: string, folderName: string) => {
+      if (!onCopyShareLinks) return;
+      const result = await onCopyShareLinks(folderName);
+      if (result !== false) {
+        setCopiedBatchId(folderId);
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = setTimeout(() => {
+          setCopiedBatchId((prev) => (prev === folderId ? null : prev));
+        }, COPY_FEEDBACK_DURATION_MS);
+      }
+    },
+    [onCopyShareLinks]
+  );
 
   const handleToggleSelectAll = () => {
     if (selectableIds.length === 0) return;
@@ -1222,72 +2002,93 @@ export function FileTable({
     }
   };
 
-  const getNavigationTarget = (id: string): string | null => {
-    if (id === '__parent__') return getParentDir(cleanPath);
-    const item = items.find((it) => it.kind === 'folder' && it.data.id === id);
-    return item?.kind === 'folder' ? item.data.virtualPath : null;
-  };
+  const getNavigationTarget = useCallback(
+    (id: string): string | null => {
+      if (id === '__parent__') return getParentDir(cleanPath);
+      const item = itemsRef.current.find((it) => it.kind === 'folder' && it.data.id === id);
+      return item?.kind === 'folder' ? item.data.virtualPath : null;
+    },
+    [cleanPath]
+  );
 
-  const handleItemClick = (id: string, e: React.MouseEvent) => {
-    if (justFinishedMarquee.current) return;
+  const handleItemClick = useCallback(
+    (id: string, e: React.MouseEvent) => {
+      if (justFinishedMarquee.current) return;
 
-    const hasModifier = e.shiftKey || e.ctrlKey || e.metaKey;
-    const navTarget = hasModifier ? null : getNavigationTarget(id);
-    if (navTarget === null) {
-      lastClickRef.current = null;
-    } else {
-      const now = performance.now();
-      const last = lastClickRef.current;
-      if (last && last.id === id && last.path === cleanPath && now - last.time <= DOUBLE_CLICK_MS) {
+      const hasModifier = e.shiftKey || e.ctrlKey || e.metaKey;
+      const navTarget = hasModifier ? null : getNavigationTarget(id);
+      if (navTarget === null) {
         lastClickRef.current = null;
-        onNavigate(navTarget);
+      } else {
+        const now = performance.now();
+        const last = lastClickRef.current;
+        if (last && last.id === id && last.path === cleanPath && now - last.time <= DOUBLE_CLICK_MS) {
+          lastClickRef.current = null;
+          onNavigate(navTarget);
+          return;
+        }
+        lastClickRef.current = { id, path: cleanPath, time: now };
+      }
+
+      if (id === '__parent__') {
+        anchorIndexRef.current = 0;
+        focusIndexRef.current = 0;
+        lastSelectedIdRef.current = null;
+        onSelect('__parent__', false);
         return;
       }
-      lastClickRef.current = { id, path: cleanPath, time: now };
-    }
 
-    if (id === '__parent__') {
-      anchorIndexRef.current = 0;
-      focusIndexRef.current = 0;
-      lastSelectedIdRef.current = null;
-      onSelect('__parent__', false);
-      return;
-    }
+      const curItems = itemsRef.current;
+      const curSelectableItems = selectableItemsRef.current;
+      const clickedIdx = curItems.findIndex((it) => it.kind !== 'parent' && it.data.id === id);
+      if (clickedIdx !== -1) {
+        if (!e.shiftKey || anchorIndexRef.current === -1) {
+          anchorIndexRef.current = clickedIdx;
+        }
+        focusIndexRef.current = clickedIdx;
+      }
 
-    const clickedIdx = items.findIndex((it) => it.kind !== 'parent' && it.data.id === id);
-    if (clickedIdx !== -1) {
-      if (!e.shiftKey || anchorIndexRef.current === -1) {
+      if (e.shiftKey && onSelectMultiple) {
+        const anchorItem =
+          anchorIndexRef.current >= 0 && anchorIndexRef.current < curItems.length
+            ? curItems[anchorIndexRef.current]
+            : null;
+        const anchorId =
+          anchorItem && anchorItem.kind !== 'parent'
+            ? anchorItem.data.id
+            : lastSelectedIdRef.current;
+        if (anchorId) {
+          const idxA = curSelectableItems.findIndex((it) => it.data.id === anchorId);
+          const idxB = curSelectableItems.findIndex((it) => it.data.id === id);
+          if (idxA !== -1 && idxB !== -1) {
+            const start = Math.min(idxA, idxB);
+            const end = Math.max(idxA, idxB);
+            const rangeIds = curSelectableItems.slice(start, end + 1).map((it) => it.data.id);
+            onSelectMultiple(rangeIds, e.ctrlKey || e.metaKey ? 'add' : 'set');
+            return;
+          }
+        }
+      }
+
+      lastSelectedIdRef.current = id;
+      onSelect(id, e.shiftKey || e.ctrlKey || e.metaKey);
+    },
+    [cleanPath, getNavigationTarget, onNavigate, onSelect, onSelectMultiple]
+  );
+
+  const handleCheckboxToggle = useCallback(
+    (id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      lastSelectedIdRef.current = id;
+      const clickedIdx = itemsRef.current.findIndex((it) => it.kind !== 'parent' && it.data.id === id);
+      if (clickedIdx !== -1) {
         anchorIndexRef.current = clickedIdx;
+        focusIndexRef.current = clickedIdx;
       }
-      focusIndexRef.current = clickedIdx;
-    }
-
-    if (e.shiftKey && lastSelectedIdRef.current && onSelectMultiple) {
-      const idxA = selectableItems.findIndex((it) => it.data.id === lastSelectedIdRef.current);
-      const idxB = selectableItems.findIndex((it) => it.data.id === id);
-      if (idxA !== -1 && idxB !== -1) {
-        const start = Math.min(idxA, idxB);
-        const end = Math.max(idxA, idxB);
-        const rangeIds = selectableItems.slice(start, end + 1).map((it) => it.data.id);
-        onSelectMultiple(rangeIds, 'add');
-        return;
-      }
-    }
-
-    lastSelectedIdRef.current = id;
-    onSelect(id, e.shiftKey || e.ctrlKey || e.metaKey);
-  };
-
-  const handleCheckboxToggle = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    lastSelectedIdRef.current = id;
-    const clickedIdx = items.findIndex((it) => it.kind !== 'parent' && it.data.id === id);
-    if (clickedIdx !== -1) {
-      anchorIndexRef.current = clickedIdx;
-      focusIndexRef.current = clickedIdx;
-    }
-    onSelect(id, true);
-  };
+      onSelect(id, true);
+    },
+    [onSelect]
+  );
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -1310,61 +2111,74 @@ export function FileTable({
     const viewport = parentRef.current;
     if (!viewport) return;
 
-    const viewportRect = viewport.getBoundingClientRect();
+    marqueeCleanupRef.current?.();
+
+    let cachedViewportRect = viewport.getBoundingClientRect();
+    let maxContentX = viewport.scrollWidth;
+    let maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
+    let rectDirty = false;
+
     const startClientX = e.clientX;
     const startClientY = e.clientY;
     const startScrollTop = viewport.scrollTop;
     const startScrollLeft = viewport.scrollLeft;
-    const startContentX = startClientX - viewportRect.left + startScrollLeft;
-    const startContentY = startClientY - viewportRect.top + startScrollTop;
+    const startContentX = startClientX - cachedViewportRect.left + startScrollLeft;
+    const startContentY = startClientY - cachedViewportRect.top + startScrollTop;
 
     const isModifier = e.shiftKey || e.ctrlKey || e.metaKey;
     const initialSelected = new Set(selectedIds);
     initialSelected.delete('__parent__');
     let isDragging = false;
+    let latestClientX = startClientX;
+    let latestClientY = startClientY;
+    let prevRangeStart = -1;
+    let prevRangeEnd = -2;
+    let hasAppliedSelection = false;
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const dx = moveEvent.clientX - startClientX;
-      const dy = moveEvent.clientY - startClientY;
+    const onViewportChange = () => {
+      rectDirty = true;
+    };
 
-      if (!isDragging) {
-        if (Math.hypot(dx, dy) > 5) {
-          isDragging = true;
-        } else {
-          return;
-        }
+    const updateMarqueeFrame = () => {
+      marqueeRafRef.current = null;
+      if (!isDragging) return;
+
+      if (rectDirty) {
+        cachedViewportRect = viewport.getBoundingClientRect();
+        maxContentX = viewport.scrollWidth;
+        maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
+        rectDirty = false;
       }
 
-      const curViewportRect = viewport.getBoundingClientRect();
+      const curScrollTop = viewport.scrollTop;
+      const curScrollLeft = viewport.scrollLeft;
+      const clientHeight = viewport.clientHeight;
+      const scrollHeight = viewport.scrollHeight;
 
-      // Auto-scrolling when dragging near or outside top/bottom edges
-      const topDist = moveEvent.clientY - curViewportRect.top;
-      const bottomDist = curViewportRect.bottom - moveEvent.clientY;
+      // Compute nextScrollTop before updating viewport.scrollTop so the marquee math stays in sync.
+      const topDist = latestClientY - cachedViewportRect.top;
+      const bottomDist = cachedViewportRect.bottom - latestClientY;
+      let nextScrollTop = curScrollTop;
       if (topDist < 30) {
-        viewport.scrollTop = Math.max(0, viewport.scrollTop - 10);
+        nextScrollTop = Math.max(0, curScrollTop - 10);
       } else if (bottomDist < 30) {
-        viewport.scrollTop = Math.min(
-          viewport.scrollHeight - viewport.clientHeight,
-          viewport.scrollTop + 10
-        );
+        nextScrollTop = Math.min(Math.max(0, scrollHeight - clientHeight), curScrollTop + 10);
+      }
+      if (nextScrollTop !== curScrollTop) {
+        viewport.scrollTop = nextScrollTop;
       }
 
-      // Clamp mouse coordinates strictly within the container's visible bounds
       const clampedClientX = Math.max(
-        curViewportRect.left,
-        Math.min(curViewportRect.right, moveEvent.clientX)
+        cachedViewportRect.left,
+        Math.min(cachedViewportRect.right, latestClientX)
       );
       const clampedClientY = Math.max(
-        curViewportRect.top,
-        Math.min(curViewportRect.bottom, moveEvent.clientY)
+        cachedViewportRect.top,
+        Math.min(cachedViewportRect.bottom, latestClientY)
       );
 
-      const currentContentX = clampedClientX - curViewportRect.left + viewport.scrollLeft;
-      const currentContentY = clampedClientY - curViewportRect.top + viewport.scrollTop;
-
-      // Bound content coordinates to scrollable content dimensions
-      const maxContentX = viewport.scrollWidth;
-      const maxContentY = Math.max(rowVirtualizer.getTotalSize(), viewport.clientHeight);
+      const currentContentX = clampedClientX - cachedViewportRect.left + curScrollLeft;
+      const currentContentY = clampedClientY - cachedViewportRect.top + nextScrollTop;
 
       const boundedCurrentX = Math.max(0, Math.min(maxContentX, currentContentX));
       const boundedCurrentY = Math.max(0, Math.min(maxContentY, currentContentY));
@@ -1376,92 +2190,161 @@ export function FileTable({
       const width = Math.abs(boundedCurrentX - boundedStartX);
       const height = Math.abs(boundedCurrentY - boundedStartY);
 
-      setMarqueeRect({ left, top, width, height });
+      const box = marqueeBoxRef.current;
+      if (box) {
+        box.style.display = 'block';
+        box.style.transform = `translate(${left}px, ${top}px)`;
+        box.style.width = `${width}px`;
+        box.style.height = `${height}px`;
+      }
 
-      const newSelected = isModifier ? new Set(initialSelected) : new Set<string>();
-
-      items.forEach((item, index) => {
-        if (item.kind === 'parent') return;
-        const rowTop = index * rowHeight;
-        const rowBottom = rowTop + rowHeight;
-
-        if (rowBottom >= top && rowTop <= top + height) {
-          newSelected.add(item.data.id);
+      const curItems = itemsRef.current;
+      let startIdx = -1;
+      let endIdx = -2;
+      if (curItems.length > 0) {
+        const rawStart = Math.floor(top / rowHeight);
+        const rawEnd = height > 0 ? Math.floor((top + height - 1) / rowHeight) : rawStart;
+        if (rawEnd >= 0 && rawStart < curItems.length) {
+          startIdx = Math.max(0, rawStart);
+          endIdx = Math.min(curItems.length - 1, rawEnd);
         }
-      });
+      }
 
-      if (onSelectMultiple) {
-        onSelectMultiple(Array.from(newSelected), 'set');
+      if (!hasAppliedSelection || startIdx !== prevRangeStart || endIdx !== prevRangeEnd) {
+        hasAppliedSelection = true;
+        prevRangeStart = startIdx;
+        prevRangeEnd = endIdx;
+
+        if (onSelectMultiple) {
+          const newSelected = isModifier ? new Set(initialSelected) : new Set<string>();
+          for (let i = startIdx; i <= endIdx; i++) {
+            const item = curItems[i];
+            if (item && item.kind !== 'parent') {
+              newSelected.add(item.data.id);
+            }
+          }
+          onSelectMultiple(Array.from(newSelected), 'set');
+        }
+      }
+
+      if (nextScrollTop !== curScrollTop && marqueeRafRef.current === null) {
+        marqueeRafRef.current = requestAnimationFrame(updateMarqueeFrame);
       }
     };
 
-    const onMouseUp = () => {
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      latestClientX = moveEvent.clientX;
+      latestClientY = moveEvent.clientY;
+
+      if (!isDragging) {
+        const dx = latestClientX - startClientX;
+        const dy = latestClientY - startClientY;
+        if (Math.hypot(dx, dy) > 5) {
+          isDragging = true;
+        } else {
+          return;
+        }
+      }
+
+      if (marqueeRafRef.current === null) {
+        marqueeRafRef.current = requestAnimationFrame(updateMarqueeFrame);
+      }
+    };
+
+    const cleanupMarquee = () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('blur', onMouseUp);
+      window.removeEventListener('resize', onViewportChange);
+      if (marqueeCleanupRef.current === cleanupMarquee) {
+        marqueeCleanupRef.current = null;
+      }
+      isDragging = false;
+      hideMarqueeBox();
+    };
 
+    const onMouseUp = () => {
       if (isDragging) {
         justFinishedMarquee.current = true;
         setTimeout(() => {
           justFinishedMarquee.current = false;
         }, 80);
       }
-      setMarqueeRect(null);
+      cleanupMarquee();
     };
 
+    marqueeCleanupRef.current = cleanupMarquee;
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('blur', onMouseUp);
+    window.addEventListener('resize', onViewportChange, { passive: true });
   };
 
-  const handleRowDragStart = (
-    e: React.DragEvent,
-    item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string; isTrashed?: boolean }
-  ) => {
-    if (isTrashView) {
-      e.preventDefault();
-      return;
-    }
-    setMarqueeRect(null);
-    const isItemSelected = selectedIds.has(item.id);
-    let dragPayload: Array<{
-      kind: 'file' | 'folder';
-      id: string;
-      name: string;
-      virtualPath: string;
-      isTrashed?: boolean;
-    }> = [];
-
-    if (isItemSelected && selectedIds.size > 1) {
-      dragPayload = selectableItems
-        .filter((it) => selectedIds.has(it.data.id))
-        .map((it) => ({
-          kind: it.kind === 'folder' ? 'folder' : 'file',
-          id: it.data.id,
-          name: it.data.name,
-          virtualPath: it.data.virtualPath,
-          ...(it.kind === 'trash' ? { isTrashed: true } : {}),
-        }));
-    } else {
-      dragPayload = [item];
-      if (!isItemSelected) {
-        onSelect(item.id, false);
+  const handleRowDragStart = useCallback(
+    (
+      e: React.DragEvent,
+      item: { kind: 'file' | 'folder'; id: string; name: string; virtualPath: string; isTrashed?: boolean }
+    ) => {
+      if (isTrashView) {
+        e.preventDefault();
+        return;
       }
-    }
+      hideMarqueeBox();
+      const curSelectedIds = selectedIdsRef.current;
+      const isItemSelected = curSelectedIds.has(item.id);
+      let dragPayload: Array<{
+        kind: 'file' | 'folder';
+        id: string;
+        name: string;
+        virtualPath: string;
+        isTrashed?: boolean;
+      }> = [];
 
-    e.dataTransfer.setData('application/x-tsubasa-items', JSON.stringify(dragPayload));
-    e.dataTransfer.effectAllowed = 'copyMove';
-  };
+      if (isItemSelected && curSelectedIds.size > 1) {
+        dragPayload = selectableItemsRef.current
+          .filter((it) => curSelectedIds.has(it.data.id))
+          .map((it) => ({
+            kind: it.kind === 'folder' ? 'folder' : 'file',
+            id: it.data.id,
+            name: it.data.name,
+            virtualPath: it.data.virtualPath,
+            ...(it.kind === 'trash' ? { isTrashed: true } : {}),
+          }));
+      } else {
+        dragPayload = [item];
+        if (!isItemSelected) {
+          onSelect(item.id, false);
+        }
+      }
 
-  // TanStack Virtualizer
+      setActiveInternalDragPayload(dragPayload);
+      e.dataTransfer.setData('application/x-tsubasa-items', JSON.stringify(dragPayload));
+      e.dataTransfer.effectAllowed = 'copyMove';
+    },
+    [hideMarqueeBox, isTrashView, onSelect]
+  );
+
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => rowHeight,
-    overscan: 10,
+    overscan: 4,
   });
 
   useEffect(() => {
     rowVirtualizer.measure();
   }, [rowHeight, rowVirtualizer]);
+
+  useEffect(() => {
+    if (!scrollRequest || scrollRequest.seq === lastHandledScrollSeqRef.current) return;
+    const idx = items.findIndex((it) => it.kind !== 'parent' && it.data.id === scrollRequest.id);
+    if (idx === -1) return;
+    lastHandledScrollSeqRef.current = scrollRequest.seq;
+    anchorIndexRef.current = idx;
+    focusIndexRef.current = idx;
+    lastSelectedIdRef.current = scrollRequest.id;
+    rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
+  }, [scrollRequest, items, rowVirtualizer]);
 
   const getActiveIndex = useCallback((): number => {
     if (
@@ -1482,20 +2365,34 @@ export function FileTable({
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (parentRef.current?.closest('[inert]')) {
+        return;
+      }
+      if (document.querySelector('dialog[open], [role="dialog"]')) {
+        return;
+      }
+
+      const target = e.target;
       if (
-        activeTag === 'input' ||
-        activeTag === 'textarea' ||
-        (document.activeElement as HTMLElement)?.isContentEditable
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement &&
+          (target.isContentEditable || Boolean(target.closest('select, input, textarea, [contenteditable="true"]'))))
       ) {
         return;
       }
 
-      if (document.querySelector('[role="dialog"]')) {
+      const activeEl = document.activeElement;
+      if (
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        activeEl instanceof HTMLSelectElement ||
+        (activeEl instanceof HTMLElement && activeEl.isContentEditable)
+      ) {
         return;
       }
 
-      // Ctrl+A / Cmd+A Select All
       if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
         if (selectableIds.length > 0) {
@@ -1510,14 +2407,32 @@ export function FileTable({
         return;
       }
 
-      // Arrow navigation
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      if (
+        e.key === 'ArrowDown' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'Home' ||
+        e.key === 'End' ||
+        e.key === 'PageDown' ||
+        e.key === 'PageUp'
+      ) {
         if (e.altKey || (e.ctrlKey && !e.shiftKey)) return;
         if (items.length === 0) return;
 
         e.preventDefault();
 
-        // Single selection movement (without Shift)
+        if (
+          parentRef.current &&
+          document.activeElement instanceof HTMLElement &&
+          parentRef.current.contains(document.activeElement)
+        ) {
+          document.activeElement.blur();
+        }
+
+        const pageStep = Math.max(
+          1,
+          Math.floor((parentRef.current?.clientHeight ?? 0) / rowHeight) || 10
+        );
+
         if (!e.shiftKey) {
           const currentIndex = getActiveIndex();
           let nextIndex: number;
@@ -1526,6 +2441,13 @@ export function FileTable({
             nextIndex = 0;
           } else if (e.key === 'End') {
             nextIndex = items.length - 1;
+          } else if (e.key === 'PageDown') {
+            nextIndex =
+              currentIndex === -1
+                ? Math.min(items.length - 1, pageStep - 1)
+                : Math.min(items.length - 1, currentIndex + pageStep);
+          } else if (e.key === 'PageUp') {
+            nextIndex = currentIndex === -1 ? 0 : Math.max(0, currentIndex - pageStep);
           } else if (e.key === 'ArrowDown') {
             nextIndex = currentIndex === -1 ? 0 : Math.min(items.length - 1, currentIndex + 1);
           } else {
@@ -1546,7 +2468,6 @@ export function FileTable({
           return;
         }
 
-        // Multi-selection range extension (with Shift)
         if (e.shiftKey) {
           let anchor = anchorIndexRef.current;
           if (anchor === -1 || (items[anchor] && items[anchor].kind === 'parent')) {
@@ -1562,17 +2483,21 @@ export function FileTable({
 
           if (anchor >= items.length || !items[anchor]) return;
 
-          let currentFocus = focusIndexRef.current >= 0 ? focusIndexRef.current : anchor;
+          const currentFocus = focusIndexRef.current >= 0 ? focusIndexRef.current : anchor;
+          const minAllowed = items[0]?.kind === 'parent' ? 1 : 0;
           let newFocus: number;
 
           if (e.key === 'Home') {
-            newFocus = items[0]?.kind === 'parent' ? 1 : 0;
+            newFocus = minAllowed;
           } else if (e.key === 'End') {
             newFocus = items.length - 1;
+          } else if (e.key === 'PageDown') {
+            newFocus = Math.min(items.length - 1, currentFocus + pageStep);
+          } else if (e.key === 'PageUp') {
+            newFocus = Math.max(minAllowed, currentFocus - pageStep);
           } else if (e.key === 'ArrowDown') {
             newFocus = Math.min(items.length - 1, currentFocus + 1);
           } else {
-            const minAllowed = items[0]?.kind === 'parent' ? 1 : 0;
             newFocus = Math.max(minAllowed, currentFocus - 1);
           }
 
@@ -1603,6 +2528,64 @@ export function FileTable({
           return;
         }
       }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && items.length > 0) {
+        if (typeAheadBufferRef.current.length === 0 && e.key.trim().length === 0) {
+          return;
+        }
+        const nowChar = e.key.toLowerCase();
+        const nextBuf = typeAheadBufferRef.current + nowChar;
+        typeAheadBufferRef.current = nextBuf;
+        if (typeAheadTimerRef.current !== null) {
+          window.clearTimeout(typeAheadTimerRef.current);
+        }
+        typeAheadTimerRef.current = window.setTimeout(() => {
+          typeAheadBufferRef.current = '';
+          typeAheadTimerRef.current = null;
+        }, 700);
+
+        const activeIdx = getActiveIndex();
+        const isRepeatedChar =
+          nextBuf.length > 1 && nextBuf.split('').every((ch) => ch === nowChar);
+
+        const findMatchIndex = (prefix: string, startIndex: number): number => {
+          for (let offset = 0; offset < items.length; offset++) {
+            const idx = (startIndex + offset) % items.length;
+            const it = items[idx];
+            if (!it || it.kind === 'parent') continue;
+            if (it.data.name.toLowerCase().startsWith(prefix)) {
+              return idx;
+            }
+          }
+          return -1;
+        };
+
+        let matchIndex = -1;
+        if (isRepeatedChar) {
+          matchIndex = findMatchIndex(nextBuf, activeIdx >= 0 ? activeIdx : 0);
+          if (matchIndex === -1) {
+            matchIndex = findMatchIndex(
+              nowChar,
+              activeIdx >= 0 ? (activeIdx + 1) % items.length : 0
+            );
+          }
+        } else {
+          matchIndex = findMatchIndex(nextBuf, activeIdx >= 0 ? activeIdx : 0);
+        }
+
+        if (matchIndex !== -1) {
+          e.preventDefault();
+          const matchItem = items[matchIndex];
+          if (matchItem && matchItem.kind !== 'parent') {
+            const matchId = matchItem.data.id;
+            anchorIndexRef.current = matchIndex;
+            focusIndexRef.current = matchIndex;
+            lastSelectedIdRef.current = matchId;
+            onSelect(matchId, false);
+            rowVirtualizer.scrollToIndex(matchIndex, { align: 'auto' });
+          }
+        }
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown);
@@ -1613,6 +2596,7 @@ export function FileTable({
     onSelect,
     onSelectMultiple,
     rowVirtualizer,
+    rowHeight,
     getActiveIndex,
   ]);
 
@@ -1621,6 +2605,8 @@ export function FileTable({
   useEffect(() => {
     const viewport = parentRef.current;
     if (!viewport) return;
+
+    marqueeCleanupRef.current?.();
     const header = headerRef.current;
 
     const canScrollY = (el: HTMLElement, deltaY: number) => {
@@ -1678,11 +2664,20 @@ export function FileTable({
     };
   }, []);
 
+  const canTransferFiles = Boolean(!isSharePoolActive && accounts && accounts.length > 1 && onTransferFile);
+
   return (
-    <div {...stylex.props(styles.container)} aria-busy={isLoading ? 'true' : undefined}>
-      <div ref={headerRef} {...stylex.props(styles.headerRow)}>
+    <div
+      role="grid"
+      aria-rowcount={items.length + 1}
+      aria-label={isTrashView ? 'Trash files' : 'Files'}
+      aria-multiselectable="true"
+      {...stylex.props(styles.container)}
+      aria-busy={isLoading ? 'true' : undefined}
+    >
+      <div ref={headerRef} role="row" aria-rowindex={1} {...stylex.props(styles.headerRow)}>
         <div {...stylex.props(styles.headerGutter)} data-marquee-gutter="true" aria-hidden="true" />
-        <div {...stylex.props(styles.checkboxCell)}>
+        <div role="columnheader" {...stylex.props(styles.checkboxCell)}>
           <button
             type="button"
             role="checkbox"
@@ -1691,7 +2686,6 @@ export function FileTable({
             disabled={selectableIds.length === 0}
             {...stylex.props(
               styles.checkbox,
-              (isAllSelected || isIndeterminate) && styles.checkboxChecked,
               selectableIds.length === 0 && styles.checkboxDisabled
             )}
             onClick={(e) => {
@@ -1699,8 +2693,16 @@ export function FileTable({
               handleToggleSelectAll();
             }}
           >
-            {isAllSelected && <IconCheck size={12} strokeWidth={3} />}
-            {isIndeterminate && <IconMinus size={12} strokeWidth={3} />}
+            <span
+              aria-hidden="true"
+              {...stylex.props(
+                styles.checkboxBox,
+                (isAllSelected || isIndeterminate) && styles.checkboxBoxChecked
+              )}
+            >
+              {isAllSelected && <IconCheck size={12} strokeWidth={3} />}
+              {isIndeterminate && <IconMinus size={12} strokeWidth={3} />}
+            </span>
           </button>
         </div>
         <div
@@ -1758,11 +2760,11 @@ export function FileTable({
         <div
           role="columnheader"
           aria-sort={currentSortColumn === 'size' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-          {...stylex.props(styles.headerCell, styles.headerCellRight)}
+          {...stylex.props(styles.headerCell)}
         >
           <button
             type="button"
-            {...stylex.props(styles.headerBtn, styles.headerBtnRight, currentSortColumn === 'size' && styles.headerBtnActive)}
+            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'size' && styles.headerBtnActive)}
             onClick={() => handleSort('size')}
             aria-label={`Sort by Size in ${currentSortColumn === 'size' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
             title={`Sort by Size ${currentSortColumn === 'size' ? (currentSortDirection === 'asc' ? '(largest first)' : '(smallest first)') : '(largest first)'}`}
@@ -1784,11 +2786,11 @@ export function FileTable({
         <div
           role="columnheader"
           aria-sort={currentSortColumn === 'date' ? (currentSortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-          {...stylex.props(styles.headerCell, styles.headerCellRight)}
+          {...stylex.props(styles.headerCell)}
         >
           <button
             type="button"
-            {...stylex.props(styles.headerBtn, styles.headerBtnRight, currentSortColumn === 'date' && styles.headerBtnActive)}
+            {...stylex.props(styles.headerBtn, styles.headerBtnLeft, currentSortColumn === 'date' && styles.headerBtnActive)}
             onClick={() => handleSort('date')}
             aria-label={`Sort by ${isTrashView ? 'Date trashed' : 'Date modified'} in ${currentSortColumn === 'date' && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
             title={`Sort by ${isTrashView ? 'Date trashed' : 'Date modified'} ${currentSortColumn === 'date' ? (currentSortDirection === 'asc' ? '(newest first)' : '(oldest first)') : '(newest first)'}`}
@@ -1807,7 +2809,7 @@ export function FileTable({
             </span>
           </button>
         </div>
-        <div {...stylex.props(styles.headerCell, styles.headerCellRight)}>Actions</div>
+        <div role="columnheader" {...stylex.props(styles.headerCell)}>Actions</div>
       </div>
 
       <div
@@ -1821,8 +2823,28 @@ export function FileTable({
         onMouseDown={handleMouseDown}
         onDragOver={(e) => {
           if (isTrashView || isSharePoolActive) return;
-          if (isExternalFileDrag(e) || isInternalItemDrag(e)) {
+          if (isInternalItemDrag(e)) {
+            const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+            if (rejectInvalidInternalDragOver(e, cleanPath, undefined, isCopyDrag)) {
+              return;
+            }
             e.preventDefault();
+            if (e.dataTransfer) {
+              e.dataTransfer.dropEffect = isCopyDrag ? 'copy' : 'move';
+            }
+            return;
+          }
+          if (isExternalFileDrag(e)) {
+            e.preventDefault();
+          }
+        }}
+        onDrop={(e) => {
+          if (isTrashView || isSharePoolActive) return;
+          if (isInternalItemDrag(e)) {
+            const isCopyDrag = (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+            if (isCopyDrag) {
+              handleDrop(e);
+            }
           }
         }}
         onClick={() => {
@@ -1877,9 +2899,6 @@ export function FileTable({
                 <p {...stylex.props(styles.dropSubtitle)}>
                   Files will be staged for cluster allocation
                 </p>
-                <span {...stylex.props(styles.dropTargetBadge)}>
-                  Target: {cleanPath}
-                </span>
               </div>
             ) : isLoading ? (
               <progress
@@ -1910,17 +2929,7 @@ export function FileTable({
           </div>
         ) : (
           <div {...stylex.props(styles.tableBodyContainer)}>
-            {marqueeRect && (
-              <div
-                {...stylex.props(styles.marqueeBox)}
-                style={{
-                  left: `${marqueeRect.left}px`,
-                  top: `${marqueeRect.top}px`,
-                  width: `${marqueeRect.width}px`,
-                  height: `${marqueeRect.height}px`,
-                }}
-              />
-            )}
+            <div ref={marqueeBoxRef} {...stylex.props(styles.marqueeBox)} aria-hidden="true" />
             <div
               {...stylex.props(styles.virtualTrack)}
               style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
@@ -1930,593 +2939,93 @@ export function FileTable({
                 if (!item) return null;
 
                 if (item.kind === 'parent') {
-                  const isDragOverParent = dragOverRowId === '__parent__';
-                  const isSelected = selectedIds.has('__parent__');
                   return (
-                    <div
+                    <MemoParentRow
                       key={`parent-${virtualRow.index}`}
-                      {...stylex.props(
-                        styles.rowWrapper,
-                        isSelected && styles.rowWrapperSelected,
-                        isDragOverParent && styles.rowWrapperDragOver
-                      )}
-                      style={{
-                        height: `${virtualRow.size}px`,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      <div
-                        data-marquee-gutter="true"
-                        aria-hidden="true"
-                        {...stylex.props(styles.gutterCell)}
-                      />
-                      <div
-                        data-row="true"
-                        {...stylex.props(
-                          styles.rowMain,
-                          isSelected && styles.rowSelected,
-                          isDragOverParent && styles.rowDragOver
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleItemClick('__parent__', e);
-                        }}
-                        onDragOver={(e) => {
-                          if (isTrashView || isSharePoolActive) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (e.dataTransfer) {
-                            e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
-                          }
-                          setDragOverRowId('__parent__');
-                        }}
-                        onDragLeave={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setDragOverRowId((prev) => (prev === '__parent__' ? null : prev));
-                        }}
-                        onDrop={(e) => {
-                          setDragOverRowId(null);
-                          handleRowDrop(e, item.path);
-                        }}
-                      >
-                        <div {...stylex.props(styles.checkboxCell)} />
-                        <div {...stylex.props(styles.nameCell)} title={item.path}>
-                          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-                          <span {...stylex.props(styles.itemLabel)}>.. (Parent directory)</span>
-                        </div>
-                        <div {...stylex.props(styles.accountCell)}>
-                          <span {...stylex.props(styles.accountPill)} title="Parent folder">Parent folder</span>
-                        </div>
-                        <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
-                        <div {...stylex.props(styles.colRight, styles.tabularCell)}>—</div>
-                        <div {...stylex.props(styles.actionsCell)}>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.rowBtn)}
-                            aria-label="Open parent folder"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onNavigate(item.path);
-                            }}
-                          >
-                            <IconChevronRight {...stylex.props(styles.actionIcon)} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                      path={item.path}
+                      rowIndex={virtualRow.index}
+                      virtualSize={virtualRow.size}
+                      virtualStart={virtualRow.start}
+                      isSelected={selectedIds.has('__parent__')}
+                      isDragOver={dragOverRowId === '__parent__'}
+                      isTrashView={isTrashView}
+                      isSharePoolActive={isSharePoolActive}
+                      canCopy={Boolean(onCopyItems)}
+                      onItemClick={handleItemClick}
+                      onNavigate={onNavigate}
+                      onSetDragOverRowId={setDragOverRowId}
+                      onRowDrop={handleRowDrop}
+                    />
                   );
                 }
 
                 if (item.kind === 'folder') {
                   const folder = item.data;
-                  const isSelected = selectedIds.has(folder.id);
-                  const isDragOverFolder = dragOverRowId === folder.id;
-                  const isCut = clipboard?.mode === 'cut' && clipboard.items.some((ci) => ci.id === folder.id);
-                  const folderSize = folderSizeMap.get(folder.id) || 0;
                   const folderBatchLinks =
                     isSharePoolActive && !isTrashView && getParentDir(folder.virtualPath) === '/'
                       ? shareLinksByBatch?.[folder.name]
                       : undefined;
-
                   return (
-                    <div
+                    <MemoFolderRow
                       key={folder.id}
-                      {...stylex.props(
-                        styles.rowWrapper,
-                        isSelected && styles.rowWrapperSelected,
-                        isDragOverFolder && styles.rowWrapperDragOver
-                      )}
-                      style={{
-                        height: `${virtualRow.size}px`,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      <div
-                        data-marquee-gutter="true"
-                        aria-hidden="true"
-                        {...stylex.props(styles.gutterCell)}
-                      />
-                      <div
-                        data-row="true"
-                        draggable={!isTrashView}
-                        onDragStart={(e) =>
-                          handleRowDragStart(e, {
-                            kind: 'folder',
-                            id: folder.id,
-                            name: folder.name,
-                            virtualPath: folder.virtualPath,
-                          })
-                        }
-                        onDragOver={(e) => {
-                          if (isTrashView || isSharePoolActive) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (e.dataTransfer) {
-                            e.dataTransfer.dropEffect = isInternalItemDrag(e) ? 'move' : 'copy';
-                          }
-                          setDragOverRowId(folder.id);
-                        }}
-                        onDragLeave={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setDragOverRowId((prev) => (prev === folder.id ? null : prev));
-                        }}
-                        onDrop={(e) => {
-                          setDragOverRowId(null);
-                          handleRowDrop(e, folder.virtualPath);
-                        }}
-                        {...stylex.props(
-                          styles.rowMain,
-                          isSelected && styles.rowSelected,
-                          isDragOverFolder && styles.rowDragOver,
-                          isCut && styles.rowCutMuted
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleItemClick(folder.id, e);
-                        }}
-                      >
-                        <div {...stylex.props(styles.checkboxCell)}>
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={isSelected}
-                            aria-label={`Select folder ${folder.name}`}
-                            {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
-                            onClick={(e) => handleCheckboxToggle(folder.id, e)}
-                          >
-                            {isSelected && <IconCheck size={12} strokeWidth={3} />}
-                          </button>
-                        </div>
-
-                        <div {...stylex.props(styles.nameCell)} title={folder.virtualPath}>
-                          <IconFolderFilled {...stylex.props(styles.itemIcon, styles.folderIcon)} />
-                          <span {...stylex.props(styles.itemLabel)}>
-                            {isSearching ? folder.virtualPath : folder.name}
-                          </span>
-                        </div>
-
-                        <div {...stylex.props(styles.accountCell)}>
-                          <span {...stylex.props(styles.accountPill)} title="Cluster folder">Cluster folder</span>
-                        </div>
-
-                        <div
-                          {...stylex.props(styles.colRight, styles.tabularCell)}
-                          title={folderSize > 0 ? `${formatBytes(folderSize)} across descendant files` : 'Empty folder'}
-                        >
-                          {folderSize > 0 ? formatBytes(folderSize) : '—'}
-                        </div>
-                        <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                          {formatDate(folder.updatedAt)}
-                        </div>
-                        <div {...stylex.props(styles.actionsCell)}>
-                          {!isTrashView && !isSharePoolActive && onShareItem && (
-                            <button
-                              type="button"
-                              {...stylex.props(styles.rowBtn)}
-                              aria-label={`Share folder ${folder.name}`}
-                              title="Share folder"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onShareItem({
-                                  kind: 'folder',
-                                  id: folder.id,
-                                  name: folder.name,
-                                  virtualPath: folder.virtualPath,
-                                });
-                              }}
-                              onDoubleClick={(e) => e.stopPropagation()}
-                            >
-                              <IconShare {...stylex.props(styles.actionIcon)} />
-                            </button>
-                          )}
-                          {folderBatchLinks && folderBatchLinks.length > 0 && onCopyShareLinks && (
-                            <button
-                              type="button"
-                              {...stylex.props(
-                                styles.rowBtn,
-                                copiedBatchId === folder.id && styles.rowBtnCopied
-                              )}
-                              aria-label={`Copy share link for ${folder.name}`}
-                              title={
-                                folderBatchLinks.length === 1
-                                  ? `Copy share link: ${folderBatchLinks[0].webViewLink}`
-                                  : `Copy ${folderBatchLinks.length} share links (across ${folderBatchLinks.length} drives)`
-                              }
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                const result = await onCopyShareLinks(folder.name);
-                                if (result !== false) {
-                                  setCopiedBatchId(folder.id);
-                                  if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-                                  copyTimerRef.current = setTimeout(() => {
-                                    setCopiedBatchId((prev) => (prev === folder.id ? null : prev));
-                                  }, COPY_FEEDBACK_DURATION_MS);
-                                }
-                              }}
-                              onDoubleClick={(e) => e.stopPropagation()}
-                            >
-                              {copiedBatchId === folder.id ? (
-                                <IconCheck {...stylex.props(styles.actionIcon)} />
-                              ) : (
-                                <IconLink {...stylex.props(styles.actionIcon)} />
-                              )}
-                            </button>
-                          )}
-                          {onDeleteFolder && (
-                            <button
-                              type="button"
-                              {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                              aria-label="Delete folder"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteFolder(folder);
-                              }}
-                            >
-                              <IconTrash {...stylex.props(styles.actionIcon)} />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            {...stylex.props(styles.rowBtn)}
-                            aria-label="Open folder"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onNavigate(folder.virtualPath);
-                            }}
-                          >
-                            <IconChevronRight {...stylex.props(styles.actionIcon)} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                      folder={folder}
+                      rowIndex={virtualRow.index}
+                      virtualSize={virtualRow.size}
+                      virtualStart={virtualRow.start}
+                      isSelected={selectedIds.has(folder.id)}
+                      isDragOver={dragOverRowId === folder.id}
+                      isCut={clipboardCutIds.has(folder.id)}
+                      folderSize={folderSizeMap.get(folder.id) || 0}
+                      folderBatchLinks={folderBatchLinks}
+                      isCopiedBatch={copiedBatchId === folder.id}
+                      isTrashView={isTrashView}
+                      isSharePoolActive={isSharePoolActive}
+                      canCopy={Boolean(onCopyItems)}
+                      isSearching={isSearching}
+                      onItemClick={handleItemClick}
+                      onCheckboxToggle={handleCheckboxToggle}
+                      onRowDragStart={handleRowDragStart}
+                      onSetDragOverRowId={setDragOverRowId}
+                      onRowDrop={handleRowDrop}
+                      onShareItem={onShareItem}
+                      onCopyBatchLinks={onCopyShareLinks ? handleCopyBatchLinks : undefined}
+                      onDeleteFolder={onDeleteFolder}
+                      onNavigate={onNavigate}
+                    />
                   );
                 }
 
-                if (item.kind === 'trash') {
-                  const file = item.data;
-                  const isSelected = selectedIds.has(file.id);
-                  const fileAcc = accounts.find((a) => a.id === file.accountId);
-
-                  return (
-                    <div
-                      key={`trash-${file.id}`}
-                      {...stylex.props(
-                        styles.rowWrapper,
-                        isSelected && styles.rowWrapperSelected
-                      )}
-                      style={{
-                        height: `${virtualRow.size}px`,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      <div
-                        data-marquee-gutter="true"
-                        aria-hidden="true"
-                        {...stylex.props(styles.gutterCell)}
-                      />
-                      <div
-                        data-row="true"
-                        draggable={true}
-                        onDragStart={(e) =>
-                          handleRowDragStart(e, {
-                            kind: 'file',
-                            id: file.id,
-                            name: file.name,
-                            virtualPath: file.virtualPath,
-                            isTrashed: true,
-                          })
-                        }
-                        {...stylex.props(styles.rowMain, isSelected && styles.rowSelected)}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleItemClick(file.id, e);
-                        }}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (e.dataTransfer) {
-                            e.dataTransfer.dropEffect = 'none';
-                          }
-                        }}
-                      >
-                      <div {...stylex.props(styles.checkboxCell)}>
-                        <button
-                          type="button"
-                          role="checkbox"
-                          aria-checked={isSelected}
-                          aria-label={`Select trashed file ${file.name}`}
-                          {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
-                          onClick={(e) => handleCheckboxToggle(file.id, e)}
-                        >
-                          {isSelected && <IconCheck size={12} strokeWidth={3} />}
-                        </button>
-                      </div>
-
-                      <div {...stylex.props(styles.nameCell)} title={file.virtualPath}>
-                        <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(styles.itemIcon)} />
-                        <span
-                          {...stylex.props(styles.itemLabel)}
-                          title={`Original location: ${file.virtualPath}`}
-                        >
-                          {file.virtualPath}
-                        </span>
-                      </div>
-
-                      <div {...stylex.props(styles.accountCell)}>
-                        <RedactedEmail
-                          email={fileAcc?.email || file.accountId}
-                          tooltip={getAccountTooltip(file.accountId, fileAcc)}
-                          style={styles.accountPill}
-                        />
-                      </div>
-
-                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                        {formatBytes(file.sizeBytes)}
-                      </div>
-
-                      <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                        {formatDate(file.trashedAt || file.updatedAt)}
-                      </div>
-
-                      <div {...stylex.props(styles.actionsCell)}>
-                        {onRestore && (
-                          <button
-                            type="button"
-                            {...stylex.props(styles.rowBtn)}
-                            aria-label="Restore to original location"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRestore(file);
-                            }}
-                          >
-                            <IconRotateCcw {...stylex.props(styles.actionIcon)} />
-                          </button>
-                        )}
-
-                        {onPermanentDelete && (
-                          <button
-                            type="button"
-                            {...stylex.props(styles.rowBtn, styles.rowBtnDanger)}
-                            aria-label="Delete permanently from Google Drive"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onPermanentDelete(file);
-                            }}
-                          >
-                            <IconTrash {...stylex.props(styles.actionIcon)} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-
-                // File row
                 const file = item.data;
-                const isSelected = selectedIds.has(file.id);
-                const isCut = clipboard?.mode === 'cut' && clipboard.items.some((ci) => ci.id === file.id);
-                const fileAcc = accounts.find((a) => a.id === file.accountId);
-
+                const isTrashItem = item.kind === 'trash';
                 return (
-                  <div
-                    key={file.id}
-                    {...stylex.props(
-                      styles.rowWrapper,
-                      isSelected && styles.rowWrapperSelected
-                    )}
-                    style={{
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <div
-                      data-marquee-gutter="true"
-                      aria-hidden="true"
-                      {...stylex.props(styles.gutterCell)}
-                    />
-                    <div
-                      data-row="true"
-                      draggable={!isTrashView}
-                      onDragStart={(e) =>
-                        handleRowDragStart(e, {
-                          kind: 'file',
-                          id: file.id,
-                          name: file.name,
-                          virtualPath: file.virtualPath,
-                        })
-                      }
-                      onDragOver={(e) => {
-                        if (isTrashView || isSharePoolActive) return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (e.dataTransfer) {
-                          e.dataTransfer.dropEffect = 'none';
-                        }
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        (e.nativeEvent as any).__tsubasaHandled = true;
-                      }}
-                      {...stylex.props(
-                        styles.rowMain,
-                        isSelected && styles.rowSelected,
-                        isCut && styles.rowCutMuted
-                      )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleItemClick(file.id, e);
-                      }}
-                    >
-                    <div {...stylex.props(styles.checkboxCell)}>
-                      <button
-                        type="button"
-                        role="checkbox"
-                        aria-checked={isSelected}
-                        aria-label={`Select file ${file.name}`}
-                        {...stylex.props(styles.checkbox, isSelected && styles.checkboxChecked)}
-                        onClick={(e) => handleCheckboxToggle(file.id, e)}
-                      >
-                        {isSelected && <IconCheck size={12} strokeWidth={3} />}
-                      </button>
-                    </div>
-
-                    <div {...stylex.props(styles.nameCell)} title={file.virtualPath}>
-                      <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(styles.itemIcon)} />
-                      <span {...stylex.props(styles.itemLabel)}>
-                        {isSearching ? file.virtualPath : file.name}
-                      </span>
-                    </div>
-
-                    <div {...stylex.props(styles.accountCell)}>
-                      {!isSharePoolActive && accounts && accounts.length > 1 && onTransferFile ? (
-                        <div {...stylex.props(styles.selectWrapper)}>
-                          <select
-                            aria-label={`Transfer ${file.name} to another account`}
-                            title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
-                            value={file.accountId}
-                            disabled={transferringFileId === file.id}
-                            {...stylex.props(
-                              styles.accountSelect,
-                              transferringFileId === file.id && styles.accountSelectTransferring
-                            )}
-                            onClick={(e) => e.stopPropagation()}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onChange={(e) => {
-                              e.stopPropagation();
-                              const targetId = e.target.value;
-                              if (targetId && targetId !== file.accountId) {
-                                onTransferFile(file.id, targetId);
-                              }
-                            }}
-                          >
-                            {accounts.map((acc) => {
-                              const isCurrent = acc.id === file.accountId;
-                              const isDriveDisabled = Boolean(acc.isDisabled);
-                              const hasHeadroom = acc.headroomBytes >= file.sizeBytes;
-                              const remainingBudget =
-                                acc.transferStats?.remainingUploadBytes24h ?? 750 * 1024 * 1024 * 1024;
-                              const hasTransferBudget = remainingBudget >= file.sizeBytes;
-                              const canHold = !isDriveDisabled && acc.authorized && hasHeadroom && hasTransferBudget;
-                              const isMuted = !isCurrent && !canHold;
-
-                              let labelSuffix = '';
-                              if (isCurrent) {
-                                labelSuffix = ' (Current)';
-                              } else if (isDriveDisabled) {
-                                labelSuffix = ' (Disabled)';
-                              } else if (!acc.authorized) {
-                                labelSuffix = ' (Unauthorized)';
-                              } else if (!hasHeadroom) {
-                                labelSuffix = ` (No headroom: needs ${formatGbCompact(file.sizeBytes)} GB)`;
-                              } else if (!hasTransferBudget) {
-                                labelSuffix = ' (24h transfer limit reached)';
-                              } else {
-                                labelSuffix = ` (${formatGbCompact(acc.headroomBytes)} GB free)`;
-                              }
-
-                              const optFullTitle = `${acc.displayName || acc.id} (${acc.email || acc.id})${labelSuffix}`;
-
-                              return (
-                                <option key={acc.id} value={acc.id} disabled={isMuted} title={optFullTitle}>
-                                  {(acc.displayName || acc.id) + labelSuffix}
-                                </option>
-                              );
-                            })}
-                          </select>
-                          <div {...stylex.props(styles.selectChevron)}>
-                            <IconChevronDown size={10} strokeWidth={2.5} />
-                          </div>
-                        </div>
-                      ) : (
-                        <RedactedEmail
-                          email={fileAcc?.email || file.accountId}
-                          tooltip={getAccountTooltip(file.accountId, fileAcc)}
-                          style={styles.accountPill}
-                        />
-                      )}
-                    </div>
-
-                    <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                      {formatBytes(file.sizeBytes)}
-                    </div>
-
-                    <div {...stylex.props(styles.colRight, styles.tabularCell)}>
-                      {formatDate(file.updatedAt)}
-                    </div>
-
-                    <div {...stylex.props(styles.actionsCell)}>
-                      {!isTrashView && !isSharePoolActive && onShareItem && (
-                        <button
-                          type="button"
-                          {...stylex.props(styles.rowBtn)}
-                          aria-label={`Share file ${file.name}`}
-                          title="Share file"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onShareItem({
-                              kind: 'file',
-                              id: file.id,
-                              name: file.name,
-                              virtualPath: file.virtualPath,
-                            });
-                          }}
-                          onDoubleClick={(e) => e.stopPropagation()}
-                        >
-                          <IconShare {...stylex.props(styles.actionIcon)} />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        {...stylex.props(styles.rowBtn)}
-                        aria-label="Download file"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDownload(file);
-                        }}
-                      >
-                        <IconDownload {...stylex.props(styles.actionIcon)} />
-                      </button>
-
-                      <button
-                        type="button"
-                        {...stylex.props(styles.rowBtn)}
-                        aria-label="Move to trash"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTrash(file);
-                        }}
-                      >
-                        <IconTrash {...stylex.props(styles.actionIcon)} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+                  <MemoFileRow
+                    key={isTrashItem ? `trash-${file.id}` : file.id}
+                    file={file}
+                    isTrashItem={isTrashItem}
+                    rowIndex={virtualRow.index}
+                    virtualSize={virtualRow.size}
+                    virtualStart={virtualRow.start}
+                    isSelected={selectedIds.has(file.id)}
+                    isCut={!isTrashItem && clipboardCutIds.has(file.id)}
+                    fileAcc={accountById.get(file.accountId)}
+                    accounts={accounts}
+                    canTransfer={canTransferFiles}
+                    isTransferring={Boolean(transferringFileIds?.has(file.id) || transferringFileId === file.id)}
+                    isTrashView={isTrashView}
+                    isSharePoolActive={isSharePoolActive}
+                    isSearching={isSearching}
+                    onItemClick={handleItemClick}
+                    onCheckboxToggle={handleCheckboxToggle}
+                    onRowDragStart={handleRowDragStart}
+                    onTransferFile={onTransferFile}
+                    onShareItem={onShareItem}
+                    onDownload={onDownload}
+                    onTrash={onTrash}
+                    onRestore={onRestore}
+                    onPermanentDelete={onPermanentDelete}
+                  />
+                );
+              })}
             </div>
 
             <div
@@ -2528,8 +3037,14 @@ export function FileTable({
                 setIsDropZoneActive(true);
               }}
               onDragOver={(e) => {
-                if (isTrashView || isSharePoolActive || !isExternalFileDrag(e)) {
+                if (isTrashView || isSharePoolActive) return;
+                const isInternalCopy =
+                  isInternalItemDrag(e) && (e.ctrlKey || e.altKey) && Boolean(onCopyItems);
+                if (!isExternalFileDrag(e) && !isInternalCopy) {
                   if (isDropZoneActive) setIsDropZoneActive(false);
+                  return;
+                }
+                if (isInternalCopy && rejectInvalidInternalDragOver(e, cleanPath, undefined, true)) {
                   return;
                 }
                 e.preventDefault();
@@ -2537,7 +3052,7 @@ export function FileTable({
                 if (e.dataTransfer) {
                   e.dataTransfer.dropEffect = 'copy';
                 }
-                if (!isDropZoneActive) {
+                if (!isInternalCopy && !isDropZoneActive) {
                   setIsDropZoneActive(true);
                 }
               }}
@@ -2558,9 +3073,6 @@ export function FileTable({
                   <p {...stylex.props(styles.dropSubtitle)}>
                     Files will be staged for cluster allocation
                   </p>
-                  <span {...stylex.props(styles.dropTargetBadge)}>
-                    Target: {cleanPath}
-                  </span>
                 </div>
               )}
             </div>

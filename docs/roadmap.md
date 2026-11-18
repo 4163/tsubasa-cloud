@@ -197,7 +197,7 @@ flowchart TD
   - Extract mobile symmetric grid, off-canvas 300px drawer, and column collapse contracts from Dropbox mobile (`docs/teardowns/dropbox-mobile.md`).
   - Extract scale-adaptive sprite geometry, dither palettes, and bubble physics from Hanekawa (`docs/teardowns/hanekawa.md`).
   - Extract 20px table row metrics, panel docking ranges, and sage-mint tokens from QuiviT (`docs/teardowns/quivit-sage-mint.md`).
-  - Formulate StyleX design systems (color tokens, AAA contrast, spacing scales, dark and light modes in `tokens.google-drive.stylex.ts`, `tokens.mega.stylex.ts`, `tokens.dropbox.stylex.ts`, `tokens.hanekawa.stylex.ts`, and `tokens.quivit-sage-mint.stylex.ts`).
+  - Formulate StyleX design systems (color tokens, AAA contrast, spacing scales, dark and light modes in `docs/reference-tokens/tokens.google-drive.stylex.ts`, `docs/reference-tokens/tokens.mega.stylex.ts`, `docs/reference-tokens/tokens.dropbox.stylex.ts`, `docs/reference-tokens/tokens.hanekawa.stylex.ts`, and `docs/reference-tokens/tokens.quivit-sage-mint.stylex.ts`).
 - [~] **Phase 5.2: Application shell and views**
   - [x] Build main layout shell (sidebar, breadcrumbs, search bar, zero-pop-in theme mode switcher).
   - [x] Build pool status sidebar (isolated Tsubasa storage meter, per-account headroom cards, 24-hour transfer status).

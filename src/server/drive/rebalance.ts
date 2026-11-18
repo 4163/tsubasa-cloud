@@ -1,19 +1,23 @@
 import path from 'node:path';
-import { db } from '../db/index.js';
+import { bumpPoolRevision, db, sqlite } from '../db/index.js';
 import { accounts, files, type FileRecord } from '../db/schema.js';
-import { eq, inArray, sql } from 'drizzle-orm';
-import { getDriveClient } from './client.js';
-import { copyDriveFileCrossAccount, deleteDriveFileIgnoreNotFound } from './transfer.js';
-import { ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
+import { eq, inArray } from 'drizzle-orm';
+import { getDriveClient, runBoundedConcurrency, withDriveRetry } from './client.js';
+import { copyDriveFileCrossAccount } from './transfer.js';
+import { deleteRemoteFileIgnoreNotFound, enqueueDriveOutbox } from './outbox.js';
+import { clearRemoteFolderCache, ensureRemoteFolderHierarchy, normalizeVirtualPath } from './mirror.js';
 import { authPool } from './auth.js';
+import { invalidateDiscrepancyCache } from './detector.js';
 import {
   calculateHeadroom,
+  calculateUsableLimit,
   getAccountTransferStats,
-  recordTransfer,
+  recordTransferSync,
   InsufficientStorageError,
   type AccountTransferStats,
 } from '../storage/index.js';
-import { findFolderAffinityAccounts } from '../storage/placement.js';
+import { getTransferStatsByAccountMap } from '../storage/quota.js';
+import { buildPoolFolderAffinityMap } from '../storage/placement.js';
 
 export class RebalanceValidationError extends Error {
   constructor(message: string) {
@@ -55,6 +59,29 @@ export async function rebalanceFile(
     throw new Error(`Failed to rebalance file ${fileId}`);
   }
   return result;
+}
+
+function prepareRebalanceCommitStmts() {
+  return {
+    updateFile: sqlite.prepare<[string, string, string]>(
+      'UPDATE files SET account_id = ?, drive_file_id = ?, updated_at = unixepoch() WHERE id = ?'
+    ),
+    decrementSourceQuota: sqlite.prepare<[number, string]>(
+      'UPDATE accounts SET quota_used_bytes = MAX(0, quota_used_bytes - ?), updated_at = unixepoch() WHERE id = ?'
+    ),
+    incrementTargetQuota: sqlite.prepare<[number, string]>(
+      'UPDATE accounts SET quota_used_bytes = quota_used_bytes + ?, updated_at = unixepoch() WHERE id = ?'
+    ),
+  };
+}
+
+let _rebalanceCommitStmts: ReturnType<typeof prepareRebalanceCommitStmts> | null = null;
+
+function getRebalanceCommitStmts() {
+  if (!_rebalanceCommitStmts) {
+    _rebalanceCommitStmts = prepareRebalanceCommitStmts();
+  }
+  return _rebalanceCommitStmts;
 }
 
 export async function rebalanceFilesBatch(
@@ -134,16 +161,18 @@ export async function rebalanceFilesBatch(
     );
   }
 
+  const driveSource = getDriveClient(sourceAccountId);
   const driveTarget = getDriveClient(targetAccountId);
+  const targetRootFolderId = targetAccount.rootFolderId;
   const results: RebalanceOperationResult[] = [];
   let totalBytesMoved = 0;
 
   try {
-    for (const file of batchFiles) {
+    await runBoundedConcurrency(batchFiles, 5, async (file) => {
       const parentDir = path.posix.dirname(file.virtualPath);
       const targetFolderId = await ensureRemoteFolderHierarchy(
         driveTarget,
-        targetAccount.rootFolderId,
+        targetRootFolderId,
         parentDir
       );
 
@@ -165,28 +194,49 @@ export async function rebalanceFilesBatch(
 
       if (file.isTrashed) {
         try {
-          await driveTarget.files.update({
-            fileId: newDriveFileId,
-            requestBody: { trashed: true },
-            supportsAllDrives: false,
-          });
+          await withDriveRetry(() =>
+            driveTarget.files.update({
+              fileId: newDriveFileId,
+              requestBody: { trashed: true },
+              supportsAllDrives: false,
+            })
+          );
         } catch (err) {
           console.warn(`Failed to preserve trashed state on copied file ${newDriveFileId}:`, err);
+          enqueueDriveOutbox([
+            {
+              accountId: targetAccountId,
+              poolId: targetAccount.poolId,
+              opType: 'file_trash',
+              driveFileId: newDriveFileId,
+              payload: { fileId: file.id, driveFileId: newDriveFileId },
+            },
+          ]);
         }
       }
 
-      await deleteDriveFileIgnoreNotFound(sourceAccountId, file.driveFileId);
+      const stmts = getRebalanceCommitStmts();
+      sqlite.transaction(() => {
+        stmts.updateFile.run(targetAccountId, newDriveFileId, file.id);
+        stmts.decrementSourceQuota.run(file.sizeBytes, sourceAccountId);
+        stmts.incrementTargetQuota.run(file.sizeBytes, targetAccountId);
+        recordTransferSync(targetAccountId, 'upload', file.sizeBytes, Date.now(), sourceAccount.poolId);
+      }).immediate();
 
-      await db
-        .update(files)
-        .set({
-          accountId: targetAccountId,
-          driveFileId: newDriveFileId,
-          updatedAt: new Date(),
-        })
-        .where(eq(files.id, file.id));
-
-      await recordTransfer(targetAccountId, 'upload', file.sizeBytes);
+      try {
+        await deleteRemoteFileIgnoreNotFound(driveSource, file.driveFileId);
+      } catch (err) {
+        console.warn(`Failed to delete source Drive file ${file.driveFileId} after rebalance:`, err);
+        enqueueDriveOutbox([
+          {
+            accountId: sourceAccountId,
+            poolId: sourceAccount.poolId,
+            opType: 'file_delete',
+            driveFileId: file.driveFileId,
+            payload: { fileId: file.id, driveFileId: file.driveFileId },
+          },
+        ]);
+      }
 
       totalBytesMoved += file.sizeBytes;
       results.push({
@@ -197,24 +247,12 @@ export async function rebalanceFilesBatch(
         newDriveFileId,
         bytesMoved: file.sizeBytes,
       });
-    }
+    });
   } finally {
-    if (totalBytesMoved > 0) {
-      await db
-        .update(accounts)
-        .set({
-          quotaUsedBytes: sql`MAX(0, ${accounts.quotaUsedBytes} - ${totalBytesMoved})`,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, sourceAccountId));
-
-      await db
-        .update(accounts)
-        .set({
-          quotaUsedBytes: sql`${accounts.quotaUsedBytes} + ${totalBytesMoved}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, targetAccountId));
+    if (results.length > 0) {
+      bumpPoolRevision(sourceAccount.poolId);
+      invalidateDiscrepancyCache(sourceAccountId);
+      invalidateDiscrepancyCache(targetAccountId);
     }
   }
 
@@ -238,7 +276,7 @@ export async function planAccountRebalance(
     throw new Error(`Account ${sourceAccountId} not found`);
   }
 
-  const usable = account.quotaLimitBytes - 750 * 1024 * 1024;
+  const usable = calculateUsableLimit(account.quotaLimitBytes);
   if (account.quotaUsedBytes <= usable) {
     return null;
   }
@@ -277,30 +315,21 @@ export async function executeAutoRebalance(
     (a) => a.poolId === sourceAccount.poolId && a.id !== sourceAccountId && !a.isDisabled
   );
 
-  // Pre-fetch initial headroom and 24h transfer quotas for all target candidate accounts
-  const targetStates: Array<{
-    id: string;
-    headroomBytes: number;
-    remainingDailyBytes: number;
-  }> = [];
-
-  for (const cand of targetCandidates) {
-    const headroom = calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes);
-    const transferStats = await getAccountTransferStats(cand.id);
-    targetStates.push({
-      id: cand.id,
-      headroomBytes: headroom,
-      remainingDailyBytes: transferStats.remainingUploadBytes24h,
-    });
-  }
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    targetCandidates.map((cand) => cand.id)
+  );
+  const targetStates = targetCandidates.map((cand) => ({
+    id: cand.id,
+    headroomBytes: calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes),
+    remainingDailyBytes: transferStatsByAccount.get(cand.id)!.remainingUploadBytes24h,
+  }));
 
   let remainingExcess = plan.excessBytes;
-  const results: RebalanceOperationResult[] = [];
+  const groupedByTarget = new Map<string, string[]>();
 
   for (const candidateFile of plan.candidateFiles) {
     if (remainingExcess <= 0) break;
 
-    // Filter candidate target accounts that have BOTH sufficient headroom AND daily transfer quota
     const eligibleTargets = targetStates.filter(
       (t) => t.headroomBytes >= candidateFile.sizeBytes && t.remainingDailyBytes >= candidateFile.sizeBytes
     );
@@ -312,21 +341,41 @@ export async function executeAutoRebalance(
       continue;
     }
 
-    // Pick target account with largest headroom among eligible
     eligibleTargets.sort((a, b) => b.headroomBytes - a.headroomBytes);
     const chosenTarget = eligibleTargets[0];
 
-    try {
-      const res = await rebalanceFile(candidateFile.id, chosenTarget.id);
-      results.push(res);
-      remainingExcess -= candidateFile.sizeBytes;
-
-      // Update simulated headroom and daily transfer budget for subsequent files
-      chosenTarget.headroomBytes -= candidateFile.sizeBytes;
-      chosenTarget.remainingDailyBytes -= candidateFile.sizeBytes;
-    } catch (err) {
-      console.error(`Auto-rebalance failed for file ${candidateFile.id} onto target ${chosenTarget.id}:`, err);
+    const existing = groupedByTarget.get(chosenTarget.id);
+    if (existing) {
+      existing.push(candidateFile.id);
+    } else {
+      groupedByTarget.set(chosenTarget.id, [candidateFile.id]);
     }
+
+    remainingExcess -= candidateFile.sizeBytes;
+    chosenTarget.headroomBytes -= candidateFile.sizeBytes;
+    chosenTarget.remainingDailyBytes -= candidateFile.sizeBytes;
+  }
+
+  const results: RebalanceOperationResult[] = [];
+  const batchErrors: unknown[] = [];
+  for (const [targetAccountId, fileIds] of groupedByTarget) {
+    try {
+      const batchResult = await rebalanceFilesBatch(fileIds, targetAccountId);
+      results.push(...batchResult.results);
+    } catch (err) {
+      console.error(`Auto-rebalance failed for target ${targetAccountId}:`, err);
+      batchErrors.push(err);
+    }
+  }
+
+  if (batchErrors.length > 0) {
+    if (batchErrors.length === 1) {
+      throw batchErrors[0];
+    }
+    throw new AggregateError(
+      batchErrors,
+      `Auto-rebalance failed for ${batchErrors.length} target account(s)`
+    );
   }
 
   return results;
@@ -404,17 +453,19 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     transferStats: AccountTransferStats;
   }
 
-  const targetStates: TargetState[] = [];
-  for (const cand of candidateAccounts) {
-    const headroom = calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes);
-    const transferStats = await getAccountTransferStats(cand.id, nowMs);
-    targetStates.push({
+  const transferStatsByAccount = await getTransferStatsByAccountMap(
+    candidateAccounts.map((cand) => cand.id),
+    nowMs
+  );
+  const targetStates: TargetState[] = candidateAccounts.map((cand) => {
+    const transferStats = transferStatsByAccount.get(cand.id)!;
+    return {
       account: cand,
-      headroomBytes: headroom,
+      headroomBytes: calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes),
       remainingDailyBytes: transferStats.remainingUploadBytes24h,
       transferStats,
-    });
-  }
+    };
+  });
 
   const totalBytesToMove = accountFiles.reduce((sum, f) => sum + f.sizeBytes, 0);
   const totalAvailableHeadroom = targetStates.reduce((sum, t) => sum + t.headroomBytes, 0);
@@ -437,7 +488,6 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     );
   }
 
-  // Pre-flight simulation using Folder-Cohesion Best-Fit
   const simulatedHeadrooms = new Map<string, number>(
     targetStates.map((t) => [t.account.id, t.headroomBytes])
   );
@@ -447,6 +497,7 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
 
   const plan: Array<{ file: FileRecord; targetAccountId: string }> = [];
   const sortedFiles = [...accountFiles].sort((a, b) => b.sizeBytes - a.sizeBytes);
+  const affinityMap = await buildPoolFolderAffinityMap(sourceAccount.poolId);
 
   for (const file of sortedFiles) {
     const normalizedPath = normalizeVirtualPath(file.virtualPath);
@@ -478,7 +529,7 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
       );
     }
 
-    const affinityAccountIds = await findFolderAffinityAccounts(normalizedPath, sourceAccount.poolId);
+    const affinityAccountIds = affinityMap.getAffinityAccounts(normalizedPath);
     let chosenTarget = eligible.find((t) => affinityAccountIds.includes(t.account.id));
 
     if (!chosenTarget) {
@@ -493,6 +544,8 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
       }
     }
 
+    affinityMap.recordAssignment(normalizedPath, chosenTarget.account.id);
+
     const curHeadroom = simulatedHeadrooms.get(chosenTarget.account.id) ?? 0;
     const curBudget = simulatedBudgets.get(chosenTarget.account.id) ?? 0;
     simulatedHeadrooms.set(chosenTarget.account.id, curHeadroom - file.sizeBytes);
@@ -501,14 +554,23 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     plan.push({ file, targetAccountId: chosenTarget.account.id });
   }
 
-  // Pre-flight passed: execute all transfers
+  const groupedByTarget = new Map<string, string[]>();
+  for (const step of plan) {
+    const existing = groupedByTarget.get(step.targetAccountId);
+    if (existing) {
+      existing.push(step.file.id);
+    } else {
+      groupedByTarget.set(step.targetAccountId, [step.file.id]);
+    }
+  }
+
   const transfers: RebalanceOperationResult[] = [];
   let bytesMoved = 0;
 
-  for (const step of plan) {
-    const res = await rebalanceFile(step.file.id, step.targetAccountId);
-    transfers.push(res);
-    bytesMoved += step.file.sizeBytes;
+  for (const [targetAccountId, fileIds] of groupedByTarget) {
+    const batchResult = await rebalanceFilesBatch(fileIds, targetAccountId);
+    transfers.push(...batchResult.results);
+    bytesMoved += batchResult.totalBytesMoved;
   }
 
   return {
@@ -574,8 +636,35 @@ export async function removeDriveAccount(
   };
 
   if (account) {
+    if (!account.isDisabled) {
+      await db
+        .update(accounts)
+        .set({
+          isDisabled: true,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId));
+    }
+
     evacuationResult = await evacuateAccountFiles(accountId);
-    await db.delete(accounts).where(eq(accounts.id, accountId));
+
+    const deleteAccountIfEmpty = sqlite.transaction(() => {
+      const row = sqlite
+        .prepare<[string], { cnt: number }>('SELECT COUNT(*) AS cnt FROM files WHERE account_id = ?')
+        .get(accountId);
+      const cnt = row?.cnt ?? 0;
+      if (cnt > 0) {
+        throw new Error(`Cannot remove account ${accountId}: ${cnt} file(s) still remain on account`);
+      }
+      sqlite.prepare<[string]>('DELETE FROM accounts WHERE id = ?').run(accountId);
+    });
+    deleteAccountIfEmpty.immediate();
+
+    bumpPoolRevision(account.poolId);
+    invalidateDiscrepancyCache(accountId);
+    if (account.rootFolderId) {
+      clearRemoteFolderCache(account.rootFolderId);
+    }
   }
 
   authPool.removeAccount(accountId);

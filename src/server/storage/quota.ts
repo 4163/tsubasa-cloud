@@ -1,6 +1,6 @@
-import { db } from '../db/index.js';
+import { db, sqlite, buildDirectoryPrefixBounds, chunkArray } from '../db/index.js';
 import { accounts, files, pools, transferLogs } from '../db/schema.js';
-import { eq, and, gte, sql, asc, inArray } from 'drizzle-orm';
+import { eq, and, gte, lt, or, sql, asc, inArray } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 // Safety reserve strictly set aside to protect Gmail, Google Photos, and system metadata
@@ -80,40 +80,27 @@ export function calculateHeadroom(quotaLimitBytes: number, quotaUsedBytes: numbe
   return Math.max(0, usable - quotaUsedBytes);
 }
 
-function buildAccountTransferStats(
+function buildAccountTransferStatsFromAggregates(
   accountId: string,
-  activeUploads: Array<{ byteCount: number; timestamp: number }>,
+  uploadedBytes24h: number,
+  activeTransferCount24h: number,
+  oldestTransferTimestamp: number | null,
+  latestTransferTimestamp: number | null,
+  nextExpiringBytes: number | null,
   downloadedBytes24h: number,
   nowMs: number
 ): AccountTransferStats {
-  let uploadedBytes24h = 0;
-  for (const row of activeUploads) {
-    uploadedBytes24h += row.byteCount;
-  }
-
   const remainingUploadBytes24h = Math.max(0, DAILY_UPLOAD_LIMIT_BYTES - uploadedBytes24h);
   const isUploadRateLimited = remainingUploadBytes24h <= 0;
 
-  const activeTransferCount24h = activeUploads.length;
-  let oldestTransferTimestamp: number | null = null;
-  let latestTransferTimestamp: number | null = null;
   let nextResetMs: number | null = null;
   let fullResetMs: number | null = null;
-  let nextExpiringBytes: number | null = null;
 
-  if (activeUploads.length > 0) {
-    oldestTransferTimestamp = activeUploads[0].timestamp;
-    latestTransferTimestamp = activeUploads[activeUploads.length - 1].timestamp;
-
+  if (activeTransferCount24h > 0 && oldestTransferTimestamp !== null && latestTransferTimestamp !== null) {
     // Time remaining until the earliest transfer falls outside the 24h sliding window
     nextResetMs = Math.max(0, oldestTransferTimestamp + ROLLING_WINDOW_MS - nowMs);
     // Time remaining until all currently recorded transfers fall outside the sliding window
     fullResetMs = Math.max(0, latestTransferTimestamp + ROLLING_WINDOW_MS - nowMs);
-
-    // Sum byte count for all transfers matching the oldest timestamp (e.g. parallel batch chunk)
-    nextExpiringBytes = activeUploads
-      .filter((u) => u.timestamp === oldestTransferTimestamp)
-      .reduce((sum, u) => sum + u.byteCount, 0);
   }
 
   return {
@@ -128,74 +115,134 @@ function buildAccountTransferStats(
     latestTransferTimestamp,
     nextResetMs,
     fullResetMs,
-    nextExpiringBytes,
+    nextExpiringBytes: activeTransferCount24h > 0 ? nextExpiringBytes : null,
     activeTransferCount24h,
   };
 }
 
-export async function getTransferStatsByAccountMap(
+function buildEmptyTransferStats(accountId: string): AccountTransferStats {
+  return buildAccountTransferStatsFromAggregates(accountId, 0, 0, null, null, null, 0, 0);
+}
+
+function getTransferStatsByAccountMapSync(
   accountIds: string[],
   nowMs = Date.now()
-): Promise<Map<string, AccountTransferStats>> {
+): Map<string, AccountTransferStats> {
   const result = new Map<string, AccountTransferStats>();
-  if (accountIds.length === 0) {
+  const uniqueAccountIds = Array.from(new Set(accountIds));
+  if (uniqueAccountIds.length === 0) {
     return result;
   }
 
   const windowStart = nowMs - ROLLING_WINDOW_MS;
-  const allActiveUploads = await db
-    .select({
-      accountId: transferLogs.accountId,
-      byteCount: transferLogs.byteCount,
-      timestamp: transferLogs.timestamp,
-    })
-    .from(transferLogs)
-    .where(
-      and(
-        inArray(transferLogs.accountId, accountIds),
-        eq(transferLogs.transferType, 'upload'),
-        gte(transferLogs.timestamp, windowStart)
-      )
-    )
-    .orderBy(asc(transferLogs.timestamp));
-
-  const uploadsByAccount = new Map<string, Array<{ byteCount: number; timestamp: number }>>();
-  for (const row of allActiveUploads) {
-    let list = uploadsByAccount.get(row.accountId);
-    if (!list) {
-      list = [];
-      uploadsByAccount.set(row.accountId, list);
+  const uploadByAccount = new Map<
+    string,
+    {
+      uploadedBytes24h: number;
+      activeTransferCount24h: number;
+      oldestTransferTimestamp: number | null;
+      latestTransferTimestamp: number | null;
     }
-    list.push({ byteCount: row.byteCount, timestamp: row.timestamp });
+  >();
+
+  const expiringPairs = [];
+  for (const idChunk of chunkArray(uniqueAccountIds, 400)) {
+    const uploadAggregates = db
+      .select({
+        accountId: transferLogs.accountId,
+        uploadedBytes24h: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
+        activeTransferCount24h: sql<number>`count(*)`,
+        oldestTransferTimestamp: sql<number | null>`min(${transferLogs.timestamp})`,
+        latestTransferTimestamp: sql<number | null>`max(${transferLogs.timestamp})`,
+      })
+      .from(transferLogs)
+      .where(
+        and(
+          inArray(transferLogs.accountId, idChunk),
+          eq(transferLogs.transferType, 'upload'),
+          gte(transferLogs.timestamp, windowStart)
+        )
+      )
+      .groupBy(transferLogs.accountId)
+      .all();
+
+    for (const row of uploadAggregates) {
+      const count = Number(row.activeTransferCount24h || 0);
+      const oldestTs = row.oldestTransferTimestamp !== null ? Number(row.oldestTransferTimestamp) : null;
+      const latestTs = row.latestTransferTimestamp !== null ? Number(row.latestTransferTimestamp) : null;
+      uploadByAccount.set(row.accountId, {
+        uploadedBytes24h: Number(row.uploadedBytes24h || 0),
+        activeTransferCount24h: count,
+        oldestTransferTimestamp: oldestTs,
+        latestTransferTimestamp: latestTs,
+      });
+      if (count > 0 && oldestTs !== null) {
+        expiringPairs.push(and(eq(transferLogs.accountId, row.accountId), eq(transferLogs.timestamp, oldestTs)));
+      }
+    }
   }
 
-  const allDownloadTotals = await db
-    .select({
-      accountId: transferLogs.accountId,
-      totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
-    })
-    .from(transferLogs)
-    .where(
-      and(
-        inArray(transferLogs.accountId, accountIds),
-        eq(transferLogs.transferType, 'download'),
-        gte(transferLogs.timestamp, windowStart)
-      )
-    )
-    .groupBy(transferLogs.accountId);
+  const expiringByAccount = new Map<string, number>();
+  for (const pairChunk of chunkArray(expiringPairs, 400)) {
+    const expiringRows = db
+      .select({
+        accountId: transferLogs.accountId,
+        nextExpiringBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
+      })
+      .from(transferLogs)
+      .where(and(eq(transferLogs.transferType, 'upload'), or(...pairChunk)))
+      .groupBy(transferLogs.accountId)
+      .all();
+
+    for (const row of expiringRows) {
+      expiringByAccount.set(row.accountId, Number(row.nextExpiringBytes || 0));
+    }
+  }
 
   const downloadsByAccount = new Map<string, number>();
-  for (const row of allDownloadTotals) {
-    downloadsByAccount.set(row.accountId, Number(row.totalBytes || 0));
+  for (const idChunk of chunkArray(uniqueAccountIds, 400)) {
+    const allDownloadTotals = db
+      .select({
+        accountId: transferLogs.accountId,
+        totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
+      })
+      .from(transferLogs)
+      .where(
+        and(
+          inArray(transferLogs.accountId, idChunk),
+          eq(transferLogs.transferType, 'download'),
+          gte(transferLogs.timestamp, windowStart)
+        )
+      )
+      .groupBy(transferLogs.accountId)
+      .all();
+
+    for (const row of allDownloadTotals) {
+      downloadsByAccount.set(row.accountId, Number(row.totalBytes || 0));
+    }
   }
 
-  for (const accountId of accountIds) {
+  for (const accountId of uniqueAccountIds) {
+    const upload = uploadByAccount.get(accountId);
+    const downloadedBytes24h = downloadsByAccount.get(accountId) ?? 0;
+    if (!upload || upload.activeTransferCount24h === 0) {
+      result.set(
+        accountId,
+        buildAccountTransferStatsFromAggregates(accountId, 0, 0, null, null, null, downloadedBytes24h, nowMs)
+      );
+      continue;
+    }
+
     result.set(
       accountId,
-      buildAccountTransferStats(
+      buildAccountTransferStatsFromAggregates(
         accountId,
-        uploadsByAccount.get(accountId) ?? [],
-        downloadsByAccount.get(accountId) ?? 0,
+        upload.uploadedBytes24h,
+        upload.activeTransferCount24h,
+        upload.oldestTransferTimestamp,
+        upload.latestTransferTimestamp,
+        expiringByAccount.get(accountId) ?? 0,
+        downloadedBytes24h,
         nowMs
       )
     );
@@ -204,45 +251,47 @@ export async function getTransferStatsByAccountMap(
   return result;
 }
 
+export async function getTransferStatsByAccountMap(
+  accountIds: string[],
+  nowMs = Date.now()
+): Promise<Map<string, AccountTransferStats>> {
+  return getTransferStatsByAccountMapSync(accountIds, nowMs);
+}
+
 export async function getAccountTransferStats(
   accountId: string,
   nowMs = Date.now()
 ): Promise<AccountTransferStats> {
-  const windowStart = nowMs - ROLLING_WINDOW_MS;
+  const statsMap = await getTransferStatsByAccountMap([accountId], nowMs);
+  return statsMap.get(accountId) ?? buildEmptyTransferStats(accountId);
+}
 
-  // Query active upload transfers within the rolling 24-hour window, ordered chronologically
-  const activeUploads = await db
-    .select({
-      byteCount: transferLogs.byteCount,
-      timestamp: transferLogs.timestamp,
-    })
-    .from(transferLogs)
-    .where(
-      and(
-        eq(transferLogs.accountId, accountId),
-        eq(transferLogs.transferType, 'upload'),
-        gte(transferLogs.timestamp, windowStart)
-      )
-    )
-    .orderBy(transferLogs.timestamp);
+const PRUNE_COOLDOWN_MS = 600_000;
+const PRUNE_INSERT_THRESHOLD = 500;
+let lastPruneAtMs = 0;
+let insertsSincePrune = 0;
 
-  // Query downloads within the rolling 24-hour window
-  const downloadResult = await db
-    .select({
-      totalBytes: sql<number>`coalesce(sum(${transferLogs.byteCount}), 0)`,
-    })
-    .from(transferLogs)
-    .where(
-      and(
-        eq(transferLogs.accountId, accountId),
-        eq(transferLogs.transferType, 'download'),
-        gte(transferLogs.timestamp, windowStart)
-      )
-    );
+interface CachedOverviewEntry {
+  dbVersion: number;
+  cachedAtMs: number;
+  earliestExpiryMs: number;
+  value: PooledStorageOverview;
+}
 
-  const downloadedBytes24h = Number(downloadResult[0]?.totalBytes || 0);
+const MAX_OVERVIEW_CACHE_TTL_MS = 30_000;
+const overviewCache = new Map<number, CachedOverviewEntry>();
+const totalChangesStmt = sqlite.prepare('SELECT total_changes() as c');
 
-  return buildAccountTransferStats(accountId, activeUploads, downloadedBytes24h, nowMs);
+function getDbTotalChanges(): number {
+  return (totalChangesStmt.get() as { c: number }).c;
+}
+
+export function invalidatePooledStorageOverview(poolId?: number): void {
+  if (poolId === undefined) {
+    overviewCache.clear();
+  } else {
+    overviewCache.delete(poolId);
+  }
 }
 
 export async function pruneOldTransferLogs(nowMs = Date.now()): Promise<void> {
@@ -250,29 +299,55 @@ export async function pruneOldTransferLogs(nowMs = Date.now()): Promise<void> {
   await db.delete(transferLogs).where(sql`${transferLogs.timestamp} < ${cutoff}`);
 }
 
+export function recordTransferSync(
+  accountId: string,
+  transferType: 'upload' | 'download',
+  byteCount: number,
+  timestamp = Date.now(),
+  poolId?: number
+): void {
+  if (!Number.isFinite(byteCount) || byteCount <= 0) {
+    return;
+  }
+
+  db.insert(transferLogs)
+    .values({
+      id: randomUUID(),
+      accountId,
+      transferType,
+      byteCount,
+      timestamp,
+    })
+    .run();
+
+  invalidatePooledStorageOverview(poolId);
+
+  insertsSincePrune++;
+  const nowMs = Date.now();
+  if (nowMs - lastPruneAtMs >= PRUNE_COOLDOWN_MS || insertsSincePrune >= PRUNE_INSERT_THRESHOLD) {
+    lastPruneAtMs = nowMs;
+    insertsSincePrune = 0;
+    // Prune entries older than 7 days in the background
+    pruneOldTransferLogs(nowMs).catch((err) => {
+      console.warn('Transfer logs pruning warning:', err instanceof Error ? err.message : String(err));
+    });
+  }
+}
+
 export async function recordTransfer(
   accountId: string,
   transferType: 'upload' | 'download',
   byteCount: number,
-  timestamp = Date.now()
+  timestamp = Date.now(),
+  poolId?: number
 ): Promise<void> {
-  await db.insert(transferLogs).values({
-    id: randomUUID(),
-    accountId,
-    transferType,
-    byteCount,
-    timestamp,
-  });
-
-  // Prune entries older than 7 days in the background
-  pruneOldTransferLogs(timestamp).catch((err) => {
-    console.warn('Transfer logs pruning warning:', err instanceof Error ? err.message : String(err));
-  });
+  recordTransferSync(accountId, transferType, byteCount, timestamp, poolId);
 }
 
-export async function getSystemStorageBreakdown(poolId = 1): Promise<SystemStorageBreakdown> {
-  // Roadmaps classify snapshots, database mirrors, and manifests as system storage
-  const systemFileRecords = await db
+function getSystemStorageBreakdownSync(poolId = 1): SystemStorageBreakdown {
+  // Snapshots, database mirrors, and manifests stored under /.tsubasa count as system storage.
+  const { lower, upper } = buildDirectoryPrefixBounds('/.tsubasa');
+  const systemFileRecords = db
     .select({
       count: sql<number>`count(*)`,
       totalBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)`,
@@ -282,9 +357,11 @@ export async function getSystemStorageBreakdown(poolId = 1): Promise<SystemStora
       and(
         eq(files.poolId, poolId),
         eq(files.isTrashed, false),
-        sql`${files.virtualPath} LIKE '/.tsubasa/%'`
+        gte(files.virtualPath, lower),
+        lt(files.virtualPath, upper)
       )
-    );
+    )
+    .all();
 
   const row = systemFileRecords[0];
   return {
@@ -293,34 +370,66 @@ export async function getSystemStorageBreakdown(poolId = 1): Promise<SystemStora
   };
 }
 
+export async function getSystemStorageBreakdown(poolId = 1): Promise<SystemStorageBreakdown> {
+  return getSystemStorageBreakdownSync(poolId);
+}
+
 export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): Promise<PooledStorageOverview> {
-  const allAccounts = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.poolId, poolId))
-    .orderBy(asc(accounts.email));
-  const systemStorage = await getSystemStorageBreakdown(poolId);
-
-  const activeFiles = await db
-    .select({
-      accountId: files.accountId,
-      totalBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)`,
-    })
-    .from(files)
-    .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false)))
-    .groupBy(files.accountId);
-
-  const allAccountFileCounts = await db
-    .select({
-      accountId: files.accountId,
-      fileCount: sql<number>`count(*)`,
-    })
-    .from(files)
-    .groupBy(files.accountId);
-  const totalFilesByAccount = new Map<string, number>();
-  for (const row of allAccountFileCounts) {
-    totalFilesByAccount.set(row.accountId, Number(row.fileCount || 0));
+  const dbVersion = getDbTotalChanges();
+  const cached = overviewCache.get(poolId);
+  if (
+    cached &&
+    cached.dbVersion === dbVersion &&
+    nowMs >= cached.cachedAtMs &&
+    nowMs < cached.earliestExpiryMs
+  ) {
+    return cached.value;
   }
+
+  const startDbVersion = getDbTotalChanges();
+  const { allAccounts, systemStorage, activeFiles, transferStatsByAccount } = sqlite.transaction(() => {
+    const accountsRows = db
+      .select({
+        id: accounts.id,
+        email: accounts.email,
+        displayName: accounts.displayName,
+        avatarUrl: accounts.avatarUrl,
+        poolId: accounts.poolId,
+        quotaLimitBytes: accounts.quotaLimitBytes,
+        quotaUsedBytes: accounts.quotaUsedBytes,
+        syncState: accounts.syncState,
+        isDisabled: accounts.isDisabled,
+        hasFiles: sql<number>`EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`,
+      })
+      .from(accounts)
+      .where(eq(accounts.poolId, poolId))
+      .orderBy(asc(accounts.email))
+      .all();
+
+    const breakdown = getSystemStorageBreakdownSync(poolId);
+
+    const fileRows = db
+      .select({
+        accountId: files.accountId,
+        totalBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)`,
+      })
+      .from(files)
+      .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false)))
+      .groupBy(files.accountId)
+      .all();
+
+    const statsMap = getTransferStatsByAccountMapSync(
+      accountsRows.map((acc) => acc.id),
+      nowMs
+    );
+
+    return {
+      allAccounts: accountsRows,
+      systemStorage: breakdown,
+      activeFiles: fileRows,
+      transferStatsByAccount: statsMap,
+    };
+  })();
 
   const tsubasaUsedByAccount = new Map<string, number>();
   let totalTsubasaUsed = 0;
@@ -336,13 +445,10 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
   let totalUploaded24h = 0;
   let totalRemainingDailyTransfer = 0;
   let rateLimitedCount = 0;
+  let activeAccountsCount = 0;
+  let earliestExpiryMs = nowMs + MAX_OVERVIEW_CACHE_TTL_MS;
 
   const accountSummaries: AccountStorageSummary[] = [];
-
-  const transferStatsByAccount = await getTransferStatsByAccountMap(
-    allAccounts.map((acc) => acc.id),
-    nowMs
-  );
 
   for (const acc of allAccounts) {
     totalLimit += acc.quotaLimitBytes;
@@ -350,18 +456,27 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
 
     const usableLimit = calculateUsableLimit(acc.quotaLimitBytes);
     const headroom = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
-    if (!acc.isDisabled && acc.syncState !== 'error') {
-      totalHeadroom += headroom;
-    }
+    const isActiveAccount = !acc.isDisabled && acc.syncState !== 'error';
 
     const transferStats =
-      transferStatsByAccount.get(acc.id) ?? buildAccountTransferStats(acc.id, [], 0, nowMs);
+      transferStatsByAccount.get(acc.id) ?? buildEmptyTransferStats(acc.id);
     const tsubasaUsed = tsubasaUsedByAccount.get(acc.id) || 0;
 
-    totalUploaded24h += transferStats.uploadedBytes24h;
-    totalRemainingDailyTransfer += transferStats.remainingUploadBytes24h;
-    if (transferStats.isUploadRateLimited) {
-      rateLimitedCount++;
+    if (transferStats.oldestTransferTimestamp !== null) {
+      const expiry = transferStats.oldestTransferTimestamp + ROLLING_WINDOW_MS;
+      if (expiry < earliestExpiryMs) {
+        earliestExpiryMs = expiry;
+      }
+    }
+
+    if (isActiveAccount) {
+      activeAccountsCount++;
+      totalHeadroom += headroom;
+      totalUploaded24h += transferStats.uploadedBytes24h;
+      totalRemainingDailyTransfer += transferStats.remainingUploadBytes24h;
+      if (transferStats.isUploadRateLimited) {
+        rateLimitedCount++;
+      }
     }
 
     accountSummaries.push({
@@ -370,7 +485,7 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
       displayName: acc.displayName,
       avatarUrl: acc.avatarUrl,
       poolId: acc.poolId,
-      canSwitchPool: (totalFilesByAccount.get(acc.id) ?? 0) === 0,
+      canSwitchPool: !acc.hasFiles,
       quotaLimitBytes: acc.quotaLimitBytes,
       quotaUsedBytes: acc.quotaUsedBytes,
       usableLimitBytes: usableLimit,
@@ -382,9 +497,9 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
     });
   }
 
-  const clusterDailyCapacity = allAccounts.length * DAILY_UPLOAD_LIMIT_BYTES;
+  const clusterDailyCapacity = activeAccountsCount * DAILY_UPLOAD_LIMIT_BYTES;
 
-  return {
+  const overview: PooledStorageOverview = {
     poolId,
     totalAccounts: allAccounts.length,
     totalLimitBytes: totalLimit,
@@ -400,6 +515,17 @@ export async function getPooledStorageOverview(poolId = 1, nowMs = Date.now()): 
     },
     accounts: accountSummaries,
   };
+
+  if (getDbTotalChanges() === startDbVersion) {
+    overviewCache.set(poolId, {
+      dbVersion: startDbVersion,
+      cachedAtMs: nowMs,
+      earliestExpiryMs,
+      value: overview,
+    });
+  }
+
+  return overview;
 }
 
 export interface EmptyShareAccount {
@@ -424,7 +550,7 @@ export async function getEmptyAccountsAcrossAllPools(
   nowMs = Date.now(),
   authorizedAccountIds?: ReadonlySet<string>
 ): Promise<EmptyShareAccount[]> {
-  const rows = await db
+  const emptyAccounts = await db
     .select({
       id: accounts.id,
       email: accounts.email,
@@ -440,22 +566,9 @@ export async function getEmptyAccountsAcrossAllPools(
     })
     .from(accounts)
     .innerJoin(pools, eq(accounts.poolId, pools.id))
+    .where(sql`NOT EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`)
     .orderBy(asc(pools.isSharePool), asc(pools.id), asc(accounts.email));
 
-  const allAccountFileCounts = await db
-    .select({
-      accountId: files.accountId,
-      fileCount: sql<number>`count(*)`,
-    })
-    .from(files)
-    .groupBy(files.accountId);
-
-  const fileCountByAccount = new Map<string, number>();
-  for (const row of allAccountFileCounts) {
-    fileCountByAccount.set(row.accountId, Number(row.fileCount || 0));
-  }
-
-  const emptyAccounts = rows.filter((acc) => (fileCountByAccount.get(acc.id) ?? 0) === 0);
   const transferStatsByAccount = await getTransferStatsByAccountMap(
     emptyAccounts.map((acc) => acc.id),
     nowMs
@@ -466,7 +579,7 @@ export async function getEmptyAccountsAcrossAllPools(
     const usableLimitBytes = calculateUsableLimit(acc.quotaLimitBytes);
     const headroomBytes = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
     const transferStats =
-      transferStatsByAccount.get(acc.id) ?? buildAccountTransferStats(acc.id, [], 0, nowMs);
+      transferStatsByAccount.get(acc.id) ?? buildEmptyTransferStats(acc.id);
     const authorized = authorizedAccountIds ? authorizedAccountIds.has(acc.id) : false;
 
     results.push({

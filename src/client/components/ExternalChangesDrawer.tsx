@@ -1,10 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { client } from '../api.js';
-import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js';
-import { IconClose, IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
+import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
+import { IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
+import { DrawerSheet, DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
 import { formatBytes } from '../utils/format.js';
-import { useDialogLock } from '../utils/useBeforeUnload.js';
+import {
+  getDiscrepancyReportCache,
+  setDiscrepancyReportCache,
+  invalidateDiscrepancyReportCache,
+} from '../utils/queryCache.js';
 
 export interface ExternalDiscrepancyItem {
   driveFileId: string;
@@ -70,6 +76,7 @@ interface ExternalChangesDrawerProps {
     tsubasaUsedBytes?: number;
   }>;
   initialAccountId?: string;
+  isMobileSidebarOpen?: boolean;
   onResolved: (summary?: { accountId: string; remainingCount: number; refreshFiles?: boolean }) => Promise<void>;
 }
 
@@ -84,93 +91,36 @@ function countDiscrepancies(report: DiscrepancyReport | null | undefined): numbe
   );
 }
 
+const VIRTUALIZE_THRESHOLD = 30;
+
+type ExternalChangesDisplayRow =
+  | { type: 'overCeiling-header'; key: 'overCeiling-header'; count: number }
+  | { type: 'overCeiling-subbar'; key: 'overCeiling-subbar' }
+  | { type: 'overCeiling-item'; key: string; item: ExternalDiscrepancyItem }
+  | { type: 'conflicts-header'; key: 'conflicts-header'; count: number }
+  | {
+      type: 'conflicts-subbar';
+      key: 'conflicts-subbar';
+      conflictCount: number;
+      exactDuplicateCount: number;
+    }
+  | { type: 'conflict-item'; key: string; item: PathConflictItem }
+  | { type: 'pool-summary-header'; key: 'pool-summary-header'; count: number }
+  | { type: 'pool-summary-card'; key: 'pool-summary-card' }
+  | { type: 'unindexed-header'; key: 'unindexed-header'; count: number }
+  | { type: 'unindexed-item'; key: string; item: ExternalDiscrepancyItem }
+  | { type: 'modified-header'; key: 'modified-header'; count: number }
+  | { type: 'modified-item'; key: string; item: ExternalDiscrepancyItem }
+  | { type: 'missingRemote-header'; key: 'missingRemote-header'; count: number }
+  | { type: 'missingRemote-subbar'; key: 'missingRemote-subbar' }
+  | {
+      type: 'missingRemote-item';
+      key: string;
+      item: DiscrepancyReport['missingRemote'][number];
+    }
+  | { type: 'rebalance-banner'; key: 'rebalance-banner' };
+
 const styles = stylex.create({
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: colors.modalBackdrop,
-    zIndex: 90,
-    transition: motion.transitionFast,
-  },
-  drawer: {
-    position: 'fixed',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    width: '460px',
-    maxWidth: '100vw',
-    backgroundColor: colors.surface,
-    borderLeftWidth: '1px',
-    borderLeftStyle: 'solid',
-    borderLeftColor: colors.borderSubtle,
-    display: 'flex',
-    flexDirection: 'column',
-    zIndex: 100,
-    boxSizing: 'border-box',
-    transform: 'translateX(0)',
-    transition: 'transform 0.25s ease-out',
-    '@media (max-width: 768px)': {
-      width: '100vw',
-    },
-  },
-  drawerHeader: {
-    height: '56px',
-    paddingLeft: spacing.space6,
-    paddingRight: spacing.space6,
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: colors.borderSubtle,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexShrink: 0,
-    backgroundColor: colors.surface,
-  },
-  titleGroup: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
-  },
-  title: {
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeTitle,
-    fontWeight: typography.fontWeightTitle,
-    color: colors.primaryText,
-    margin: 0,
-  },
-  closeBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: '0px',
-    cursor: 'pointer',
-    color: colors.secondaryText,
-    padding: spacing.space2,
-    borderRadius: radius.compact,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    outline: 'none',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      color: colors.primaryText,
-    },
-    ':focus-visible': {
-      outlineWidth: '2px',
-      outlineStyle: 'solid',
-      outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
-    },
-    ':disabled': {
-      opacity: 0.35,
-      cursor: 'not-allowed',
-      backgroundColor: 'transparent',
-      color: colors.secondaryText,
-    },
-    '@media (pointer: coarse)': {
-      minWidth: '44px',
-      minHeight: '44px',
-    },
-  },
   accountSelectorBar: {
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
@@ -198,32 +148,33 @@ const styles = stylex.create({
     WebkitAppearance: 'none',
     MozAppearance: 'none',
     width: '100%',
-    height: '32px',
-    lineHeight: '28px',
+    height: layout.tableRowHeightCompact,
+    lineHeight: '26px',
     paddingTop: '2px',
     paddingBottom: '2px',
     paddingLeft: spacing.space3,
     paddingRight: '28px',
     borderRadius: radius.compact,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceAlt,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
+    borderColor: colors.border,
     color: colors.primaryText,
     fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
+    fontSize: typography.fontSizeBody,
     fontWeight: '500',
     outline: 'none',
     cursor: 'pointer',
     boxSizing: 'border-box',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    transition: motion.transitionFast,
+    transitionProperty: 'background-color, border-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      borderColor: colors.brandAccent,
-      backgroundColor: colors.surface,
+      borderColor: colors.accentGold,
     },
-    ':focus': {
+    ':focus-visible': {
       borderColor: colors.focusRing,
       outlineWidth: '2px',
       outlineStyle: 'solid',
@@ -237,7 +188,7 @@ const styles = stylex.create({
   },
   selectChevron: {
     position: 'absolute',
-    right: '8px',
+    right: spacing.space4,
     top: '50%',
     transform: 'translateY(-50%)',
     pointerEvents: 'none',
@@ -246,40 +197,48 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  rescanBtn: {
+    height: layout.tableRowHeightCompact,
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    borderRadius: radius.compact,
+    fontSize: typography.fontSizeBody,
+    flexShrink: 0,
+  },
   contentScroll: {
     flex: 1,
     overflowY: 'auto',
-    paddingTop: spacing.space5,
-    paddingBottom: spacing.space5,
+    paddingTop: 0,
+    paddingBottom: 0,
     paddingLeft: 0,
     paddingRight: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.space4,
+    gap: 0,
   },
-  sectionTitle: {
-    fontSize: typography.fontSizeSection,
-    fontWeight: typography.fontWeightSection,
-    color: colors.primaryText,
-    margin: 0,
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
+  sectionSubBar: {
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
+    backgroundColor: colors.surface,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     display: 'flex',
-    alignItems: 'center',
+    flexDirection: 'column',
     gap: spacing.space2,
-  },
-  sectionDesc: {
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
   },
   card: {
     position: 'relative',
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
+    paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
-    borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
@@ -288,49 +247,45 @@ const styles = stylex.create({
     ':hover': {
       backgroundColor: colors.rowHover,
     },
-    '@media (max-width: 768px)': {
-      paddingRight: spacing.space5,
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: 'transparent',
-    },
   },
   cardOverCeiling: {
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.danger,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      borderLeftColor: colors.danger,
+      display: 'block',
     },
   },
   cardConflict: {
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.warning,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      borderLeftColor: colors.warning,
+      display: 'block',
     },
   },
   batchActionsBar: {
@@ -338,39 +293,49 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
     flexWrap: 'wrap',
-    paddingLeft: spacing.space5,
-    paddingRight: spacing.space5,
-    marginTop: spacing.space2,
+  },
+  fileIconWrap: {
+    width: '16px',
+    height: '16px',
+    marginTop: '2px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   poolFolderIcon: {
-    display: 'inline-flex',
-    flexShrink: 0,
     color: colors.poolGold,
   },
   conflictBadgeExact: {
     display: 'inline-flex',
     alignItems: 'center',
-    height: '20px',
+    height: spacing.space7,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
     backgroundColor: colors.brandAccentSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
     color: colors.brandAccent,
     fontSize: typography.fontSizeBadge,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightBadge,
     flexShrink: 0,
   },
   conflictBadgeDiff: {
     display: 'inline-flex',
     alignItems: 'center',
-    height: '20px',
+    height: spacing.space7,
     paddingLeft: spacing.space2,
     paddingRight: spacing.space2,
     borderRadius: radius.compact,
     backgroundColor: colors.warningSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.warningBorder,
     color: colors.warning,
     fontSize: typography.fontSizeBadge,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightBadge,
     flexShrink: 0,
   },
   conflictCompareBox: {
@@ -388,41 +353,35 @@ const styles = stylex.create({
     borderColor: colors.borderSubtle,
   },
   conflictCompareRow: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: '64px minmax(0, 1fr) auto',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: spacing.space2,
-    fontSize: typography.fontSizeMeta,
     fontVariantNumeric: 'tabular-nums',
-  },
-  conflictCompareLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space2,
-    minWidth: 0,
-    flex: 1,
   },
   conflictOriginTag: {
     fontSize: typography.fontSizeBadge,
-    fontWeight: '600',
-    color: colors.primaryText,
-    minWidth: '66px',
-    flexShrink: 0,
+    fontWeight: typography.fontWeightBadge,
+    textTransform: 'uppercase',
+    color: colors.secondaryText,
+    letterSpacing: '0.02em',
   },
   conflictAccountEmail: {
     fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
+    color: colors.primaryText,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     minWidth: 0,
   },
   conflictSizeText: {
+    fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
     color: colors.primaryText,
-    fontWeight: '500',
+    fontWeight: typography.fontWeightTitle,
     fontVariantNumeric: 'tabular-nums',
+    textAlign: 'right',
     flexShrink: 0,
   },
   fileHeaderRow: {
@@ -433,35 +392,38 @@ const styles = stylex.create({
   },
   fileTitleGroup: {
     display: 'flex',
-    alignItems: 'center',
-    gap: spacing.space3,
+    alignItems: 'flex-start',
+    gap: spacing.space4,
     minWidth: 0,
     flex: 1,
   },
   fileName: {
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
   fileMeta: {
+    fontFamily: typography.fontFamilyMono,
     fontSize: typography.fontSizeMeta,
-    color: colors.secondaryText,
+    fontWeight: typography.fontWeightTitle,
+    color: colors.primaryText,
     fontVariantNumeric: 'tabular-nums',
+    flexShrink: 0,
   },
   cardDesc: {
-    fontSize: '12px',
+    fontSize: typography.fontSizeMeta,
     color: colors.secondaryText,
-    lineHeight: '1.4',
+    lineHeight: typography.lineHeightBody,
     margin: 0,
   },
   confirmPromptText: {
     fontSize: typography.fontSizeMeta,
     fontWeight: '500',
     color: colors.primaryText,
-    lineHeight: '1.4',
+    lineHeight: typography.lineHeightBody,
     margin: 0,
     fontVariantNumeric: 'tabular-nums',
   },
@@ -470,111 +432,49 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
     flexWrap: 'wrap',
-    marginTop: spacing.space1,
-  },
-  btnPrimary: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.brandAccent,
-    color: colors.brandAccentText,
-    borderWidth: '0px',
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.brandAccentHover,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-  },
-  btnSecondary: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.surface,
-    color: colors.primaryText,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.borderSubtle,
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '500',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.rowHover,
-      borderColor: colors.border,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
-  },
-  btnDanger: {
-    height: '28px',
-    paddingLeft: spacing.space3,
-    paddingRight: spacing.space3,
-    borderRadius: radius.button,
-    backgroundColor: colors.danger,
-    color: colors.dangerText,
-    borderWidth: '0px',
-    fontFamily: typography.fontFamilyBody,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: motion.transitionFast,
-    ':hover': {
-      backgroundColor: colors.dangerHover,
-    },
-    ':disabled': {
-      opacity: 0.5,
-      cursor: 'not-allowed',
-    },
   },
   statusNoticeBanner: {
     position: 'relative',
+    flexShrink: 0,
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
+    paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
-    borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: colors.dangerSurface,
     color: colors.danger,
     fontSize: typography.fontSizeMeta,
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.danger,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      paddingRight: spacing.space5,
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: colors.danger,
+      display: 'block',
     },
   },
-  cardList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 0,
-    marginTop: spacing.space3,
+  virtualListInner: {
+    position: 'relative',
+    width: '100%',
+  },
+  virtualRow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
   },
   fileTitleCol: {
     display: 'flex',
@@ -593,7 +493,7 @@ const styles = stylex.create({
   },
   rebalanceTitle: {
     fontSize: typography.fontSizeBody,
-    fontWeight: '600',
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
   },
   scanningNoticeText: {
@@ -601,18 +501,20 @@ const styles = stylex.create({
     color: colors.dimText,
   },
   emptyNoticeTitle: {
-    fontSize: '14px',
-    fontWeight: '600',
+    fontSize: typography.fontSizeSection,
+    fontWeight: typography.fontWeightTitle,
     color: colors.primaryText,
   },
   rebalanceBanner: {
     position: 'relative',
     paddingTop: spacing.space3,
     paddingBottom: spacing.space3,
-    paddingLeft: spacing.space5,
+    paddingLeft: spacing.space6,
     paddingRight: spacing.space6,
     borderRadius: radius.none,
-    borderWidth: '0px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
     backgroundColor: 'transparent',
     display: 'flex',
     flexDirection: 'column',
@@ -620,22 +522,20 @@ const styles = stylex.create({
     '::after': {
       content: '""',
       position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: spacing.space2,
+      top: '1px',
+      bottom: '1px',
+      right: {
+        default: spacing.space2,
+        '@media (max-width: 768px)': 'auto',
+      },
+      left: {
+        default: 'auto',
+        '@media (max-width: 768px)': 0,
+      },
       width: '3px',
       backgroundColor: colors.warning,
       pointerEvents: 'none',
-      display: {
-        default: 'block',
-        '@media (max-width: 768px)': 'none',
-      },
-    },
-    '@media (max-width: 768px)': {
-      paddingRight: spacing.space5,
-      borderLeftWidth: '3px',
-      borderLeftStyle: 'solid',
-      borderLeftColor: colors.warning,
+      display: 'block',
     },
   },
   emptyNotice: {
@@ -663,6 +563,7 @@ export function ExternalChangesDrawer({
   onClose,
   accounts,
   initialAccountId,
+  isMobileSidebarOpen = false,
   onResolved,
 }: ExternalChangesDrawerProps) {
   const [selectedAccount, setSelectedAccount] = useState<string>(() => {
@@ -679,6 +580,8 @@ export function ExternalChangesDrawer({
   const [confirmingEject, setConfirmingEject] = useState(false);
 
   const activeScanRef = useRef<string | null>(null);
+  const scanSeqRef = useRef(0);
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   const currentAccount = accounts.find((a) => a.id === selectedAccount);
   const isBreached = currentAccount
@@ -688,46 +591,82 @@ export function ExternalChangesDrawer({
   const showRebalance = isBreached && hasPoolFiles;
 
   useEffect(() => {
+    if (accounts.length === 0) {
+      setSelectedAccount('');
+      setReport(null);
+      return;
+    }
     if (initialAccountId && accounts.some((a) => a.id === initialAccountId)) {
       setSelectedAccount(initialAccountId);
-    } else if (accounts.length > 0 && (!selectedAccount || !accounts.some((a) => a.id === selectedAccount))) {
+    } else if (!selectedAccount || !accounts.some((a) => a.id === selectedAccount)) {
       setSelectedAccount(accounts[0].id);
     }
   }, [initialAccountId, accounts]);
 
   const scanAccount = useCallback(async (accId: string, forceRefresh = false): Promise<DiscrepancyReport | null> => {
     if (!accId) return null;
+
+    scanAbortRef.current?.abort();
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    const scanSeq = ++scanSeqRef.current;
     activeScanRef.current = accId;
+
+    const cached = !forceRefresh ? getDiscrepancyReportCache(accId) : null;
+    if (cached) {
+      setReport(cached);
+    } else if (!forceRefresh) {
+      setReport(null);
+    } else {
+      setReport((prev) => (prev?.accountId === accId ? prev : null));
+    }
+
     setIsScanning(true);
-    setReport(null);
     setStatusNotice(null);
     setConfirmingEject(false);
 
+    const isCurrentScan = () =>
+      scanSeq === scanSeqRef.current &&
+      activeScanRef.current === accId &&
+      !controller.signal.aborted;
+
     try {
-      const res = await client.api.sync['external-changes'][':accountId'].$get({
-        param: { accountId: accId },
-        query: forceRefresh ? { refresh: '1' } : {},
-      });
-      if (activeScanRef.current !== accId) return null;
+      const res = await client.api.sync['external-changes'][':accountId'].$get(
+        {
+          param: { accountId: accId },
+          query: forceRefresh ? { refresh: '1' } : {},
+        },
+        { init: { signal: controller.signal } }
+      );
+      if (!isCurrentScan()) return null;
 
       if (res.ok) {
         const data = (await res.json()) as DiscrepancyReport;
-        if (activeScanRef.current === accId) {
+        if (isCurrentScan()) {
+          setDiscrepancyReportCache(accId, data);
           setReport(data);
           return data;
         }
       } else {
         const errData = await res.json().catch(() => ({}));
-        if (activeScanRef.current === accId) {
+        if (isCurrentScan()) {
           setStatusNotice(('error' in errData ? errData.error : null) || `Scan failed (${res.status})`);
         }
       }
     } catch (err) {
-      if (activeScanRef.current === accId) {
+      const isAbortError =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && err.name === 'AbortError');
+      if (isAbortError) return null;
+      if (isCurrentScan()) {
         setStatusNotice(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      if (activeScanRef.current === accId) {
+      if (scanSeq === scanSeqRef.current && activeScanRef.current === accId) {
+        if (scanAbortRef.current === controller) {
+          scanAbortRef.current = null;
+        }
         setIsScanning(false);
       }
     }
@@ -738,10 +677,19 @@ export function ExternalChangesDrawer({
     if (isOpen && selectedAccount) {
       setShowIndividualFiles(false);
       setConfirmingEject(false);
-      scanAccount(selectedAccount);
+      void scanAccount(selectedAccount);
+    } else {
+      scanAbortRef.current?.abort();
+      scanAbortRef.current = null;
+      activeScanRef.current = null;
+      scanSeqRef.current += 1;
+      setIsScanning(false);
     }
     return () => {
+      scanAbortRef.current?.abort();
+      scanAbortRef.current = null;
       activeScanRef.current = null;
+      scanSeqRef.current += 1;
     };
   }, [isOpen, selectedAccount, scanAccount]);
 
@@ -769,6 +717,7 @@ export function ExternalChangesDrawer({
               overCeiling: report.overCeiling.filter((i) => i.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -811,22 +760,38 @@ export function ExternalChangesDrawer({
 
       if (res.ok) {
         const data = await res.json();
-        const nextReport: DiscrepancyReport | null = report
-          ? {
-              ...report,
-              unindexed: [],
-              modified: [],
-            }
-          : null;
-        setReport(nextReport);
         setConfirmingEject(false);
-        await onResolved({
-          accountId: selectedAccount,
-          remainingCount: countDiscrepancies(nextReport),
-          refreshFiles: action === 'accept-all',
-        });
-        if ('failedCount' in data && data.failedCount > 0) {
-          setStatusNotice(`${data.failedCount.toLocaleString()} files could not be ejected. Check the server log.`);
+        if (
+          action === 'eject-all' &&
+          'failedCount' in data &&
+          typeof data.failedCount === 'number' &&
+          data.failedCount > 0
+        ) {
+          invalidateDiscrepancyReportCache(selectedAccount);
+          const rescanned = await scanAccount(selectedAccount, true);
+          await onResolved({
+            accountId: selectedAccount,
+            remainingCount: countDiscrepancies(rescanned ?? report),
+            refreshFiles: false,
+          });
+          setStatusNotice(
+            `${data.failedCount.toLocaleString()} files could not be ejected. Check the server log.`
+          );
+        } else {
+          const nextReport: DiscrepancyReport | null = report
+            ? {
+                ...report,
+                unindexed: [],
+                modified: [],
+              }
+            : null;
+          if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
+          setReport(nextReport);
+          await onResolved({
+            accountId: selectedAccount,
+            remainingCount: countDiscrepancies(nextReport),
+            refreshFiles: action === 'accept-all',
+          });
         }
       } else {
         const err = await res.json().catch(() => ({}));
@@ -859,6 +824,7 @@ export function ExternalChangesDrawer({
               modified: report.modified.filter((i) => i.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -894,6 +860,7 @@ export function ExternalChangesDrawer({
               missingRemote: report.missingRemote.filter((i) => i.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -921,14 +888,25 @@ export function ExternalChangesDrawer({
 
       if (res.ok) {
         const data = await res.json();
-        const count = ('results' in data && Array.isArray(data.results)) ? data.results.length : 0;
-        setStatusNotice(`Rebalance complete. ${count} files migrated.`);
+        const rawResults = 'results' in data && Array.isArray(data.results) ? data.results : [];
+        const succeededCount = rawResults.filter(
+          (r) => r && (!('success' in r) || Boolean((r as { success?: boolean }).success))
+        ).length;
+        const failedCount = rawResults.length - succeededCount;
+        invalidateDiscrepancyReportCache(selectedAccount);
         const scannedReport = await scanAccount(selectedAccount, true);
         await onResolved({
           accountId: selectedAccount,
-          remainingCount: countDiscrepancies(scannedReport),
+          remainingCount: countDiscrepancies(scannedReport ?? report),
           refreshFiles: true,
         });
+        if (failedCount > 0) {
+          setStatusNotice(
+            `Rebalance complete. ${succeededCount} files migrated, ${failedCount} failed.`
+          );
+        } else {
+          setStatusNotice(`Rebalance complete. ${succeededCount} files migrated.`);
+        }
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Auto-rebalance failed');
@@ -963,6 +941,7 @@ export function ExternalChangesDrawer({
               conflicts: report.conflicts.filter((c) => c.driveFileId !== item.driveFileId),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
@@ -999,19 +978,45 @@ export function ExternalChangesDrawer({
         },
       });
       if (res.ok) {
-        const resolvedIds = new Set(items.map((i) => i.driveFileId));
+        const data = await res.json();
+        const results =
+          'results' in data && Array.isArray(data.results) ? data.results : null;
+        const succeededIds = results
+          ? new Set(
+              results
+                .filter((r) => r && r.success === true && typeof r.driveFileId === 'string')
+                .map((r) => r.driveFileId)
+            )
+          : new Set(items.map((i) => i.driveFileId));
+        const failedResults = results ? results.filter((r) => r && r.success !== true) : [];
+        const failedCount =
+          'failedCount' in data && typeof data.failedCount === 'number'
+            ? data.failedCount
+            : failedResults.length;
+
         const nextReport: DiscrepancyReport | null = report
           ? {
               ...report,
-              conflicts: report.conflicts.filter((c) => !resolvedIds.has(c.driveFileId)),
+              conflicts: report.conflicts.filter((c) => !succeededIds.has(c.driveFileId)),
             }
           : null;
+        if (nextReport) setDiscrepancyReportCache(selectedAccount, nextReport);
         setReport(nextReport);
         await onResolved({
           accountId: selectedAccount,
           remainingCount: countDiscrepancies(nextReport),
-          refreshFiles: resolution === 'keep_both',
+          refreshFiles: resolution === 'keep_both' && succeededIds.size > 0,
         });
+        if (failedCount > 0) {
+          const firstError = failedResults.find(
+            (r) => typeof r.error === 'string' && r.error
+          )?.error;
+          setStatusNotice(
+            firstError
+              ? `${failedCount.toLocaleString()} conflict(s) failed to resolve: ${firstError}`
+              : `${failedCount.toLocaleString()} conflict(s) failed to resolve.`
+          );
+        }
       } else {
         const err = await res.json().catch(() => ({}));
         setStatusNotice(('error' in err ? err.error : null) || 'Failed to resolve conflicts');
@@ -1024,14 +1029,17 @@ export function ExternalChangesDrawer({
   };
 
   const isLocked = activeActionId !== null;
+  const contentScrollRef = useRef<HTMLDivElement>(null);
 
-  useDialogLock(isOpen, isLocked, onClose);
+  const exactDuplicates = useMemo(
+    () => (report?.conflicts ?? []).filter((c) => c.isExactDuplicate),
+    [report?.conflicts]
+  );
 
-  if (!isOpen) return null;
-
-  const exactDuplicates = (report?.conflicts ?? []).filter((c) => c.isExactDuplicate);
-
-  const acceptableItems = [...(report?.unindexed ?? []), ...(report?.modified ?? [])];
+  const acceptableItems = useMemo(
+    () => [...(report?.unindexed ?? []), ...(report?.modified ?? [])],
+    [report?.unindexed, report?.modified]
+  );
   const showPoolSummary = acceptableItems.length > 1;
   const showIndividualAcceptable = !showPoolSummary || showIndividualFiles;
   let acceptableBytes = 0;
@@ -1051,572 +1059,704 @@ export function ExternalChangesDrawer({
 
   const totalDiscrepancies = countDiscrepancies(report);
 
-  return (
-    <>
-      <div
-        {...stylex.props(styles.backdrop)}
-        onClick={() => {
-          if (!isLocked) onClose();
-        }}
-      />
-      <div {...stylex.props(styles.drawer)} role="dialog" aria-modal="true" aria-label="External modifications">
-        <div {...stylex.props(styles.drawerHeader)}>
-          <div {...stylex.props(styles.titleGroup)}>
-            <IconAlertTriangle size={18} />
-            <h2 {...stylex.props(styles.title)}>External changes</h2>
-          </div>
-          <button
-            type="button"
-            {...stylex.props(styles.closeBtn)}
-            onClick={onClose}
-            disabled={isLocked}
-            aria-label="Close drawer"
-          >
-            <IconClose size={16} />
-          </button>
-        </div>
+  const displayRows = useMemo<ExternalChangesDisplayRow[]>(() => {
+    const rows: ExternalChangesDisplayRow[] = [];
 
-        <div {...stylex.props(styles.accountSelectorBar)}>
-          <div {...stylex.props(styles.selectWrapper)}>
-            <select
-              aria-label="Select connected account"
-              title={(() => {
-                const cur = accounts.find((a) => a.id === selectedAccount);
-                return cur ? `${cur.displayName || cur.id} (${cur.email || cur.id})` : 'Select connected account';
-              })()}
-              {...stylex.props(styles.select)}
-              value={selectedAccount}
-              onChange={(e) => setSelectedAccount(e.target.value)}
-              disabled={accounts.length === 0 || isScanning || isLocked}
-            >
-              {accounts.length === 0 ? (
-                <option value="" disabled>
-                  No accounts with external changes
-                </option>
-              ) : (
-                accounts.map((acc) => (
-                  <option
-                    key={acc.id}
-                    value={acc.id}
-                    title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
+    if (report?.overCeiling && report.overCeiling.length > 0) {
+      rows.push({
+        type: 'overCeiling-header',
+        key: 'overCeiling-header',
+        count: report.overCeiling.length,
+      });
+      rows.push({ type: 'overCeiling-subbar', key: 'overCeiling-subbar' });
+      for (const item of report.overCeiling) {
+        rows.push({
+          type: 'overCeiling-item',
+          key: `overCeiling-${item.driveFileId}`,
+          item,
+        });
+      }
+    }
+
+    if (report?.conflicts && report.conflicts.length > 0) {
+      rows.push({
+        type: 'conflicts-header',
+        key: 'conflicts-header',
+        count: report.conflicts.length,
+      });
+      rows.push({
+        type: 'conflicts-subbar',
+        key: 'conflicts-subbar',
+        conflictCount: report.conflicts.length,
+        exactDuplicateCount: exactDuplicates.length,
+      });
+      for (const item of report.conflicts) {
+        rows.push({
+          type: 'conflict-item',
+          key: `conflict-${item.driveFileId}`,
+          item,
+        });
+      }
+    }
+
+    if (report && showPoolSummary) {
+      rows.push({
+        type: 'pool-summary-header',
+        key: 'pool-summary-header',
+        count: acceptableItems.length,
+      });
+      rows.push({ type: 'pool-summary-card', key: 'pool-summary-card' });
+    }
+
+    if (showIndividualAcceptable && report?.unindexed && report.unindexed.length > 0) {
+      rows.push({
+        type: 'unindexed-header',
+        key: 'unindexed-header',
+        count: report.unindexed.length,
+      });
+      for (const item of report.unindexed) {
+        rows.push({
+          type: 'unindexed-item',
+          key: `unindexed-${item.driveFileId}`,
+          item,
+        });
+      }
+    }
+
+    if (showIndividualAcceptable && report?.modified && report.modified.length > 0) {
+      rows.push({
+        type: 'modified-header',
+        key: 'modified-header',
+        count: report.modified.length,
+      });
+      for (const item of report.modified) {
+        rows.push({
+          type: 'modified-item',
+          key: `modified-${item.driveFileId}`,
+          item,
+        });
+      }
+    }
+
+    if (report?.missingRemote && report.missingRemote.length > 0) {
+      rows.push({
+        type: 'missingRemote-header',
+        key: 'missingRemote-header',
+        count: report.missingRemote.length,
+      });
+      rows.push({ type: 'missingRemote-subbar', key: 'missingRemote-subbar' });
+      for (const item of report.missingRemote) {
+        rows.push({
+          type: 'missingRemote-item',
+          key: `missingRemote-${item.driveFileId}`,
+          item,
+        });
+      }
+    }
+
+    if (showRebalance) {
+      rows.push({ type: 'rebalance-banner', key: 'rebalance-banner' });
+    }
+
+    return rows;
+  }, [report, exactDuplicates.length, showPoolSummary, acceptableItems.length, showIndividualAcceptable, showRebalance]);
+
+  const shouldVirtualize = displayRows.length > VIRTUALIZE_THRESHOLD;
+
+  const rowVirtualizer = useVirtualizer({
+    count: shouldVirtualize ? displayRows.length : 0,
+    getScrollElement: () => contentScrollRef.current,
+    estimateSize: () => 96,
+    getItemKey: (index) => displayRows[index]?.key ?? index,
+    overscan: 6,
+  });
+
+  const renderDisplayRow = (row: ExternalChangesDisplayRow): React.ReactNode => {
+    switch (row.type) {
+      case 'overCeiling-header':
+        return (
+          <DrawerSectionHeader
+            icon={<IconAlertTriangle size={14} color={colors.danger} />}
+            title="Over-ceiling files (> 14.25 GB)"
+            count={row.count.toLocaleString()}
+          />
+        );
+      case 'overCeiling-subbar':
+        return (
+          <div {...stylex.props(styles.sectionSubBar)}>
+            <p {...stylex.props(styles.cardDesc)}>
+              Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
+            </p>
+          </div>
+        );
+      case 'overCeiling-item': {
+        const { item } = row;
+        return (
+          <div {...stylex.props(styles.card, styles.cardOverCeiling)}>
+            <div {...stylex.props(styles.fileHeaderRow)}>
+              <div {...stylex.props(styles.fileTitleGroup)}>
+                <span {...stylex.props(styles.fileIconWrap)}>
+                  <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                </span>
+                <div {...stylex.props(styles.fileTitleCol)}>
+                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                    {item.name}
+                  </span>
+                  <span
+                    {...stylex.props(styles.fileVirtualPath)}
+                    title={item.virtualPath}
                   >
-                    {acc.displayName || acc.id} ({acc.email || acc.id})
-                  </option>
-                ))
-              )}
-            </select>
-            <div {...stylex.props(styles.selectChevron)}>
-              <IconChevronDown size={11} strokeWidth={2.5} />
+                    {item.virtualPath}
+                  </span>
+                </div>
+              </div>
+              <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
+            </div>
+
+            <div {...stylex.props(styles.actionsRow)}>
+              <DrawerButton
+                variant="primary"
+                onClick={() => handleAccept(item)}
+                disabled={isLocked}
+              >
+                Accept (Over-ceiling)
+              </DrawerButton>
+              <DrawerButton
+                variant="danger"
+                onClick={() => handleMoveToRoot(item)}
+                disabled={isLocked}
+              >
+                Eject to root
+              </DrawerButton>
             </div>
           </div>
-          <button
-            type="button"
-            {...stylex.props(styles.btnSecondary)}
-            onClick={() => void scanAccount(selectedAccount, true)}
-            disabled={isScanning || isLocked || !selectedAccount}
-          >
-            {isScanning ? 'Scanning...' : 'Rescan'}
-          </button>
-        </div>
-
-        <div {...stylex.props(styles.contentScroll)}>
-          {statusNotice && (
-            <div {...stylex.props(styles.statusNoticeBanner)}>
-              {statusNotice}
-            </div>
-          )}
-
-          {/* Over-ceiling items */}
-          {report?.overCeiling && report.overCeiling.length > 0 && (
-            <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                <IconAlertTriangle size={16} color={colors.danger} />
-                Over-ceiling files (&gt; 14.25 GB)
-              </h3>
-              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
-                Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
-              </p>
-              <div {...stylex.props(styles.cardList)}>
-                {report.overCeiling.map((item) => (
-                  <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardOverCeiling)}>
-                    <div {...stylex.props(styles.fileHeaderRow)}>
-                      <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
-                        <div {...stylex.props(styles.fileTitleCol)}>
-                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
-                            {item.name}
-                          </span>
-                          <span
-                            {...stylex.props(styles.fileVirtualPath)}
-                            title={item.virtualPath}
-                          >
-                            {item.virtualPath}
-                          </span>
-                        </div>
-                      </div>
-                      <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
-                    </div>
-
-                    <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
-                        onClick={() => handleAccept(item)}
-                        disabled={isLocked}
-                      >
-                        Accept into Tsubasa (Over-ceiling mode)
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnDanger)}
-                        onClick={() => handleMoveToRoot(item)}
-                        disabled={isLocked}
-                      >
-                        Move to root (Eject)
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Path conflicts in pool */}
-          {report?.conflicts && report.conflicts.length > 0 && (
-            <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                <IconAlertTriangle size={16} color={colors.warning} />
-                Path conflicts in pool, {report.conflicts.length}
-              </h3>
-              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
-                These files share the same folder path as files already stored on another drive in this pool.
-              </p>
-
-              {report.conflicts.length > 1 && (
-                <div {...stylex.props(styles.batchActionsBar)}>
-                  {exactDuplicates.length > 1 && (
-                    <button
-                      type="button"
-                      {...stylex.props(styles.btnPrimary)}
-                      onClick={() => handleBatchResolveConflicts(exactDuplicates, 'deduplicate')}
-                      disabled={isLocked}
-                    >
-                      Remove {exactDuplicates.length} identical duplicates
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    {...stylex.props(exactDuplicates.length > 1 ? styles.btnSecondary : styles.btnPrimary)}
-                    onClick={() => handleBatchResolveConflicts(report.conflicts, 'keep_both')}
+        );
+      }
+      case 'conflicts-header':
+        return (
+          <DrawerSectionHeader
+            icon={<IconAlertTriangle size={14} color={colors.warning} />}
+            title="Path conflicts in pool"
+            count={row.count.toLocaleString()}
+          />
+        );
+      case 'conflicts-subbar':
+        return (
+          <div {...stylex.props(styles.sectionSubBar)}>
+            <p {...stylex.props(styles.cardDesc)}>
+              These files share the same folder path as files already stored on another drive in this pool.
+            </p>
+            {row.conflictCount > 1 && report?.conflicts && (
+              <div {...stylex.props(styles.batchActionsBar)}>
+                {row.exactDuplicateCount > 1 && (
+                  <DrawerButton
+                    variant="primary"
+                    onClick={() => handleBatchResolveConflicts(exactDuplicates, 'deduplicate')}
                     disabled={isLocked}
                   >
-                    Keep both for all {report.conflicts.length}
-                  </button>
-                </div>
-              )}
-
-              <div {...stylex.props(styles.cardList)}>
-                {report.conflicts.map((item) => (
-                  <div key={item.driveFileId} {...stylex.props(styles.card, styles.cardConflict)}>
-                    <div {...stylex.props(styles.fileHeaderRow)}>
-                      <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
-                        <div {...stylex.props(styles.fileTitleCol)}>
-                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
-                            {item.name}
-                          </span>
-                          <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
-                            {item.virtualPath}
-                          </span>
-                        </div>
-                      </div>
-                      <span
-                        {...stylex.props(
-                          item.isExactDuplicate ? styles.conflictBadgeExact : styles.conflictBadgeDiff
-                        )}
-                      >
-                        {item.isExactDuplicate ? 'Identical copy' : 'Different version'}
-                      </span>
-                    </div>
-
-                    <div {...stylex.props(styles.conflictCompareBox)}>
-                      <div {...stylex.props(styles.conflictCompareRow)}>
-                        <div {...stylex.props(styles.conflictCompareLeft)}>
-                          <span {...stylex.props(styles.conflictOriginTag)}>In pool</span>
-                          <span
-                            {...stylex.props(styles.conflictAccountEmail)}
-                            title={item.existingFile.accountEmail}
-                          >
-                            {item.existingFile.accountEmail}
-                          </span>
-                        </div>
-                        <span {...stylex.props(styles.conflictSizeText)}>
-                          {formatBytes(item.existingFile.sizeBytes)}
-                        </span>
-                      </div>
-                      <div {...stylex.props(styles.conflictCompareRow)}>
-                        <div {...stylex.props(styles.conflictCompareLeft)}>
-                          <span {...stylex.props(styles.conflictOriginTag)}>This drive</span>
-                          <span {...stylex.props(styles.conflictAccountEmail)} title={item.accountEmail}>
-                            {item.accountEmail}
-                          </span>
-                        </div>
-                        <span {...stylex.props(styles.conflictSizeText)}>{formatBytes(item.sizeBytes)}</span>
-                      </div>
-                    </div>
-
-                    <div {...stylex.props(styles.actionsRow)}>
-                      {item.isExactDuplicate ? (
-                        <>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnPrimary)}
-                            onClick={() => handleResolveConflict(item, 'deduplicate')}
-                            disabled={isLocked}
-                          >
-                            Remove duplicate
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
-                            onClick={() => handleResolveConflict(item, 'keep_both')}
-                            disabled={isLocked}
-                          >
-                            Keep both, rename
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
-                            onClick={() => handleResolveConflict(item, 'replace_existing')}
-                            disabled={isLocked}
-                          >
-                            Use this drive&apos;s copy
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
-                            onClick={() => handleResolveConflict(item, 'eject')}
-                            disabled={isLocked}
-                          >
-                            Eject to Drive root
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnPrimary)}
-                            onClick={() => handleResolveConflict(item, 'keep_both')}
-                            disabled={isLocked}
-                          >
-                            Keep both, rename
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
-                            onClick={() => handleResolveConflict(item, 'replace_existing')}
-                            disabled={isLocked}
-                          >
-                            Replace pool copy
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
-                            onClick={() => handleResolveConflict(item, 'deduplicate')}
-                            disabled={isLocked}
-                          >
-                            Discard this copy
-                          </button>
-                          <button
-                            type="button"
-                            {...stylex.props(styles.btnSecondary)}
-                            onClick={() => handleResolveConflict(item, 'eject')}
-                            disabled={isLocked}
-                          >
-                            Eject to Drive root
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Pool folder summary: accept every external change in one action */}
-          {report && showPoolSummary && (
-            <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>Files added or changed in Google Drive</h3>
-              <div {...stylex.props(styles.cardList)}>
-                <div {...stylex.props(styles.card)}>
-                  <div {...stylex.props(styles.fileHeaderRow)}>
-                    <div {...stylex.props(styles.fileTitleGroup)}>
-                      <span {...stylex.props(styles.poolFolderIcon)}>
-                        <IconFolderFilled size={18} />
-                      </span>
-                      <div {...stylex.props(styles.fileTitleCol)}>
-                        <span {...stylex.props(styles.fileName)} title={report.poolFolderName}>
-                          {report.poolFolderName}
-                        </span>
-                        <span {...stylex.props(styles.fileVirtualPath)}>{poolSummaryParts.join(' · ')}</span>
-                      </div>
-                    </div>
-                    <span {...stylex.props(styles.fileMeta)}>{formatBytes(acceptableBytes)}</span>
-                  </div>
-
-                  {confirmingEject ? (
-                    <>
-                      <p {...stylex.props(styles.confirmPromptText)}>
-                        Move {acceptableItems.length.toLocaleString()} files ({formatBytes(acceptableBytes)}) out of{' '}
-                        {report.poolFolderName} to Drive root? Files stay in Google Drive.
-                      </p>
-                      <div {...stylex.props(styles.actionsRow)}>
-                        <button
-                          type="button"
-                          {...stylex.props(styles.btnDanger)}
-                          onClick={() => handleBulkResolve('eject-all')}
-                          disabled={isLocked}
-                        >
-                          {activeActionId === 'eject-all'
-                            ? 'Ejecting...'
-                            : `Eject ${acceptableItems.length.toLocaleString()} files`}
-                        </button>
-                        <button
-                          type="button"
-                          {...stylex.props(styles.btnSecondary)}
-                          onClick={() => setConfirmingEject(false)}
-                          disabled={isLocked}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
-                        onClick={() => handleBulkResolve('accept-all')}
-                        disabled={isLocked}
-                      >
-                        {activeActionId === 'accept-all'
-                          ? 'Accepting...'
-                          : `Accept all ${acceptableItems.length.toLocaleString()} files`}
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnSecondary)}
-                        onClick={() => setConfirmingEject(true)}
-                        disabled={isLocked}
-                      >
-                        Eject all to Drive root
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnSecondary)}
-                        onClick={() => setShowIndividualFiles((prev) => !prev)}
-                        disabled={isLocked}
-                        aria-expanded={showIndividualFiles}
-                      >
-                        {showIndividualFiles ? 'Hide individual files' : 'Review individually'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Unindexed external additions */}
-          {showIndividualAcceptable && report?.unindexed && report.unindexed.length > 0 && (
-            <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                Unindexed files added in Google Drive
-              </h3>
-              <div {...stylex.props(styles.cardList)}>
-                {report.unindexed.map((item) => (
-                  <div key={item.driveFileId} {...stylex.props(styles.card)}>
-                    <div {...stylex.props(styles.fileHeaderRow)}>
-                      <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
-                        <div {...stylex.props(styles.fileTitleCol)}>
-                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
-                            {item.name}
-                          </span>
-                          <span
-                            {...stylex.props(styles.fileVirtualPath)}
-                            title={item.virtualPath}
-                          >
-                            {item.virtualPath}
-                          </span>
-                        </div>
-                      </div>
-                      <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
-                    </div>
-
-                    <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
-                        onClick={() => handleAccept(item)}
-                        disabled={isLocked}
-                      >
-                        Accept into Tsubasa
-                      </button>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnSecondary)}
-                        onClick={() => handleMoveToRoot(item)}
-                        disabled={isLocked}
-                      >
-                        Eject to Drive root
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Modified files */}
-          {showIndividualAcceptable && report?.modified && report.modified.length > 0 && (
-            <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>Modified files</h3>
-              <div {...stylex.props(styles.cardList)}>
-                {report.modified.map((item) => (
-                  <div key={item.driveFileId} {...stylex.props(styles.card)}>
-                    <div {...stylex.props(styles.fileHeaderRow)}>
-                      <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.name || item.virtualPath} size={16} />
-                        <div {...stylex.props(styles.fileTitleCol)}>
-                          <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
-                            {item.name}
-                          </span>
-                          <span
-                            {...stylex.props(styles.fileVirtualPath)}
-                            title={item.virtualPath}
-                          >
-                            {item.virtualPath}
-                          </span>
-                        </div>
-                      </div>
-                      <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
-                    </div>
-
-                    <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnPrimary)}
-                        onClick={() => handleAccept(item)}
-                        disabled={isLocked}
-                      >
-                        Accept update
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Missing or externally moved files */}
-          {report?.missingRemote && report.missingRemote.length > 0 && (
-            <div>
-              <h3 {...stylex.props(styles.sectionTitle)}>
-                <IconAlertTriangle size={16} color={colors.warning} />
-                Missing or externally moved files
-              </h3>
-              <p {...stylex.props(styles.cardDesc, styles.sectionDesc)}>
-                These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
-              </p>
-              <div {...stylex.props(styles.cardList)}>
-                {report.missingRemote.map((item) => (
-                  <div key={item.driveFileId} {...stylex.props(styles.card)}>
-                    <div {...stylex.props(styles.fileHeaderRow)}>
-                      <div {...stylex.props(styles.fileTitleGroup)}>
-                        <FileTypeIcon name={item.virtualPath} size={16} />
-                        <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
-                          {item.virtualPath}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div {...stylex.props(styles.actionsRow)}>
-                      <button
-                        type="button"
-                        {...stylex.props(styles.btnDanger)}
-                        onClick={() => handleRemoveMissing(item)}
-                        disabled={isLocked}
-                      >
-                        Remove from Tsubasa
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Rebalance section */}
-          {showRebalance && (
-            <div {...stylex.props(styles.rebalanceBanner)}>
-              <div {...stylex.props(styles.rebalanceTitle)}>
-                Auto-rebalance files
-              </div>
-              <p {...stylex.props(styles.cardDesc)}>
-                This account breached its 750 MB safety buffer. Auto-rebalance moves Tsubasa files to an emptier account in your pool to restore safe headroom.
-              </p>
-              <div>
-                <button
-                  type="button"
-                  {...stylex.props(styles.btnSecondary)}
-                  onClick={handleAutoRebalance}
+                    Remove {row.exactDuplicateCount} identical duplicates
+                  </DrawerButton>
+                )}
+                <DrawerButton
+                  variant={row.exactDuplicateCount > 1 ? 'secondary' : 'primary'}
+                  onClick={() => handleBatchResolveConflicts(report.conflicts, 'keep_both')}
                   disabled={isLocked}
                 >
-                  {activeActionId === 'rebalance' ? 'Rebalancing...' : 'Auto-rebalance'}
-                </button>
+                  Keep both for all {row.conflictCount}
+                </DrawerButton>
               </div>
+            )}
+          </div>
+        );
+      case 'conflict-item': {
+        const { item } = row;
+        return (
+          <div {...stylex.props(styles.card, styles.cardConflict)}>
+            <div {...stylex.props(styles.fileHeaderRow)}>
+              <div {...stylex.props(styles.fileTitleGroup)}>
+                <span {...stylex.props(styles.fileIconWrap)}>
+                  <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                </span>
+                <div {...stylex.props(styles.fileTitleCol)}>
+                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                    {item.name}
+                  </span>
+                  <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+                    {item.virtualPath}
+                  </span>
+                </div>
+              </div>
+              <span
+                {...stylex.props(
+                  item.isExactDuplicate ? styles.conflictBadgeExact : styles.conflictBadgeDiff
+                )}
+              >
+                {item.isExactDuplicate ? 'Identical copy' : 'Different version'}
+              </span>
             </div>
-          )}
 
-          {/* Scanning indicator */}
-          {isScanning && (
-            <div {...stylex.props(styles.scanningNotice)}>
-              <div {...stylex.props(styles.scanningNoticeText)}>
-                Scanning Drive for external changes...
+            <div {...stylex.props(styles.conflictCompareBox)}>
+              <div {...stylex.props(styles.conflictCompareRow)}>
+                <span {...stylex.props(styles.conflictOriginTag)}>In pool</span>
+                <span
+                  {...stylex.props(styles.conflictAccountEmail)}
+                  title={item.existingFile.accountEmail}
+                >
+                  {item.existingFile.accountEmail}
+                </span>
+                <span {...stylex.props(styles.conflictSizeText)}>
+                  {formatBytes(item.existingFile.sizeBytes)}
+                </span>
+              </div>
+              <div {...stylex.props(styles.conflictCompareRow)}>
+                <span {...stylex.props(styles.conflictOriginTag)}>This drive</span>
+                <span {...stylex.props(styles.conflictAccountEmail)} title={item.accountEmail}>
+                  {item.accountEmail}
+                </span>
+                <span {...stylex.props(styles.conflictSizeText)}>{formatBytes(item.sizeBytes)}</span>
               </div>
             </div>
-          )}
 
-          {/* Empty state when no accounts have changes */}
-          {!isScanning && accounts.length === 0 && (
-            <div {...stylex.props(styles.emptyNotice)}>
-              <IconCheck size={28} color={colors.success} />
-              <div {...stylex.props(styles.emptyNoticeTitle)}>
-                All accounts in sync
-              </div>
-              <p {...stylex.props(styles.cardDesc)}>
-                No external modifications or over-ceiling files detected across any connected drives.
-              </p>
+            <div {...stylex.props(styles.actionsRow)}>
+              {item.isExactDuplicate ? (
+                <>
+                  <DrawerButton
+                    variant="primary"
+                    onClick={() => handleResolveConflict(item, 'deduplicate')}
+                    disabled={isLocked}
+                  >
+                    Remove duplicate
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => handleResolveConflict(item, 'keep_both')}
+                    disabled={isLocked}
+                  >
+                    Keep both
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => handleResolveConflict(item, 'replace_existing')}
+                    disabled={isLocked}
+                  >
+                    Use drive copy
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => handleResolveConflict(item, 'eject')}
+                    disabled={isLocked}
+                  >
+                    Eject
+                  </DrawerButton>
+                </>
+              ) : (
+                <>
+                  <DrawerButton
+                    variant="primary"
+                    onClick={() => handleResolveConflict(item, 'keep_both')}
+                    disabled={isLocked}
+                  >
+                    Keep both
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => handleResolveConflict(item, 'replace_existing')}
+                    disabled={isLocked}
+                  >
+                    Replace pool
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => handleResolveConflict(item, 'deduplicate')}
+                    disabled={isLocked}
+                  >
+                    Discard copy
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => handleResolveConflict(item, 'eject')}
+                    disabled={isLocked}
+                  >
+                    Eject
+                  </DrawerButton>
+                </>
+              )}
             </div>
-          )}
+          </div>
+        );
+      }
+      case 'pool-summary-header':
+        return (
+          <DrawerSectionHeader
+            title="Files added or changed in Google Drive"
+            count={row.count.toLocaleString()}
+          />
+        );
+      case 'pool-summary-card':
+        if (!report) return null;
+        return (
+          <div {...stylex.props(styles.card)}>
+            <div {...stylex.props(styles.fileHeaderRow)}>
+              <div {...stylex.props(styles.fileTitleGroup)}>
+                <span {...stylex.props(styles.fileIconWrap, styles.poolFolderIcon)}>
+                  <IconFolderFilled size={16} />
+                </span>
+                <div {...stylex.props(styles.fileTitleCol)}>
+                  <span {...stylex.props(styles.fileName)} title={report.poolFolderName}>
+                    {report.poolFolderName}
+                  </span>
+                  <span {...stylex.props(styles.fileVirtualPath)}>{poolSummaryParts.join(' · ')}</span>
+                </div>
+              </div>
+              <span {...stylex.props(styles.fileMeta)}>{formatBytes(acceptableBytes)}</span>
+            </div>
 
-          {/* Empty state for the selected account */}
-          {!isScanning && report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
-            <div {...stylex.props(styles.emptyNotice)}>
-              <IconCheck size={28} color={colors.success} />
-              <div {...stylex.props(styles.emptyNoticeTitle)}>
-                Account in sync
+            {confirmingEject ? (
+              <>
+                <p {...stylex.props(styles.confirmPromptText)}>
+                  Move {acceptableItems.length.toLocaleString()} files ({formatBytes(acceptableBytes)}) out of{' '}
+                  {report.poolFolderName} to Drive root? Files stay in Google Drive.
+                </p>
+                <div {...stylex.props(styles.actionsRow)}>
+                  <DrawerButton
+                    variant="danger"
+                    onClick={() => handleBulkResolve('eject-all')}
+                    disabled={isLocked}
+                  >
+                    {activeActionId === 'eject-all'
+                      ? 'Ejecting...'
+                      : `Eject ${acceptableItems.length.toLocaleString()} files`}
+                  </DrawerButton>
+                  <DrawerButton
+                    variant="secondary"
+                    onClick={() => setConfirmingEject(false)}
+                    disabled={isLocked}
+                  >
+                    Cancel
+                  </DrawerButton>
+                </div>
+              </>
+            ) : (
+              <div {...stylex.props(styles.actionsRow)}>
+                <DrawerButton
+                  variant="primary"
+                  onClick={() => handleBulkResolve('accept-all')}
+                  disabled={isLocked}
+                >
+                  {activeActionId === 'accept-all'
+                    ? 'Accepting...'
+                    : `Accept all ${acceptableItems.length.toLocaleString()} files`}
+                </DrawerButton>
+                <DrawerButton
+                  variant="secondary"
+                  onClick={() => setConfirmingEject(true)}
+                  disabled={isLocked}
+                >
+                  Eject all to Drive root
+                </DrawerButton>
+                <DrawerButton
+                  variant="secondary"
+                  onClick={() => setShowIndividualFiles((prev) => !prev)}
+                  disabled={isLocked}
+                  aria-expanded={showIndividualFiles}
+                >
+                  {showIndividualFiles ? 'Hide individual files' : 'Review individually'}
+                </DrawerButton>
               </div>
-              <p {...stylex.props(styles.cardDesc)}>
-                No external modifications or over-ceiling files detected on {selectedAccount}.
-              </p>
+            )}
+          </div>
+        );
+      case 'unindexed-header':
+        return (
+          <DrawerSectionHeader
+            title="Unindexed files added in Google Drive"
+            count={row.count.toLocaleString()}
+          />
+        );
+      case 'unindexed-item': {
+        const { item } = row;
+        return (
+          <div {...stylex.props(styles.card)}>
+            <div {...stylex.props(styles.fileHeaderRow)}>
+              <div {...stylex.props(styles.fileTitleGroup)}>
+                <span {...stylex.props(styles.fileIconWrap)}>
+                  <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                </span>
+                <div {...stylex.props(styles.fileTitleCol)}>
+                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                    {item.name}
+                  </span>
+                  <span
+                    {...stylex.props(styles.fileVirtualPath)}
+                    title={item.virtualPath}
+                  >
+                    {item.virtualPath}
+                  </span>
+                </div>
+              </div>
+              <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
             </div>
-          )}
+
+            <div {...stylex.props(styles.actionsRow)}>
+              <DrawerButton
+                variant="primary"
+                onClick={() => handleAccept(item)}
+                disabled={isLocked}
+              >
+                Accept into Tsubasa
+              </DrawerButton>
+              <DrawerButton
+                variant="secondary"
+                onClick={() => handleMoveToRoot(item)}
+                disabled={isLocked}
+              >
+                Eject to Drive root
+              </DrawerButton>
+            </div>
+          </div>
+        );
+      }
+      case 'modified-header':
+        return (
+          <DrawerSectionHeader
+            title="Modified files"
+            count={row.count.toLocaleString()}
+          />
+        );
+      case 'modified-item': {
+        const { item } = row;
+        return (
+          <div {...stylex.props(styles.card)}>
+            <div {...stylex.props(styles.fileHeaderRow)}>
+              <div {...stylex.props(styles.fileTitleGroup)}>
+                <span {...stylex.props(styles.fileIconWrap)}>
+                  <FileTypeIcon name={item.name || item.virtualPath} size={16} />
+                </span>
+                <div {...stylex.props(styles.fileTitleCol)}>
+                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                    {item.name}
+                  </span>
+                  <span
+                    {...stylex.props(styles.fileVirtualPath)}
+                    title={item.virtualPath}
+                  >
+                    {item.virtualPath}
+                  </span>
+                </div>
+              </div>
+              <span {...stylex.props(styles.fileMeta)}>{formatBytes(item.sizeBytes)}</span>
+            </div>
+
+            <div {...stylex.props(styles.actionsRow)}>
+              <DrawerButton
+                variant="primary"
+                onClick={() => handleAccept(item)}
+                disabled={isLocked}
+              >
+                Accept update
+              </DrawerButton>
+            </div>
+          </div>
+        );
+      }
+      case 'missingRemote-header':
+        return (
+          <DrawerSectionHeader
+            icon={<IconAlertTriangle size={14} color={colors.warning} />}
+            title="Missing or externally moved files"
+            count={row.count.toLocaleString()}
+          />
+        );
+      case 'missingRemote-subbar':
+        return (
+          <div {...stylex.props(styles.sectionSubBar)}>
+            <p {...stylex.props(styles.cardDesc)}>
+              These files were moved outside the Tsubasa folder structure or removed directly in Google Drive.
+            </p>
+          </div>
+        );
+      case 'missingRemote-item': {
+        const { item } = row;
+        const baseName = item.virtualPath.split('/').filter(Boolean).pop() || item.virtualPath;
+        return (
+          <div {...stylex.props(styles.card)}>
+            <div {...stylex.props(styles.fileHeaderRow)}>
+              <div {...stylex.props(styles.fileTitleGroup)}>
+                <span {...stylex.props(styles.fileIconWrap)}>
+                  <FileTypeIcon name={item.virtualPath} size={16} />
+                </span>
+                <div {...stylex.props(styles.fileTitleCol)}>
+                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                    {baseName}
+                  </span>
+                  <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+                    {item.virtualPath}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div {...stylex.props(styles.actionsRow)}>
+              <DrawerButton
+                variant="danger"
+                onClick={() => handleRemoveMissing(item)}
+                disabled={isLocked}
+              >
+                Remove from Tsubasa
+              </DrawerButton>
+            </div>
+          </div>
+        );
+      }
+      case 'rebalance-banner':
+        return (
+          <div {...stylex.props(styles.rebalanceBanner)}>
+            <div {...stylex.props(styles.rebalanceTitle)}>
+              Auto-rebalance files
+            </div>
+            <p {...stylex.props(styles.cardDesc)}>
+              This account breached its 750 MB safety buffer. Auto-rebalance moves Tsubasa files to an emptier account in your pool to restore safe headroom.
+            </p>
+            <div>
+              <DrawerButton
+                variant="secondary"
+                onClick={handleAutoRebalance}
+                disabled={isLocked}
+              >
+                {activeActionId === 'rebalance' ? 'Rebalancing...' : 'Auto-rebalance'}
+              </DrawerButton>
+            </div>
+          </div>
+        );
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <DrawerSheet
+      isOpen={isOpen}
+      isLocked={isLocked}
+      onClose={onClose}
+      ariaLabel="External modifications"
+      title="External changes"
+      icon={<IconAlertTriangle size={16} />}
+      closeAriaLabel="Close drawer"
+      hideMobileBackdrop={isMobileSidebarOpen}
+    >
+      <div {...stylex.props(styles.accountSelectorBar)}>
+        <div {...stylex.props(styles.selectWrapper)}>
+          <select
+            aria-label="Select connected account"
+            title={
+              currentAccount
+                ? `${currentAccount.displayName || currentAccount.id} (${currentAccount.email || currentAccount.id})`
+                : 'Select connected account'
+            }
+            {...stylex.props(styles.select)}
+            value={selectedAccount}
+            onChange={(e) => setSelectedAccount(e.target.value)}
+            disabled={accounts.length === 0 || isLocked}
+          >
+            {accounts.length === 0 ? (
+              <option value="" disabled>
+                No accounts with external changes
+              </option>
+            ) : (
+              accounts.map((acc) => (
+                <option
+                  key={acc.id}
+                  value={acc.id}
+                >
+                  {acc.displayName || acc.id} ({acc.email || acc.id})
+                </option>
+              ))
+            )}
+          </select>
+          <div {...stylex.props(styles.selectChevron)}>
+            <IconChevronDown size={11} strokeWidth={2.5} />
+          </div>
         </div>
+        <DrawerButton
+          variant="secondary"
+          style={styles.rescanBtn}
+          onClick={() => void scanAccount(selectedAccount, true)}
+          disabled={isScanning || isLocked || !selectedAccount}
+        >
+          {isScanning ? 'Scanning...' : 'Rescan'}
+        </DrawerButton>
       </div>
-    </>
+
+      {statusNotice && (
+        <div {...stylex.props(styles.statusNoticeBanner)}>
+          {statusNotice}
+        </div>
+      )}
+
+      <div ref={contentScrollRef} {...stylex.props(styles.contentScroll)}>
+        {shouldVirtualize ? (
+          <div
+            {...stylex.props(styles.virtualListInner)}
+            style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = displayRows[virtualRow.index];
+              if (!row) return null;
+
+              return (
+                <div
+                  key={row.key}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  {...stylex.props(styles.virtualRow)}
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  {renderDisplayRow(row)}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          displayRows.map((row) => (
+            <React.Fragment key={row.key}>
+              {renderDisplayRow(row)}
+            </React.Fragment>
+          ))
+        )}
+
+        {isScanning && !report && (
+          <div {...stylex.props(styles.scanningNotice)}>
+            <div {...stylex.props(styles.scanningNoticeText)}>
+              Scanning Drive for external changes...
+            </div>
+          </div>
+        )}
+
+        {!isScanning && accounts.length === 0 && (
+          <div {...stylex.props(styles.emptyNotice)}>
+            <IconCheck size={28} color={colors.success} />
+            <div {...stylex.props(styles.emptyNoticeTitle)}>
+              All accounts in sync
+            </div>
+            <p {...stylex.props(styles.cardDesc)}>
+              No external modifications or over-ceiling files detected across any connected drives.
+            </p>
+          </div>
+        )}
+
+        {report !== null && accounts.length > 0 && totalDiscrepancies === 0 && !showRebalance && (
+          <div {...stylex.props(styles.emptyNotice)}>
+            <IconCheck size={28} color={colors.success} />
+            <div {...stylex.props(styles.emptyNoticeTitle)}>
+              Account in sync
+            </div>
+            <p {...stylex.props(styles.cardDesc)}>
+              No external modifications or over-ceiling files detected on {selectedAccount}.
+            </p>
+          </div>
+        )}
+      </div>
+    </DrawerSheet>
   );
 }
 

@@ -1,9 +1,15 @@
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
+  if (!Number.isFinite(bytes) || bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const rawIndex = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
+  const i = Math.max(0, Math.min(sizes.length - 1, rawIndex));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+export function formatSignedBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes === 0) return '0 B';
+  return bytes > 0 ? `+${formatBytes(bytes)}` : `-${formatBytes(Math.abs(bytes))}`;
 }
 
 export function maskEmail(email: string): string {

@@ -19,15 +19,17 @@ function isNodeSelected(el: HTMLElement | null): boolean {
   return false;
 }
 
-const selectionSubscribers = new Set<() => void>();
+const selectionSubscribers = new Set<(isCollapsed: boolean) => void>();
 
 function notifySelectionSubscribers() {
+  const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+  const isCollapsed = !selection || selection.rangeCount === 0 || selection.isCollapsed;
   for (const listener of selectionSubscribers) {
-    listener();
+    listener(isCollapsed);
   }
 }
 
-function subscribeSelectionChange(listener: () => void): () => void {
+function subscribeSelectionChange(listener: (isCollapsed: boolean) => void): () => void {
   if (selectionSubscribers.size === 0 && typeof document !== 'undefined') {
     document.addEventListener('selectionchange', notifySelectionSubscribers);
   }
@@ -82,7 +84,11 @@ export function RedactedEmail({
   const masked = useMemo(() => maskEmail(email), [email]);
 
   useEffect(() => {
-    const handleSelectionChange = () => {
+    const handleSelectionChange = (isCollapsed: boolean) => {
+      if (isCollapsed) {
+        setIsSelected((prev) => (prev ? false : prev));
+        return;
+      }
       const selected = isNodeSelected(spanRef.current);
       setIsSelected((prev) => (prev !== selected ? selected : prev));
     };

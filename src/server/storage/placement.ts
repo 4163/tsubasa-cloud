@@ -1,9 +1,10 @@
 import path from 'node:path';
-import { db } from '../db/index.js';
+import { db, buildDirectoryPrefixBounds, chunkArray } from '../db/index.js';
 import { accounts, files } from '../db/schema.js';
-import { eq, and, sql, not } from 'drizzle-orm';
+import { eq, and, gte, lt, sql, not, inArray } from 'drizzle-orm';
 import {
   calculateHeadroom,
+  calculateUsableLimit,
   getAccountTransferStats,
   getTransferStatsByAccountMap,
   MAX_SINGLE_FILE_BYTES,
@@ -31,6 +32,7 @@ export interface CandidateAccount {
   email: string;
   headroomBytes: number;
   transferStats: AccountTransferStats;
+  isOverCeiling?: boolean;
 }
 
 export interface PlacementDecision {
@@ -52,6 +54,82 @@ export interface BatchPlacementPlan {
 export interface PlacementItem {
   virtualPath: string;
   sizeBytes: number;
+}
+
+export type UploadConflictAction = 'skip' | 'replace' | 'keep_both';
+
+export interface UploadPlacementRequestItem extends PlacementItem {
+  conflictAction?: UploadConflictAction;
+}
+
+export interface ExistingPoolFileSummary {
+  id: string;
+  virtualPath: string;
+  name: string;
+  sizeBytes: number;
+  hash: string | null;
+  accountId: string;
+  updatedAt: number;
+}
+
+export interface UploadBatchPlacementPlan extends BatchPlacementPlan {
+  replacedBytes: number;
+  netStorageDeltaBytes: number;
+  conflicts: Record<string, ExistingPoolFileSummary>;
+}
+
+const inFlightAccountReservations = new Map<string, number>();
+
+export function assertValidFileSize(sizeBytes: number): void {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    throw new Error(`Invalid file size: ${sizeBytes}`);
+  }
+  if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+    throw new FileExceedsCeilingError(sizeBytes);
+  }
+}
+
+export function reserveAccountCapacity(accountId: string, bytes: number): () => void {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return () => {};
+  }
+
+  inFlightAccountReservations.set(accountId, (inFlightAccountReservations.get(accountId) ?? 0) + bytes);
+  let released = false;
+
+  return () => {
+    if (released) return;
+    released = true;
+    const current = inFlightAccountReservations.get(accountId) ?? 0;
+    const next = current - bytes;
+    if (next <= 0) {
+      inFlightAccountReservations.delete(accountId);
+    } else {
+      inFlightAccountReservations.set(accountId, next);
+    }
+  };
+}
+
+function applyInFlightReservation(
+  accountId: string,
+  rawHeadroom: number,
+  rawTransferStats: AccountTransferStats
+): { headroomBytes: number; transferStats: AccountTransferStats } {
+  const reserved = inFlightAccountReservations.get(accountId) ?? 0;
+  if (reserved <= 0) {
+    return { headroomBytes: rawHeadroom, transferStats: rawTransferStats };
+  }
+
+  const headroomBytes = Math.max(0, rawHeadroom - reserved);
+  const remainingUploadBytes24h = Math.max(0, rawTransferStats.remainingUploadBytes24h - reserved);
+  return {
+    headroomBytes,
+    transferStats: {
+      ...rawTransferStats,
+      remainingUploadBytes24h,
+      isUploadRateLimited: remainingUploadBytes24h <= 0,
+    },
+  };
 }
 
 /**
@@ -80,29 +158,107 @@ export async function getEligibleAccounts(
   const candidates: CandidateAccount[] = [];
 
   for (const acc of allAccounts) {
-    const headroom = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
-    const transferStats = transferStatsByAccount.get(acc.id)!;
+    const rawHeadroom = calculateHeadroom(acc.quotaLimitBytes, acc.quotaUsedBytes);
+    const rawTransferStats = transferStatsByAccount.get(acc.id)!;
+    const { headroomBytes, transferStats } = applyInFlightReservation(
+      acc.id,
+      rawHeadroom,
+      rawTransferStats
+    );
+    const isOverCeiling =
+      acc.quotaUsedBytes >= acc.quotaLimitBytes ||
+      acc.quotaUsedBytes > calculateUsableLimit(acc.quotaLimitBytes);
 
     candidates.push({
       id: acc.id,
       email: acc.email,
-      headroomBytes: headroom,
+      headroomBytes,
       transferStats,
+      isOverCeiling,
     });
   }
 
   return candidates;
 }
 
-/**
- * Finds accounts holding files in parent or ancestor paths of the virtual target.
- * Returns accounts ordered by number of co-located files descending.
- */
-export async function findFolderAffinityAccounts(normalizedPath: string, poolId = 1): Promise<string[]> {
-  let currentDir = path.posix.dirname(normalizedPath);
+export interface PoolFolderAffinityMap {
+  getAffinityAccounts(normalizedPath: string): string[];
+  getAffinityAccountsForDirectory(dirPath: string): string[];
+  recordAssignment(virtualPath: string, accountId: string): void;
+}
+
+function getAffinityAccountsForDirectory(
+  dirCounts: Map<string, Map<string, number>>,
+  startDir: string
+): string[] {
+  let currentDir = startDir;
+  while (currentDir && currentDir !== '.') {
+    const accountCounts = dirCounts.get(currentDir);
+    if (accountCounts && accountCounts.size > 0) {
+      return Array.from(accountCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([accountId]) => accountId);
+    }
+    if (currentDir === '/') break;
+    currentDir = path.posix.dirname(currentDir);
+  }
+  return [];
+}
+
+function incrementDirectoryCounts(
+  dirCounts: Map<string, Map<string, number>>,
+  virtualPath: string,
+  accountId: string
+): void {
+  let currentDir = path.posix.dirname(virtualPath);
+  while (currentDir && currentDir !== '.') {
+    let accountCounts = dirCounts.get(currentDir);
+    if (!accountCounts) {
+      accountCounts = new Map<string, number>();
+      dirCounts.set(currentDir, accountCounts);
+    }
+    accountCounts.set(accountId, (accountCounts.get(accountId) ?? 0) + 1);
+
+    if (currentDir === '/') break;
+    currentDir = path.posix.dirname(currentDir);
+  }
+}
+
+export async function buildPoolFolderAffinityMap(poolId: number): Promise<PoolFolderAffinityMap> {
+  const dirCounts = new Map<string, Map<string, number>>();
+  const rows = await db
+    .select({
+      virtualPath: files.virtualPath,
+      accountId: files.accountId,
+    })
+    .from(files)
+    .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false)));
+
+  for (const row of rows) {
+    incrementDirectoryCounts(dirCounts, row.virtualPath, row.accountId);
+  }
+
+  return {
+    getAffinityAccounts(normalizedPath: string): string[] {
+      return getAffinityAccountsForDirectory(dirCounts, path.posix.dirname(normalizedPath));
+    },
+    getAffinityAccountsForDirectory(dirPath: string): string[] {
+      return getAffinityAccountsForDirectory(dirCounts, dirPath);
+    },
+    recordAssignment(virtualPath: string, accountId: string): void {
+      incrementDirectoryCounts(dirCounts, virtualPath, accountId);
+    },
+  };
+}
+
+export async function findFolderAffinityAccountsForDirectory(
+  startDir: string,
+  poolId = 1
+): Promise<string[]> {
+  let currentDir = startDir;
 
   while (currentDir && currentDir !== '.') {
-    const pathPrefix = currentDir === '/' ? '/' : `${currentDir}/`;
+    const { lower, upper } = buildDirectoryPrefixBounds(currentDir);
 
     const affinityRows = await db
       .select({
@@ -114,7 +270,8 @@ export async function findFolderAffinityAccounts(normalizedPath: string, poolId 
         and(
           eq(files.poolId, poolId),
           eq(files.isTrashed, false),
-          sql`${files.virtualPath} LIKE ${pathPrefix + '%'}`
+          gte(files.virtualPath, lower),
+          lt(files.virtualPath, upper)
         )
       )
       .groupBy(files.accountId)
@@ -131,18 +288,74 @@ export async function findFolderAffinityAccounts(normalizedPath: string, poolId 
   return [];
 }
 
+/**
+ * Finds accounts holding files in parent or ancestor paths of the virtual target.
+ * Returns accounts ordered by number of co-located files descending.
+ */
+export async function findFolderAffinityAccounts(normalizedPath: string, poolId = 1): Promise<string[]> {
+  return findFolderAffinityAccountsForDirectory(path.posix.dirname(normalizedPath), poolId);
+}
+
+function pickBestFitCandidate(
+  eligible: CandidateAccount[],
+  requiredBytes: number,
+  getEffectiveHeadroom: (accId: string, baseHeadroom: number) => number
+): CandidateAccount {
+  let bestCandidate = eligible[0];
+  let minDifference = getEffectiveHeadroom(bestCandidate.id, bestCandidate.headroomBytes) - requiredBytes;
+
+  for (let i = 1; i < eligible.length; i++) {
+    const cand = eligible[i];
+    const diff = getEffectiveHeadroom(cand.id, cand.headroomBytes) - requiredBytes;
+    if (diff < minDifference) {
+      minDifference = diff;
+      bestCandidate = cand;
+    }
+  }
+
+  return bestCandidate;
+}
+
+function commitCandidateDecision(
+  account: CandidateAccount,
+  virtualPath: string,
+  sizeBytes: number,
+  reason: 'folder_affinity' | 'best_fit',
+  getEffectiveHeadroom: (accId: string, baseHeadroom: number) => number,
+  getEffectiveBudget: (accId: string, baseBudget: number) => number,
+  simulatedHeadrooms?: Map<string, number>,
+  simulatedTransferBudgets?: Map<string, number>
+): PlacementDecision {
+  const before = getEffectiveHeadroom(account.id, account.headroomBytes);
+  const after = before - sizeBytes;
+  if (simulatedHeadrooms) {
+    simulatedHeadrooms.set(account.id, after);
+  }
+  if (simulatedTransferBudgets) {
+    const curBudget = getEffectiveBudget(account.id, account.transferStats.remainingUploadBytes24h);
+    simulatedTransferBudgets.set(account.id, curBudget - sizeBytes);
+  }
+
+  return {
+    accountId: account.id,
+    virtualPath,
+    sizeBytes,
+    reason,
+    headroomBeforeBytes: before,
+    headroomAfterBytes: after,
+  };
+}
+
 async function selectPlacementFromCandidates(
   item: PlacementItem,
   candidates: CandidateAccount[],
   simulatedHeadrooms?: Map<string, number>,
   simulatedTransferBudgets?: Map<string, number>,
-  poolId?: number
+  poolId?: number,
+  affinityMap?: PoolFolderAffinityMap
 ): Promise<PlacementDecision> {
+  assertValidFileSize(item.sizeBytes);
   const normalizedPath = normalizeVirtualPath(item.virtualPath);
-
-  if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
-    throw new FileExceedsCeilingError(item.sizeBytes);
-  }
 
   const getEffectiveHeadroom = (accId: string, baseHeadroom: number) => {
     if (simulatedHeadrooms && simulatedHeadrooms.has(accId)) {
@@ -158,8 +371,8 @@ async function selectPlacementFromCandidates(
     return baseBudget;
   };
 
-  // Filter candidates with sufficient effective headroom and daily transfer budget
   const eligible = candidates.filter((cand) => {
+    if (cand.isOverCeiling) return false;
     const effectiveHeadroom = getEffectiveHeadroom(cand.id, cand.headroomBytes);
     const effectiveBudget = getEffectiveBudget(cand.id, cand.transferStats.remainingUploadBytes24h);
     const hasHeadroom = effectiveHeadroom >= item.sizeBytes;
@@ -168,7 +381,9 @@ async function selectPlacementFromCandidates(
   });
 
   if (eligible.length === 0) {
-    const hasSpaceAccount = candidates.some((c) => getEffectiveHeadroom(c.id, c.headroomBytes) >= item.sizeBytes);
+    const hasSpaceAccount = candidates.some(
+      (c) => !c.isOverCeiling && getEffectiveHeadroom(c.id, c.headroomBytes) >= item.sizeBytes
+    );
     if (hasSpaceAccount) {
       throw new InsufficientStorageError(
         `All accounts with available headroom have exhausted their Google 750 GB daily transfer quota for ${item.virtualPath} (${item.sizeBytes} bytes)`
@@ -180,61 +395,43 @@ async function selectPlacementFromCandidates(
   }
 
   // Check 1: Folder Affinity (Existing path priority, restricted to provided candidates)
+  // Skip affinity lookup when only one candidate is eligible since it cannot change the selection.
   const affinityAccountIds =
-    poolId !== undefined ? await findFolderAffinityAccounts(normalizedPath, poolId) : [];
+    eligible.length > 1
+      ? affinityMap
+        ? affinityMap.getAffinityAccounts(normalizedPath)
+        : poolId !== undefined
+          ? await findFolderAffinityAccounts(normalizedPath, poolId)
+          : []
+      : [];
   for (const affId of affinityAccountIds) {
     const match = eligible.find((cand) => cand.id === affId);
     if (match) {
-      const before = getEffectiveHeadroom(match.id, match.headroomBytes);
-      const after = before - item.sizeBytes;
-      if (simulatedHeadrooms) simulatedHeadrooms.set(match.id, after);
-
-      if (simulatedTransferBudgets) {
-        const curBudget = getEffectiveBudget(match.id, match.transferStats.remainingUploadBytes24h);
-        simulatedTransferBudgets.set(match.id, curBudget - item.sizeBytes);
-      }
-
-      return {
-        accountId: match.id,
-        virtualPath: normalizedPath,
-        sizeBytes: item.sizeBytes,
-        reason: 'folder_affinity',
-        headroomBeforeBytes: before,
-        headroomAfterBytes: after,
-      };
+      return commitCandidateDecision(
+        match,
+        normalizedPath,
+        item.sizeBytes,
+        'folder_affinity',
+        getEffectiveHeadroom,
+        getEffectiveBudget,
+        simulatedHeadrooms,
+        simulatedTransferBudgets
+      );
     }
   }
 
   // Check 2: Best-Fit (Minimize headroom - sizeBytes among eligible accounts)
-  let bestCandidate = eligible[0];
-  let minDifference = getEffectiveHeadroom(bestCandidate.id, bestCandidate.headroomBytes) - item.sizeBytes;
-
-  for (let i = 1; i < eligible.length; i++) {
-    const cand = eligible[i];
-    const diff = getEffectiveHeadroom(cand.id, cand.headroomBytes) - item.sizeBytes;
-    if (diff < minDifference) {
-      minDifference = diff;
-      bestCandidate = cand;
-    }
-  }
-
-  const before = getEffectiveHeadroom(bestCandidate.id, bestCandidate.headroomBytes);
-  const after = before - item.sizeBytes;
-  if (simulatedHeadrooms) simulatedHeadrooms.set(bestCandidate.id, after);
-
-  if (simulatedTransferBudgets) {
-    const curBudget = getEffectiveBudget(bestCandidate.id, bestCandidate.transferStats.remainingUploadBytes24h);
-    simulatedTransferBudgets.set(bestCandidate.id, curBudget - item.sizeBytes);
-  }
-
-  return {
-    accountId: bestCandidate.id,
-    virtualPath: normalizedPath,
-    sizeBytes: item.sizeBytes,
-    reason: 'best_fit',
-    headroomBeforeBytes: before,
-    headroomAfterBytes: after,
-  };
+  const bestCandidate = pickBestFitCandidate(eligible, item.sizeBytes, getEffectiveHeadroom);
+  return commitCandidateDecision(
+    bestCandidate,
+    normalizedPath,
+    item.sizeBytes,
+    'best_fit',
+    getEffectiveHeadroom,
+    getEffectiveBudget,
+    simulatedHeadrooms,
+    simulatedTransferBudgets
+  );
 }
 
 /**
@@ -247,9 +444,7 @@ export async function selectPlacementForFile(
   simulatedTransferBudgets?: Map<string, number>,
   poolId = 1
 ): Promise<PlacementDecision> {
-  if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
-    throw new FileExceedsCeilingError(item.sizeBytes);
-  }
+  assertValidFileSize(item.sizeBytes);
 
   const candidates = await getEligibleAccounts(poolId, nowMs);
   return selectPlacementFromCandidates(
@@ -330,9 +525,7 @@ export async function simulateBatchPlacement(
   poolId?: number
 ): Promise<BatchPlacementPlan> {
   for (const item of items) {
-    if (item.sizeBytes > MAX_SINGLE_FILE_BYTES) {
-      throw new FileExceedsCeilingError(item.sizeBytes);
-    }
+    assertValidFileSize(item.sizeBytes);
   }
 
   const simulatedHeadrooms = new Map<string, number>();
@@ -341,6 +534,14 @@ export async function simulateBatchPlacement(
     simulatedHeadrooms.set(c.id, c.headroomBytes);
     simulatedTransferBudgets.set(c.id, c.transferStats.remainingUploadBytes24h);
   }
+
+  const getEffectiveHeadroom = (accId: string, baseHeadroom: number) =>
+    simulatedHeadrooms.get(accId) ?? baseHeadroom;
+  const getEffectiveBudget = (accId: string, baseBudget: number) =>
+    simulatedTransferBudgets.get(accId) ?? baseBudget;
+
+  const affinityMap =
+    poolId !== undefined && candidates.length > 1 ? await buildPoolFolderAffinityMap(poolId) : undefined;
 
   const decisions: PlacementDecision[] = [];
   const accountAllocations: Record<string, { filesCount: number; bytesAllocated: number }> = {};
@@ -352,12 +553,12 @@ export async function simulateBatchPlacement(
     }
     accountAllocations[decision.accountId].filesCount++;
     accountAllocations[decision.accountId].bytesAllocated += decision.sizeBytes;
+    affinityMap?.recordAssignment(decision.virtualPath, decision.accountId);
   };
 
   const tree = buildDirectoryTree(items);
 
   async function placeNode(node: TreeNode): Promise<void> {
-    // Collect all descendant files in this branch
     function collectFiles(n: TreeNode): PlacementItem[] {
       const list = [...n.files];
       for (const child of n.subdirs.values()) {
@@ -369,17 +570,23 @@ export async function simulateBatchPlacement(
     const branchFiles = collectFiles(node);
     if (branchFiles.length === 0) return;
 
-    // Check if entire branch fits into a single account's effective headroom and transfer budget
     const eligibleForBranch = candidates.filter((cand) => {
-      const effectiveHeadroom = simulatedHeadrooms.get(cand.id) ?? cand.headroomBytes;
-      const effectiveBudget = simulatedTransferBudgets.get(cand.id) ?? cand.transferStats.remainingUploadBytes24h;
+      if (cand.isOverCeiling) return false;
+      const effectiveHeadroom = getEffectiveHeadroom(cand.id, cand.headroomBytes);
+      const effectiveBudget = getEffectiveBudget(cand.id, cand.transferStats.remainingUploadBytes24h);
       return effectiveHeadroom >= node.totalBranchBytes && effectiveBudget >= node.totalBranchBytes;
     });
 
     if (eligibleForBranch.length > 0 && node.fullPath !== '/') {
       // Find affinity or best-fit for the branch as a whole (restricted to provided candidates)
       const affinityIds =
-        poolId !== undefined ? await findFolderAffinityAccounts(node.fullPath, poolId) : [];
+        eligibleForBranch.length > 1
+          ? affinityMap
+            ? affinityMap.getAffinityAccountsForDirectory(node.fullPath)
+            : poolId !== undefined
+              ? await findFolderAffinityAccountsForDirectory(node.fullPath, poolId)
+              : []
+          : [];
       let targetAccount: CandidateAccount | undefined;
       for (const affId of affinityIds) {
         const match = eligibleForBranch.find((cand) => cand.id === affId);
@@ -392,35 +599,26 @@ export async function simulateBatchPlacement(
 
       if (!targetAccount) {
         reason = 'best_fit';
-        targetAccount = eligibleForBranch[0];
-        let minDiff = (simulatedHeadrooms.get(targetAccount.id) ?? targetAccount.headroomBytes) - node.totalBranchBytes;
-        for (let i = 1; i < eligibleForBranch.length; i++) {
-          const cand = eligibleForBranch[i];
-          const diff = (simulatedHeadrooms.get(cand.id) ?? cand.headroomBytes) - node.totalBranchBytes;
-          if (diff < minDiff) {
-            minDiff = diff;
-            targetAccount = cand;
-          }
-        }
+        targetAccount = pickBestFitCandidate(
+          eligibleForBranch,
+          node.totalBranchBytes,
+          getEffectiveHeadroom
+        );
       }
 
-      // Assign all files in branch to targetAccount
       for (const f of branchFiles) {
-        const before = simulatedHeadrooms.get(targetAccount.id) ?? targetAccount.headroomBytes;
-        const after = before - f.sizeBytes;
-        simulatedHeadrooms.set(targetAccount.id, after);
-
-        const currentBudget = simulatedTransferBudgets.get(targetAccount.id) ?? targetAccount.transferStats.remainingUploadBytes24h;
-        simulatedTransferBudgets.set(targetAccount.id, currentBudget - f.sizeBytes);
-
-        recordDecision({
-          accountId: targetAccount.id,
-          virtualPath: f.virtualPath,
-          sizeBytes: f.sizeBytes,
-          reason,
-          headroomBeforeBytes: before,
-          headroomAfterBytes: after,
-        });
+        recordDecision(
+          commitCandidateDecision(
+            targetAccount,
+            f.virtualPath,
+            f.sizeBytes,
+            reason,
+            getEffectiveHeadroom,
+            getEffectiveBudget,
+            simulatedHeadrooms,
+            simulatedTransferBudgets
+          )
+        );
       }
       return;
     }
@@ -430,14 +628,14 @@ export async function simulateBatchPlacement(
       await placeNode(child);
     }
 
-    // Place remaining direct files in this node individually against the same candidate set
     for (const f of node.files) {
       const decision = await selectPlacementFromCandidates(
         f,
         candidates,
         simulatedHeadrooms,
         simulatedTransferBudgets,
-        poolId
+        poolId,
+        affinityMap
       );
       recordDecision(decision);
     }
@@ -470,6 +668,115 @@ export async function planBatchPlacement(
 }
 
 /**
+ * Looks up active (non-trashed) pool files matching the given virtual paths.
+ */
+export async function findExistingActiveFilesByPaths(
+  poolId: number,
+  virtualPaths: string[]
+): Promise<Map<string, ExistingPoolFileSummary>> {
+  const result = new Map<string, ExistingPoolFileSummary>();
+  if (virtualPaths.length === 0) {
+    return result;
+  }
+
+  const uniquePaths = Array.from(new Set(virtualPaths.map((p) => normalizeVirtualPath(p))));
+
+  for (const chunk of chunkArray(uniquePaths, 400)) {
+    const rows = await db
+      .select({
+        id: files.id,
+        virtualPath: files.virtualPath,
+        name: files.name,
+        sizeBytes: files.sizeBytes,
+        hash: files.hash,
+        accountId: files.accountId,
+        updatedAt: files.updatedAt,
+      })
+      .from(files)
+      .where(and(eq(files.poolId, poolId), eq(files.isTrashed, false), inArray(files.virtualPath, chunk)));
+
+    for (const row of rows) {
+      const updatedMs =
+        row.updatedAt instanceof Date ? row.updatedAt.getTime() : Number(row.updatedAt) * 1000;
+      result.set(row.virtualPath, {
+        id: row.id,
+        virtualPath: row.virtualPath,
+        name: row.name,
+        sizeBytes: row.sizeBytes,
+        hash: row.hash,
+        accountId: row.accountId,
+        updatedAt: Number.isFinite(updatedMs) ? updatedMs : 0,
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Detects path collisions against active pool files and plans placement
+ * for non-skipped items against real in-flight headroom, while reporting net storage delta.
+ */
+export async function planUploadBatchWithConflicts(
+  items: UploadPlacementRequestItem[],
+  nowMs = Date.now(),
+  poolId = 1
+): Promise<UploadBatchPlacementPlan> {
+  for (const item of items) {
+    assertValidFileSize(item.sizeBytes);
+  }
+
+  const existingByPath = await findExistingActiveFilesByPaths(
+    poolId,
+    items.map((item) => item.virtualPath)
+  );
+
+  const conflicts: Record<string, ExistingPoolFileSummary> = {};
+  const itemsToPlace: PlacementItem[] = [];
+  let replacedBytes = 0;
+
+  for (const item of items) {
+    const normPath = normalizeVirtualPath(item.virtualPath);
+    const existing = existingByPath.get(normPath);
+
+    if (existing) {
+      conflicts[normPath] = existing;
+      if (item.conflictAction === 'replace') {
+        replacedBytes += existing.sizeBytes;
+        itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
+      } else if (item.conflictAction === 'keep_both') {
+        itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
+      }
+      // Conflicts with action 'skip' or unset default to skip and are excluded from allocation.
+      continue;
+    }
+
+    itemsToPlace.push({ virtualPath: normPath, sizeBytes: item.sizeBytes });
+  }
+
+  if (itemsToPlace.length === 0) {
+    return {
+      totalFiles: 0,
+      totalBytes: 0,
+      replacedBytes: 0,
+      netStorageDeltaBytes: 0,
+      decisions: [],
+      accountAllocations: {},
+      conflicts,
+    };
+  }
+
+  const candidates = await getEligibleAccounts(poolId, nowMs);
+  const plan = await simulateBatchPlacement(itemsToPlace, candidates, poolId);
+  return {
+    ...plan,
+    replacedBytes,
+    netStorageDeltaBytes: plan.totalBytes - replacedBytes,
+    conflicts,
+  };
+}
+
+/**
  * Validates whether a specific target account can accept a file of sizeBytes.
  * Enforces the strict 750 MB reserve ceiling and 24-hour rolling transfer window.
  */
@@ -479,6 +786,8 @@ export async function validateTargetPlacement(
   nowMs = Date.now(),
   expectedPoolId?: number
 ): Promise<CandidateAccount> {
+  assertValidFileSize(sizeBytes);
+
   const account = await db.query.accounts.findFirst({
     where: eq(accounts.id, accountId),
   });
@@ -503,14 +812,29 @@ export async function validateTargetPlacement(
     );
   }
 
-  const headroom = calculateHeadroom(account.quotaLimitBytes, account.quotaUsedBytes);
+  if (
+    account.quotaUsedBytes >= account.quotaLimitBytes ||
+    account.quotaUsedBytes > calculateUsableLimit(account.quotaLimitBytes)
+  ) {
+    throw new InsufficientStorageError(
+      `Drive "${account.displayName || accountId}" has exceeded its usable storage ceiling`
+    );
+  }
+
+  const rawHeadroom = calculateHeadroom(account.quotaLimitBytes, account.quotaUsedBytes);
+  const rawTransferStats = await getAccountTransferStats(accountId, nowMs);
+  const { headroomBytes: headroom, transferStats } = applyInFlightReservation(
+    accountId,
+    rawHeadroom,
+    rawTransferStats
+  );
+
   if (headroom < sizeBytes) {
     throw new InsufficientStorageError(
       `Drive "${account.displayName || accountId}" has insufficient headroom (${(headroom / (1024 * 1024 * 1024)).toFixed(2)} GB available, needs ${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB to preserve 750 MB reserve ceiling)`
     );
   }
 
-  const transferStats = await getAccountTransferStats(accountId, nowMs);
   if (transferStats.remainingUploadBytes24h < sizeBytes) {
     throw new InsufficientStorageError(
       `Drive "${account.displayName || accountId}" has exhausted its Google 750 GB daily transfer quota (${(transferStats.remainingUploadBytes24h / (1024 * 1024 * 1024)).toFixed(2)} GB remaining)`

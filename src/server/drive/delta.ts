@@ -1,15 +1,29 @@
-import path from 'node:path';
-import { getDriveClient, refreshAccountLiveQuota } from './client.js';
-import { normalizeVirtualPath } from './mirror.js';
 import {
-  runColdReconciliation,
+  clearOrphanAppProperties,
+  getDriveClient,
+  refreshAccountLiveQuota,
+  resolveRemoteParentPath,
+  withDriveRetry,
+} from './client.js';
+import {
+  runColdReconciliationLocked,
+  runWithAccountSyncLock,
   extractFolderPaths,
   insertFolderRecord,
   upsertFileRecord,
   deleteFileStmt,
   trashFileStmt,
 } from './sync.js';
-import { db, sqlite } from '../db/index.js';
+import {
+  evictRemoteFolderByDriveId,
+  getCachedVirtualPathByDriveId,
+  normalizeVirtualPath,
+  setCachedRemoteFolder,
+} from './mirror.js';
+import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
+import { invalidateDiscrepancyCache } from './detector.js';
+import { db, sqlite, bumpPoolRevision } from '../db/index.js';
+import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
 import { accounts } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 
@@ -21,103 +35,45 @@ export interface DeltaSyncReport {
   newToken: string | null;
 }
 
-async function resolveRemoteParentPath(
-  drive: ReturnType<typeof getDriveClient>,
-  rootFolderId: string,
-  parentFolderId: string,
-  cache: Map<string, string | null>,
-  expectedPath?: string,
-  poolId = 1
-): Promise<{ isInsidePool: boolean; path: string }> {
-  if (parentFolderId === rootFolderId) {
-    return { isInsidePool: true, path: '/' };
-  }
+const inFlightIncrementalSyncs = new Map<string, Promise<DeltaSyncReport>>();
 
-  if (cache.has(parentFolderId)) {
-    const cached = cache.get(parentFolderId);
-    return cached != null
-      ? { isInsidePool: true, path: cached }
-      : { isInsidePool: false, path: '' };
-  }
-
-  // 1. Check local SQLite folders table first
-  if (expectedPath) {
-    const normExpected = normalizeVirtualPath(expectedPath);
-    if (normExpected === '/') {
-      cache.set(parentFolderId, '/');
-      return { isInsidePool: true, path: '/' };
-    }
-    const localFolder = sqlite
-      .prepare('SELECT virtual_path FROM folders WHERE pool_id = ? AND (virtual_path = ? OR id = ?)')
-      .get(poolId, normExpected, parentFolderId) as { virtual_path: string } | undefined;
-
-    if (localFolder) {
-      cache.set(parentFolderId, localFolder.virtual_path);
-      return { isInsidePool: true, path: localFolder.virtual_path };
-    }
-  }
-
-  const localById = sqlite
-    .prepare('SELECT virtual_path FROM folders WHERE pool_id = ? AND id = ?')
-    .get(poolId, parentFolderId) as { virtual_path: string } | undefined;
-
-  if (localById) {
-    cache.set(parentFolderId, localById.virtual_path);
-    return { isInsidePool: true, path: localById.virtual_path };
-  }
-
-  // 2. Query Google Drive only when parent folder ID is unknown locally
-  try {
-    const res = await drive.files.get({
-      fileId: parentFolderId,
-      fields: 'id, name, parents, appProperties, trashed',
-      supportsAllDrives: false,
-    });
-
-    const folder = res.data;
-    if (folder.trashed || !folder.parents || folder.parents.length === 0) {
-      cache.set(parentFolderId, null);
-      return { isInsidePool: false, path: '' };
-    }
-
-    if (folder.parents.includes(rootFolderId)) {
-      const computedPath = folder.appProperties?.tsubasa_folder_path || `/${folder.name}`;
-      insertFolderRecord(computedPath, poolId);
-      cache.set(parentFolderId, computedPath);
-      return { isInsidePool: true, path: computedPath };
-    }
-
-    const grandParentId = folder.parents[0];
-    const parentResult = await resolveRemoteParentPath(
-      drive,
-      rootFolderId,
-      grandParentId,
-      cache,
-      undefined,
-      poolId
-    );
-
-    if (!parentResult.isInsidePool) {
-      cache.set(parentFolderId, null);
-      return { isInsidePool: false, path: '' };
-    }
-
-    const computedPath =
-      folder.appProperties?.tsubasa_folder_path ||
-      (parentResult.path === '/'
-        ? `/${folder.name}`
-        : `${parentResult.path}/${folder.name}`);
-
-    insertFolderRecord(computedPath, poolId);
-    cache.set(parentFolderId, computedPath);
-    return { isInsidePool: true, path: computedPath };
-  } catch {
-    cache.set(parentFolderId, null);
-    return { isInsidePool: false, path: '' };
-  }
+function isExpiredTokenError(err: unknown): boolean {
+  const e = err as { status?: number; code?: number; response?: { status?: number } } | null;
+  return e?.status === 410 || e?.code === 410 || e?.response?.status === 410;
 }
 
-export async function runIncrementalSync(accountId: string): Promise<DeltaSyncReport> {
+async function fallbackToColdSync(accountId: string): Promise<DeltaSyncReport> {
+  const coldReport = await runColdReconciliationLocked(accountId);
+  invalidateDiscrepancyCache(accountId);
+  const refreshed = await db.query.accounts.findFirst({
+    where: eq(accounts.id, accountId),
+  });
+
+  return {
+    accountId,
+    changesProcessed: coldReport.filesIndexed,
+    filesUpdated: coldReport.filesIndexed,
+    filesRemoved: 0,
+    newToken: refreshed?.lastSyncToken || null,
+  };
+}
+
+export function runIncrementalSync(accountId: string): Promise<DeltaSyncReport> {
+  const existing = inFlightIncrementalSyncs.get(accountId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = runWithAccountSyncLock(accountId, () => executeIncrementalSync(accountId)).finally(() => {
+    if (inFlightIncrementalSyncs.get(accountId) === promise) {
+      inFlightIncrementalSyncs.delete(accountId);
+    }
+  });
+  inFlightIncrementalSyncs.set(accountId, promise);
+  return promise;
+}
+
+async function executeIncrementalSync(accountId: string): Promise<DeltaSyncReport> {
   const accountRecord = await db.query.accounts.findFirst({
     where: eq(accounts.id, accountId),
   });
@@ -127,22 +83,13 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
   }
 
   if (!accountRecord.lastSyncToken) {
-    const coldReport = await runColdReconciliation(accountId);
-    const refreshed = await db.query.accounts.findFirst({
-      where: eq(accounts.id, accountId),
-    });
-
-    return {
-      accountId,
-      changesProcessed: coldReport.filesIndexed,
-      filesUpdated: coldReport.filesIndexed,
-      filesRemoved: 0,
-      newToken: refreshed?.lastSyncToken || null,
-    };
+    return fallbackToColdSync(accountId);
   }
 
   const drive = getDriveClient(accountId);
   await db.update(accounts).set({ syncState: 'syncing' }).where(eq(accounts.id, accountId));
+
+  let report: DeltaSyncReport;
 
   try {
     const rootFolderId = accountRecord.rootFolderId;
@@ -152,6 +99,7 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
 
     const poolId = accountRecord.poolId ?? 1;
     const folderPathCache = new Map<string, string | null>([[rootFolderId, '/']]);
+    const orphanDriveIds: string[] = [];
 
     let pageToken: string | undefined = accountRecord.lastSyncToken;
     let newStartToken: string | null = null;
@@ -160,24 +108,33 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
     let removedCount = 0;
 
     while (pageToken) {
-      const res: any = await drive.changes.list({
-        pageToken,
-        fields: 'nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, size, mimeType, trashed, parents, appProperties, md5Checksum, sha256Checksum))',
-        spaces: 'drive',
-        supportsAllDrives: false,
-        includeItemsFromAllDrives: false,
-      });
+      const res: any = await withDriveRetry(() =>
+        drive.changes.list({
+          pageToken,
+          pageSize: 1000,
+          fields: 'nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, size, mimeType, trashed, parents, appProperties, md5Checksum, sha256Checksum))',
+          spaces: 'drive',
+          supportsAllDrives: false,
+          includeItemsFromAllDrives: false,
+        })
+      );
 
       const batch = res.data.changes || [];
       changesCount += batch.length;
 
+      const pendingOutboxDeleteIds = getPendingOutboxDeleteDriveIds(accountId);
+      const pendingOutboxDriveIds = getPendingOutboxDriveIds(accountId);
       const batchFolderPaths = new Set<string>();
       const batchOperations: Array<() => void> = [];
 
       for (const change of batch) {
         if (!change.fileId) continue;
+        if (pendingOutboxDeleteIds.has(change.fileId) || pendingOutboxDriveIds.has(change.fileId)) {
+          continue;
+        }
 
         if (change.removed) {
+          evictRemoteFolderByDriveId(rootFolderId, change.fileId);
           batchOperations.push(() => {
             deleteFileStmt.run(change.fileId, accountId);
           });
@@ -189,36 +146,51 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
         if (!file) continue;
 
         if (file.mimeType === 'application/vnd.google-apps.folder') {
+          let folderInsidePool = false;
           if (!file.trashed && file.parents && file.parents.length > 0) {
-            const parentId = file.parents[0];
-            const parentRes = await resolveRemoteParentPath(
-              drive,
-              rootFolderId,
-              parentId,
-              folderPathCache,
-              file.appProperties?.tsubasa_folder_path
-                ? path.posix.dirname(file.appProperties.tsubasa_folder_path)
-                : undefined,
-              poolId
-            );
-            if (parentRes.isInsidePool) {
-              const folderPath =
-                file.appProperties?.tsubasa_folder_path ||
-                (parentRes.path === '/'
-                  ? `/${file.name}`
-                  : `${parentRes.path}/${file.name}`);
-              batchFolderPaths.add(folderPath);
-              folderPathCache.set(change.fileId, folderPath);
+            for (const parentId of file.parents) {
+              const parentRes = await resolveRemoteParentPath(
+                drive,
+                rootFolderId,
+                parentId,
+                folderPathCache,
+                {
+                  onResolvedFolder: (virtualPath) => batchFolderPaths.add(virtualPath),
+                }
+              );
+              if (parentRes.isInsidePool) {
+                const folderPath = normalizeVirtualPath(
+                  file.appProperties?.tsubasa_folder_path ||
+                    (parentRes.path === '/'
+                      ? `/${file.name}`
+                      : `${parentRes.path}/${file.name}`)
+                );
+                batchFolderPaths.add(folderPath);
+                folderPathCache.set(change.fileId, folderPath);
+                const cachedFolderPath = getCachedVirtualPathByDriveId(rootFolderId, change.fileId);
+                if (cachedFolderPath && cachedFolderPath !== folderPath) {
+                  evictRemoteFolderByDriveId(rootFolderId, change.fileId);
+                  setCachedRemoteFolder(rootFolderId, folderPath, change.fileId);
+                }
+                folderInsidePool = true;
+                break;
+              }
             }
+          }
+          if (!folderInsidePool) {
+            evictRemoteFolderByDriveId(rootFolderId, change.fileId);
           }
           continue;
         }
 
         if (file.trashed) {
+          const driveFileId = change.fileId;
           batchOperations.push(() => {
-            trashFileStmt.run(change.fileId, accountId);
+            const info = trashFileStmt.run(driveFileId, accountId);
+            if (info.changes > 0) {
+              updatedCount++;
+            }
           });
-          updatedCount++;
           continue;
         }
 
@@ -226,18 +198,15 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
         let parentFolderPath = '/';
 
         if (file.parents && file.parents.length > 0) {
-          const expectedParent = file.appProperties?.tsubasa_virtual_path
-            ? path.posix.dirname(file.appProperties.tsubasa_virtual_path)
-            : undefined;
-
           for (const parentId of file.parents) {
             const res = await resolveRemoteParentPath(
               drive,
               rootFolderId,
               parentId,
               folderPathCache,
-              expectedParent,
-              poolId
+              {
+                onResolvedFolder: (virtualPath) => batchFolderPaths.add(virtualPath),
+              }
             );
             if (res.isInsidePool) {
               isInsidePool = true;
@@ -254,27 +223,20 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
           removedCount++;
 
           if (file.appProperties?.tsubasa_managed === 'true') {
-            drive.files
-              .update({
-                fileId: change.fileId,
-                requestBody: {
-                  appProperties: {
-                    tsubasa_managed: null,
-                    tsubasa_virtual_path: null,
-                    tsubasa_virtual_id: null,
-                  } as any,
-                },
-                supportsAllDrives: false,
-              })
-              .catch(() => {});
+            orphanDriveIds.push(change.fileId);
           }
           continue;
         }
 
         if (file.appProperties?.tsubasa_managed === 'true') {
+          const sizeBytes = Number(file.size || 0);
+          if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+            continue;
+          }
+
           const computedPath =
             parentFolderPath === '/' ? `/${file.name}` : `${parentFolderPath}/${file.name}`;
-          const virtualPath = file.appProperties.tsubasa_virtual_path || computedPath;
+          const virtualPath = normalizeVirtualPath(file.appProperties.tsubasa_virtual_path || computedPath);
           const fileId = file.appProperties.tsubasa_virtual_id || file.id || change.fileId;
           const hash =
             file.appProperties.tsubasa_checksum || file.md5Checksum || file.sha256Checksum || null;
@@ -288,7 +250,7 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
               id: fileId,
               virtualPath,
               name: file.name || 'unnamed',
-              sizeBytes: Number(file.size || 0),
+              sizeBytes,
               mimeType: file.mimeType || 'application/octet-stream',
               hash,
               accountId,
@@ -318,26 +280,48 @@ export async function runIncrementalSync(accountId: string): Promise<DeltaSyncRe
       pageToken = res.data.nextPageToken || undefined;
     }
 
+    await clearOrphanAppProperties(drive, orphanDriveIds);
+
+    const finalToken = newStartToken || accountRecord.lastSyncToken;
+
     await db
       .update(accounts)
       .set({
         syncState: 'idle',
-        lastSyncToken: newStartToken || accountRecord.lastSyncToken,
+        lastSyncToken: finalToken,
         updatedAt: new Date(),
       })
       .where(eq(accounts.id, accountId));
 
-    await refreshAccountLiveQuota(accountId);
+    if (updatedCount > 0 || removedCount > 0) {
+      invalidateDiscrepancyCache(accountId);
+      bumpPoolRevision(poolId);
+    }
 
-    return {
+    report = {
       accountId,
       changesProcessed: changesCount,
       filesUpdated: updatedCount,
       filesRemoved: removedCount,
-      newToken: newStartToken || accountRecord.lastSyncToken,
+      newToken: finalToken,
     };
   } catch (err) {
+    if (isExpiredTokenError(err)) {
+      await db
+        .update(accounts)
+        .set({ lastSyncToken: null })
+        .where(eq(accounts.id, accountId));
+      return fallbackToColdSync(accountId);
+    }
+
     await db.update(accounts).set({ syncState: 'error' }).where(eq(accounts.id, accountId));
     throw err;
   }
+
+  // Refresh quota outside the error-marking try/catch so an about.get failure doesn't flip syncState to 'error'.
+  await refreshAccountLiveQuota(accountId).catch((err) => {
+    console.warn(`[delta-sync] Failed to refresh live quota for ${accountId}:`, err);
+  });
+
+  return report;
 }

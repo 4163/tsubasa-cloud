@@ -1,8 +1,18 @@
-import { getDriveClient, resolveRemoteFolderTree } from './client.js';
-import { db, sqlite } from '../db/index.js';
+import {
+  clearOrphanAppProperties,
+  getDriveClient,
+  refreshAccountLiveQuota,
+  resolveRemoteFolderTree,
+  withDriveRetry,
+} from './client.js';
+import { db, sqlite, bumpPoolRevision } from '../db/index.js';
+import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outbox.js';
 import { accounts, files } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import path from 'node:path';
+import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
+import { normalizeVirtualPath } from './mirror.js';
+import { invalidateDiscrepancyCache } from './detector.js';
 
 export function formatFolderId(poolId: number, virtualPath: string): string {
   return `${poolId}:${virtualPath}`;
@@ -71,6 +81,7 @@ export function getUpsertFileStmt() {
         drive_file_id = excluded.drive_file_id,
         folder_id = excluded.folder_id,
         is_trashed = excluded.is_trashed,
+        trashed_at = CASE WHEN excluded.is_trashed = 0 THEN NULL ELSE COALESCE(files.trashed_at, unixepoch()) END,
         updated_at = unixepoch()
     `);
   }
@@ -116,6 +127,70 @@ export const trashFileStmt = {
   },
 };
 
+let _selectFileByPathStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectFileByPathStmt(): any {
+  if (!_selectFileByPathStmt) {
+    _selectFileByPathStmt = sqlite.prepare(
+      'SELECT id, account_id, drive_file_id, is_trashed FROM files WHERE pool_id = ? AND virtual_path = ? LIMIT 1'
+    );
+  }
+  return _selectFileByPathStmt;
+}
+
+let _selectFileByDriveIdStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectFileByDriveIdStmt(): any {
+  if (!_selectFileByDriveIdStmt) {
+    _selectFileByDriveIdStmt = sqlite.prepare(
+      'SELECT id, virtual_path, account_id, is_trashed FROM files WHERE pool_id = ? AND account_id = ? AND drive_file_id = ? LIMIT 1'
+    );
+  }
+  return _selectFileByDriveIdStmt;
+}
+
+let _updateTrashedPathStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getUpdateTrashedPathStmt(): any {
+  if (!_updateTrashedPathStmt) {
+    _updateTrashedPathStmt = sqlite.prepare('UPDATE files SET virtual_path = ? WHERE id = ?');
+  }
+  return _updateTrashedPathStmt;
+}
+
+let _selectFileByIdStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectFileByIdStmt(): any {
+  if (!_selectFileByIdStmt) {
+    _selectFileByIdStmt = sqlite.prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1');
+  }
+  return _selectFileByIdStmt;
+}
+
+let _updateMovedFileStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getUpdateMovedFileStmt(): any {
+  if (!_updateMovedFileStmt) {
+    _updateMovedFileStmt = sqlite.prepare('UPDATE files SET virtual_path = ?, folder_id = ? WHERE id = ?');
+  }
+  return _updateMovedFileStmt;
+}
+
+let _selectPendingDriveSyncStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getSelectPendingDriveSyncStmt(): any {
+  if (!_selectPendingDriveSyncStmt) {
+    _selectPendingDriveSyncStmt = sqlite.prepare(
+      'SELECT drive_file_id FROM pending_drive_sync WHERE account_id = ?'
+    );
+  }
+  return _selectPendingDriveSyncStmt;
+}
+
+let _deletePendingDriveSyncStmt: ReturnType<typeof sqlite.prepare> | null = null;
+function getDeletePendingDriveSyncStmt(): any {
+  if (!_deletePendingDriveSyncStmt) {
+    _deletePendingDriveSyncStmt = sqlite.prepare(
+      'DELETE FROM pending_drive_sync WHERE account_id = ? AND drive_file_id = ?'
+    );
+  }
+  return _deletePendingDriveSyncStmt;
+}
+
 export function extractFolderPaths(virtualPath: string): string[] {
   const result: string[] = [];
   let currentDir = path.posix.dirname(virtualPath);
@@ -134,12 +209,22 @@ export function insertFolderRecord(folderPath: string, poolId = 1): void {
   insertFolderStmt.run(id, poolId, folderPath, folderName, parentId);
 }
 
-export function ensureLocalFolderHierarchy(virtualPathOrFolderPath: string, poolId = 1): void {
-  const folders = extractFolderPaths(virtualPathOrFolderPath);
-  if (virtualPathOrFolderPath.startsWith('/') && !virtualPathOrFolderPath.includes('.') && virtualPathOrFolderPath !== '/') {
-    if (!folders.includes(virtualPathOrFolderPath)) {
-      folders.unshift(virtualPathOrFolderPath);
-    }
+export function ensureLocalParentFolders(fileVirtualPath: string, poolId = 1): void {
+  const folders = extractFolderPaths(fileVirtualPath);
+  for (let i = folders.length - 1; i >= 0; i--) {
+    insertFolderRecord(folders[i], poolId);
+  }
+}
+
+export function ensureLocalFolderPath(folderVirtualPath: string, poolId = 1): void {
+  const withLeadingSlash = folderVirtualPath.startsWith('/') ? folderVirtualPath : `/${folderVirtualPath}`;
+  const normalized = withLeadingSlash.replace(/\/+$/, '') || '/';
+  if (normalized === '/') {
+    return;
+  }
+  const folders = extractFolderPaths(normalized);
+  if (!folders.includes(normalized)) {
+    folders.unshift(normalized);
   }
   for (let i = folders.length - 1; i >= 0; i--) {
     insertFolderRecord(folders[i], poolId);
@@ -151,19 +236,11 @@ export function upsertFileRecord(f: DiscoveredFile): 'indexed' | 'conflict' {
   const parentPath = path.posix.dirname(f.virtualPath);
   const folderId = parentPath === '/' || parentPath === '.' ? null : formatFolderId(poolId, parentPath);
 
-  const existingAtPath = sqlite
-    .prepare(
-      'SELECT id, account_id, drive_file_id, is_trashed FROM files WHERE pool_id = ? AND virtual_path = ? LIMIT 1'
-    )
-    .get(poolId, f.virtualPath) as
+  const existingAtPath = getSelectFileByPathStmt().get(poolId, f.virtualPath) as
     | { id: string; account_id: string; drive_file_id: string; is_trashed: number }
     | undefined;
 
-  const existingByDriveId = sqlite
-    .prepare(
-      'SELECT id, virtual_path, account_id, is_trashed FROM files WHERE pool_id = ? AND account_id = ? AND drive_file_id = ? LIMIT 1'
-    )
-    .get(poolId, f.accountId, f.driveFileId) as
+  const existingByDriveId = getSelectFileByDriveIdStmt().get(poolId, f.accountId, f.driveFileId) as
     | { id: string; virtual_path: string; account_id: string; is_trashed: number }
     | undefined;
 
@@ -174,14 +251,15 @@ export function upsertFileRecord(f: DiscoveredFile): 'indexed' | 'conflict' {
     if (f.isTrashed) {
       return 'conflict';
     }
-    sqlite
-      .prepare('UPDATE files SET virtual_path = ? WHERE id = ?')
-      .run(`${f.virtualPath}.trashed-${Date.now()}-${existingAtPath.id.slice(0, 6)}`, existingAtPath.id);
+    getUpdateTrashedPathStmt().run(
+      `${f.virtualPath}.trashed-${Date.now()}-${existingAtPath.id.slice(0, 6)}`,
+      existingAtPath.id
+    );
   }
 
-  const existingById = sqlite
-    .prepare('SELECT id, drive_file_id, account_id FROM files WHERE id = ? LIMIT 1')
-    .get(f.id) as { id: string; drive_file_id: string; account_id: string } | undefined;
+  const existingById = getSelectFileByIdStmt().get(f.id) as
+    | { id: string; drive_file_id: string; account_id: string }
+    | undefined;
 
   const effectiveId = existingByDriveId
     ? existingByDriveId.id
@@ -190,9 +268,7 @@ export function upsertFileRecord(f: DiscoveredFile): 'indexed' | 'conflict' {
       : f.id;
 
   if (existingByDriveId && existingByDriveId.virtual_path !== f.virtualPath) {
-    sqlite
-      .prepare('UPDATE files SET virtual_path = ?, folder_id = ? WHERE id = ?')
-      .run(f.virtualPath, folderId, existingByDriveId.id);
+    getUpdateMovedFileStmt().run(f.virtualPath, folderId, existingByDriveId.id);
   }
 
   upsertFileStmt.run(
@@ -212,7 +288,51 @@ export function upsertFileRecord(f: DiscoveredFile): 'indexed' | 'conflict' {
   return 'indexed';
 }
 
-export async function runColdReconciliation(accountId: string): Promise<ColdSyncReport> {
+const accountSyncChains = new Map<string, Promise<unknown>>();
+
+export function runWithAccountSyncLock<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = accountSyncChains.get(accountId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(fn);
+  const tail = next.then(
+    () => undefined,
+    () => undefined
+  );
+  accountSyncChains.set(accountId, tail);
+  tail.finally(() => {
+    if (accountSyncChains.get(accountId) === tail) {
+      accountSyncChains.delete(accountId);
+    }
+  });
+  return next;
+}
+
+const inFlightColdSyncs = new Map<string, Promise<ColdSyncReport>>();
+
+export function runColdReconciliationLocked(accountId: string): Promise<ColdSyncReport> {
+  const existing = inFlightColdSyncs.get(accountId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = executeColdReconciliation(accountId).finally(() => {
+    if (inFlightColdSyncs.get(accountId) === promise) {
+      inFlightColdSyncs.delete(accountId);
+    }
+  });
+  inFlightColdSyncs.set(accountId, promise);
+  return promise;
+}
+
+export function runColdReconciliation(accountId: string): Promise<ColdSyncReport> {
+  const existing = inFlightColdSyncs.get(accountId);
+  if (existing) {
+    return existing;
+  }
+
+  return runWithAccountSyncLock(accountId, () => runColdReconciliationLocked(accountId));
+}
+
+async function executeColdReconciliation(accountId: string): Promise<ColdSyncReport> {
   const drive = getDriveClient(accountId);
 
   await db.update(accounts).set({ syncState: 'syncing' }).where(eq(accounts.id, accountId));
@@ -226,52 +346,59 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       throw new Error(`Account ${accountId} does not have a registered root folder`);
     }
 
+    // Capture the change token before crawling so edits made during the crawl are replayed on the next delta sync.
+    const tokenRes = await withDriveRetry(() =>
+      drive.changes.getStartPageToken({
+        supportsAllDrives: false,
+      })
+    );
+    const startToken = tokenRes.data.startPageToken || null;
+    if (!startToken) {
+      throw new Error(`Drive did not return a startPageToken for account ${accountId}`);
+    }
+
     const poolId = accountRecord.poolId ?? 1;
     const folderTree = await resolveRemoteFolderTree(drive, accountRecord.rootFolderId);
     const validFolderIds = folderTree.folderIds;
     const discoveredFiles: DiscoveredFile[] = [];
     const discoveredFolderPaths = new Set<string>();
+    const orphanDriveIds: string[] = [];
 
     for (const folder of folderTree.folders) {
-      discoveredFolderPaths.add(folder.virtualPath);
+      discoveredFolderPaths.add(normalizeVirtualPath(folder.virtualPath));
     }
 
     let pageToken: string | undefined = undefined;
 
     do {
-      const res: any = await drive.files.list({
-        q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder'",
-        fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, parents, appProperties)',
-        pageSize: 1000,
-        pageToken,
-        spaces: 'drive',
-        supportsAllDrives: false,
-      });
+      const res: any = await withDriveRetry(() =>
+        drive.files.list({
+          q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder'",
+          fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, parents, appProperties)',
+          pageSize: 1000,
+          pageToken,
+          spaces: 'drive',
+          supportsAllDrives: false,
+        })
+      );
 
       for (const item of res.data.files || []) {
         if (!item.id || !item.name) continue;
 
         const isInside = Boolean(item.parents?.some((p: string) => validFolderIds.has(p)));
         if (!isInside) {
-          drive.files
-            .update({
-              fileId: item.id,
-              requestBody: {
-                appProperties: {
-                  tsubasa_managed: null,
-                  tsubasa_virtual_path: null,
-                  tsubasa_virtual_id: null,
-                } as any,
-              },
-              supportsAllDrives: false,
-            })
-            .catch(() => {});
+          orphanDriveIds.push(item.id);
+          continue;
+        }
+
+        const sizeBytes = Number(item.size || 0);
+        if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
           continue;
         }
 
         const parentFolderPath = item.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
         const computedPath = parentFolderPath === '/' ? `/${item.name}` : `${parentFolderPath}/${item.name}`;
-        const virtualPath = item.appProperties?.tsubasa_virtual_path || computedPath;
+        const virtualPath = normalizeVirtualPath(item.appProperties?.tsubasa_virtual_path || computedPath);
         const fileId = item.appProperties?.tsubasa_virtual_id || item.id;
         const hash = item.appProperties?.tsubasa_checksum || item.md5Checksum || item.sha256Checksum || null;
 
@@ -279,7 +406,7 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
           id: fileId,
           virtualPath,
           name: item.name,
-          sizeBytes: Number(item.size || 0),
+          sizeBytes,
           mimeType: item.mimeType || 'application/octet-stream',
           hash,
           accountId,
@@ -296,13 +423,16 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       pageToken = res.data.nextPageToken || undefined;
     } while (pageToken);
 
+    await clearOrphanAppProperties(drive, orphanDriveIds);
+
     const localAccountFiles = await db.query.files.findMany({
-      where: and(
-        eq(files.accountId, accountId),
-        eq(files.poolId, poolId),
-        eq(files.isTrashed, false)
-      ),
+      where: and(eq(files.accountId, accountId), eq(files.poolId, poolId)),
     });
+
+    const pendingRows = getSelectPendingDriveSyncStmt().all(accountId) as Array<{ drive_file_id: string }>;
+    const pendingDbDriveIds = new Set(pendingRows.map((r) => r.drive_file_id));
+    const pendingOutboxDeleteIds = getPendingOutboxDeleteDriveIds(accountId);
+    const pendingOutboxDriveIds = getPendingOutboxDriveIds(accountId);
 
     const discoveredDriveIds = new Set(discoveredFiles.map((f) => f.driveFileId));
     let indexedCount = 0;
@@ -315,13 +445,24 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       indexedActiveBytes = 0;
 
       for (const lf of localAccountFiles) {
-        if (!discoveredDriveIds.has(lf.driveFileId) && !pendingAppPropertyDriveIds.has(lf.driveFileId)) {
+        if (
+          !discoveredDriveIds.has(lf.driveFileId) &&
+          !pendingAppPropertyDriveIds.has(lf.driveFileId) &&
+          !pendingDbDriveIds.has(lf.driveFileId) &&
+          !pendingOutboxDriveIds.has(lf.driveFileId)
+        ) {
           deleteFileStmt.run(lf.driveFileId, accountId);
         }
       }
 
+      for (const driveFileId of discoveredDriveIds) {
+        if (pendingDbDriveIds.has(driveFileId)) {
+          getDeletePendingDriveSyncStmt().run(accountId, driveFileId);
+        }
+      }
+
       for (const folder of folderTree.folders) {
-        insertFolderRecord(folder.virtualPath, poolId);
+        insertFolderRecord(normalizeVirtualPath(folder.virtualPath), poolId);
       }
 
       for (const folderPath of discoveredFolderPaths) {
@@ -329,6 +470,9 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
       }
 
       for (const f of discoveredFiles) {
+        if (pendingOutboxDeleteIds.has(f.driveFileId) || pendingOutboxDriveIds.has(f.driveFileId)) {
+          continue;
+        }
         const status = upsertFileRecord(f);
         if (status === 'conflict') {
           if (!f.isTrashed) {
@@ -344,12 +488,8 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
     });
 
     applySync();
-
-    const tokenRes = await drive.changes.getStartPageToken({
-      supportsAllDrives: false,
-    });
-
-    const startToken = tokenRes.data.startPageToken || null;
+    bumpPoolRevision(poolId);
+    invalidateDiscrepancyCache(accountId);
 
     await db
       .update(accounts)
@@ -359,6 +499,10 @@ export async function runColdReconciliation(accountId: string): Promise<ColdSync
         updatedAt: new Date(),
       })
       .where(eq(accounts.id, accountId));
+
+    await refreshAccountLiveQuota(accountId).catch((err) => {
+      console.warn(`[cold-sync] Failed to refresh live quota for ${accountId}:`, err);
+    });
 
     return {
       accountId,

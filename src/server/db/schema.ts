@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
+// Runtime DDL and migrations live in src/server/db/init.ts; keep these Drizzle definitions synchronized with init.ts.
 export const pools = sqliteTable('pools', {
   id: integer('id').primaryKey(),
   name: text('name').notNull(),
@@ -39,8 +40,6 @@ export const folders = sqliteTable('folders', {
 }, (table) => [
   uniqueIndex('folders_pool_path_idx').on(table.poolId, table.virtualPath),
   index('folders_pool_parent_idx').on(table.poolId, table.parentFolderId),
-  index('folders_parent_idx').on(table.parentFolderId),
-  index('folders_path_idx').on(table.virtualPath),
 ]);
 
 export const files = sqliteTable('files', {
@@ -60,11 +59,13 @@ export const files = sqliteTable('files', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 }, (table) => [
   uniqueIndex('files_pool_path_idx').on(table.poolId, table.virtualPath),
-  index('files_pool_trashed_idx').on(table.poolId, table.isTrashed),
+  index('files_pool_trashed_path_idx').on(table.poolId, table.isTrashed, table.virtualPath, table.accountId, table.sizeBytes),
+  index('files_pool_trashed_account_size_idx').on(table.poolId, table.isTrashed, table.accountId, table.sizeBytes),
   index('files_account_idx').on(table.accountId),
+  index('files_account_drive_file_idx').on(table.accountId, table.driveFileId),
+  index('files_account_pool_trashed_idx').on(table.accountId, table.poolId, table.isTrashed),
   index('files_folder_idx').on(table.folderId),
   index('files_path_idx').on(table.virtualPath),
-  index('files_trashed_idx').on(table.isTrashed),
 ]);
 
 export const transferLogs = sqliteTable('transfer_logs', {
@@ -74,7 +75,7 @@ export const transferLogs = sqliteTable('transfer_logs', {
   byteCount: integer('byte_count').notNull(),
   timestamp: integer('timestamp').notNull(), // epoch ms for high-precision 24-hour rolling aggregation
 }, (table) => [
-  index('transfer_account_ts_idx').on(table.accountId, table.timestamp),
+  index('transfer_account_type_ts_bytes_idx').on(table.accountId, table.transferType, table.timestamp, table.byteCount),
   index('transfer_ts_idx').on(table.timestamp),
 ]);
 
@@ -91,6 +92,40 @@ export const shareLinks = sqliteTable('share_links', {
 }, (table) => [
   uniqueIndex('share_links_pool_batch_account_idx').on(table.poolId, table.batchFolderName, table.accountId),
   index('share_links_pool_batch_idx').on(table.poolId, table.batchFolderName),
+  index('share_links_account_idx').on(table.accountId),
+]);
+
+export const pendingDriveSync = sqliteTable('pending_drive_sync', {
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  driveFileId: text('drive_file_id').notNull(),
+  virtualPath: text('virtual_path').notNull(),
+  fileId: text('file_id').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  nextRetryAt: integer('next_retry_at').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.driveFileId] }),
+  index('pending_drive_sync_retry_idx').on(table.accountId, table.nextRetryAt),
+]);
+
+export const driveOutbox = sqliteTable('drive_outbox', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  poolId: integer('pool_id'),
+  opType: text('op_type').notNull(),
+  driveFileId: text('drive_file_id'),
+  payloadJson: text('payload_json').notNull(),
+  status: text('status', { enum: ['pending', 'processing', 'failed', 'dead'] }).notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  nextRetryAt: integer('next_retry_at').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  index('drive_outbox_status_retry_idx').on(table.status, table.nextRetryAt, table.createdAt),
+  index('drive_outbox_account_status_idx').on(table.accountId, table.status),
+  index('drive_outbox_account_drive_op_idx').on(table.accountId, table.driveFileId, table.opType, table.status),
 ]);
 
 export type Pool = typeof pools.$inferSelect;
@@ -107,5 +142,14 @@ export type NewFileRecord = typeof files.$inferInsert;
 
 export type TransferLog = typeof transferLogs.$inferSelect;
 export type NewTransferLog = typeof transferLogs.$inferInsert;
+
+export type ShareLink = typeof shareLinks.$inferSelect;
+export type NewShareLink = typeof shareLinks.$inferInsert;
+
+export type PendingDriveSync = typeof pendingDriveSync.$inferSelect;
+export type NewPendingDriveSync = typeof pendingDriveSync.$inferInsert;
+
+export type DriveOutboxRecord = typeof driveOutbox.$inferSelect;
+export type NewDriveOutboxRecord = typeof driveOutbox.$inferInsert;
 
 

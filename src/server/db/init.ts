@@ -1,6 +1,14 @@
 import { sqlite } from './index.js';
 
+// init.ts owns runtime DDL and migrations; keep all table, column, and index definitions synchronized with src/server/db/schema.ts.
+const CURRENT_SCHEMA_VERSION = 5;
+
 export function initializeDatabase(): void {
+  const currentVersion = sqlite.pragma('user_version', { simple: true }) as number;
+  if (currentVersion >= CURRENT_SCHEMA_VERSION) {
+    return;
+  }
+
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS pools (
       id INTEGER PRIMARY KEY NOT NULL,
@@ -76,21 +84,59 @@ export function initializeDatabase(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
+    CREATE TABLE IF NOT EXISTS pending_drive_sync (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      drive_file_id TEXT NOT NULL,
+      virtual_path TEXT NOT NULL,
+      file_id TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      next_retry_at INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (account_id, drive_file_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS drive_outbox (
+      id TEXT PRIMARY KEY NOT NULL,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      pool_id INTEGER,
+      op_type TEXT NOT NULL,
+      drive_file_id TEXT,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_retry_at INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
     CREATE INDEX IF NOT EXISTS accounts_pool_idx ON accounts(pool_id);
     CREATE UNIQUE INDEX IF NOT EXISTS folders_pool_path_idx ON folders(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS folders_pool_parent_idx ON folders(pool_id, parent_folder_id);
-    CREATE INDEX IF NOT EXISTS folders_parent_idx ON folders(parent_folder_id);
-    CREATE INDEX IF NOT EXISTS folders_path_idx ON folders(virtual_path);
     CREATE UNIQUE INDEX IF NOT EXISTS files_pool_path_idx ON files(pool_id, virtual_path);
-    CREATE INDEX IF NOT EXISTS files_pool_trashed_idx ON files(pool_id, is_trashed);
+    CREATE INDEX IF NOT EXISTS files_pool_trashed_path_idx ON files(pool_id, is_trashed, virtual_path, account_id, size_bytes);
+    CREATE INDEX IF NOT EXISTS files_pool_trashed_account_size_idx ON files(pool_id, is_trashed, account_id, size_bytes);
     CREATE INDEX IF NOT EXISTS files_account_idx ON files(account_id);
+    CREATE INDEX IF NOT EXISTS files_account_drive_file_idx ON files(account_id, drive_file_id);
+    CREATE INDEX IF NOT EXISTS files_account_pool_trashed_idx ON files(account_id, pool_id, is_trashed);
     CREATE INDEX IF NOT EXISTS files_folder_idx ON files(folder_id);
     CREATE INDEX IF NOT EXISTS files_path_idx ON files(virtual_path);
-    CREATE INDEX IF NOT EXISTS files_trashed_idx ON files(is_trashed);
-    CREATE INDEX IF NOT EXISTS transfer_account_ts_idx ON transfer_logs(account_id, timestamp);
+    CREATE INDEX IF NOT EXISTS transfer_account_type_ts_bytes_idx ON transfer_logs(account_id, transfer_type, timestamp, byte_count);
     CREATE INDEX IF NOT EXISTS transfer_ts_idx ON transfer_logs(timestamp);
     CREATE UNIQUE INDEX IF NOT EXISTS share_links_pool_batch_account_idx ON share_links(pool_id, batch_folder_name, account_id);
     CREATE INDEX IF NOT EXISTS share_links_pool_batch_idx ON share_links(pool_id, batch_folder_name);
+    CREATE INDEX IF NOT EXISTS share_links_account_idx ON share_links(account_id);
+    CREATE INDEX IF NOT EXISTS pending_drive_sync_retry_idx ON pending_drive_sync(account_id, next_retry_at);
+    CREATE INDEX IF NOT EXISTS drive_outbox_status_retry_idx ON drive_outbox(status, next_retry_at, created_at);
+    CREATE INDEX IF NOT EXISTS drive_outbox_account_status_idx ON drive_outbox(account_id, status);
+    CREATE INDEX IF NOT EXISTS drive_outbox_account_drive_op_idx ON drive_outbox(account_id, drive_file_id, op_type, status);
+
+    DROP INDEX IF EXISTS folders_parent_idx;
+    DROP INDEX IF EXISTS folders_path_idx;
+    DROP INDEX IF EXISTS files_pool_trashed_idx;
+    DROP INDEX IF EXISTS files_trashed_idx;
+    DROP INDEX IF EXISTS transfer_account_ts_idx;
   `);
 
   const poolColumns = sqlite.pragma('table_info(pools)') as Array<{ name: string }>;
@@ -174,14 +220,24 @@ export function initializeDatabase(): void {
             .run(SHARE_POOL_RESERVE_ID, oldId);
 
           sqlite
+            .prepare('UPDATE drive_outbox SET pool_id = ? WHERE pool_id = ?')
+            .run(SHARE_POOL_RESERVE_ID, oldId);
+
+          sqlite
             .prepare('UPDATE pools SET id = ? WHERE id = ?')
             .run(SHARE_POOL_RESERVE_ID, oldId);
-        })();
+        }).immediate();
       } finally {
         sqlite.pragma(`foreign_keys = ${fkWasEnabled ? 'ON' : 'OFF'}`);
       }
+    } else {
+      console.warn(
+        `[db/init] Legacy share pool ${legacySharePool.id} could not be migrated because reserved pool ID ${SHARE_POOL_RESERVE_ID} already exists.`
+      );
     }
   }
+
+  sqlite.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
 }
 
 

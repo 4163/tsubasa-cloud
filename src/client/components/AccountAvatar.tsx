@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { radius } from '../tokens.stylex.js';
 
@@ -19,18 +19,12 @@ export function getRelativeLuminance(r: number, g: number, b: number): number {
   return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
 }
 
-/**
- * Calculates the WCAG contrast ratio between two relative luminance values.
- */
 export function getContrastRatio(lum1: number, lum2: number): number {
   const lighter = Math.max(lum1, lum2);
   const darker = Math.min(lum1, lum2);
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/**
- * Converts HSL components to RGB tuple [0-255].
- */
 export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const sFrac = s / 100;
   const lFrac = l / 100;
@@ -40,9 +34,6 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
   return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 }
 
-/**
- * Fast deterministic string hash.
- */
 export function hashString(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -52,11 +43,8 @@ export function hashString(str: string): number {
 }
 
 /**
- * Computes a unique, deterministic background color for an account avatar placeholder.
- * Strictly satisfies WCAG AAA contrast ratio (>= 7.0:1) against white text (#ffffff).
- *
- * Distributes hues using the golden angle (137.508 deg) so every consecutive
- * account index receives a visually distinct, vibrant hue.
+ * Computes a deterministic avatar color with >= 7.0:1 contrast against #ffffff,
+ * spaced by the golden angle of 137.508 degrees.
  */
 export function getAaaAvatarColor(
   index: number = 0,
@@ -104,6 +92,10 @@ const styles = stylex.create({
     userSelect: 'none',
     pointerEvents: 'none',
   },
+  avatarColor: (backgroundColor: string, color: string) => ({
+    backgroundColor,
+    color,
+  }),
 });
 
 export function AccountAvatar({
@@ -113,6 +105,10 @@ export function AccountAvatar({
   index = 0,
 }: AccountAvatarProps) {
   const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [avatarUrl]);
 
   const isCustomPfp = Boolean(avatarUrl && !avatarUrl.includes('default-user'));
 
@@ -141,8 +137,7 @@ export function AccountAvatar({
 
   return (
     <div
-      {...stylex.props(styles.avatarPill)}
-      style={{ backgroundColor: color.bg, color: color.text }}
+      {...stylex.props(styles.avatarPill, styles.avatarColor(color.bg, color.text))}
       aria-label={displayName || email || 'Account avatar'}
     >
       {initial}

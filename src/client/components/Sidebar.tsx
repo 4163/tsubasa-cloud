@@ -6,6 +6,9 @@ import { IconFolder, IconTrash, IconPlus, IconClock, IconEdit, IconChevronDown, 
 import { AccountAvatar } from './AccountAvatar.js';
 import { RedactedEmail } from './RedactedEmail.js';
 import { sortPools, copyTextToClipboard } from '../utils/format.js';
+import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
+import { DAILY_UPLOAD_LIMIT_BYTES, formatGbCompact } from '../utils/accountTransfer.js';
 import brandLogo from '../assets/brand-mono.png';
 
 export interface AccountTransferStats {
@@ -67,7 +70,6 @@ interface SidebarProps {
   accounts: AccountItem[];
   tsubasaUsedBytes: number;
   poolHeadroomBytes: number;
-  totalLimitBytes: number;
   clusterTransfer?: ClusterTransferOverview;
   pools?: PoolSummary[];
   activePoolId?: number;
@@ -79,7 +81,6 @@ interface SidebarProps {
   onOpenMovePool?: (account: AccountItem) => void;
   currentNav: 'files' | 'trash';
   onSelectNav: (nav: 'files' | 'trash') => void;
-  onAuthorizeAccount: (id: string) => void;
   onOpenExternalChanges?: (id: string) => void;
   onImportOAuth?: (file: File) => void;
   onRefreshStorage?: () => void;
@@ -89,6 +90,7 @@ interface SidebarProps {
   isImporting?: boolean;
   isSyncing: boolean;
   isMobileOpen?: boolean;
+  isDimmed?: boolean;
   onCloseMobile?: () => void;
   onDropItemsToRoot?: (items: Array<{ kind: 'file' | 'folder'; id: string; name?: string; virtualPath?: string; isTrashed?: boolean }>) => void;
   onDropItemsToTrash?: (items: Array<{ kind: 'file' | 'folder'; id: string; name?: string; virtualPath?: string; isTrashed?: boolean }>) => void;
@@ -111,33 +113,43 @@ const styles = stylex.create({
     overflow: 'hidden',
     flexShrink: 0,
     zIndex: 20,
-    '@media (max-width: 768px)': {
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      bottom: 0,
-      width: '300px',
-      borderRightWidth: '1px',
-      borderRightStyle: 'solid',
-      borderRightColor: colors.border,
-      transform: 'translateX(-100%)',
-      transition: 'transform 0.25s ease-out',
+    contain: 'layout style paint',
+  },
+  mobileDialog: {
+    position: 'fixed',
+    inset: '0 auto 0 0',
+    margin: 0,
+    padding: 0,
+    borderWidth: '0px',
+    backgroundColor: 'transparent',
+    width: '300px',
+    maxWidth: '85vw',
+    height: '100dvh',
+    maxHeight: '100dvh',
+    overflow: 'hidden',
+    outline: 'none',
+    '::backdrop': {
+      backgroundColor: colors.modalBackdrop,
     },
   },
-  sidebarOpen: {
-    '@media (max-width: 768px)': {
-      transform: 'translateX(0)',
-    },
+  mobileDialogAside: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.surface,
+    borderRightWidth: '1px',
+    borderRightStyle: 'solid',
+    borderRightColor: colors.border,
+    display: 'flex',
+    flexDirection: 'column',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
   },
-  backdrop: {
-    display: 'none',
-    '@media (max-width: 768px)': {
-      display: 'block',
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.4)',
-      zIndex: 19,
-    },
+  mobileDimScrim: {
+    position: 'absolute',
+    inset: 0,
+    backgroundColor: colors.modalBackdrop,
+    pointerEvents: 'none',
+    zIndex: 10000,
   },
   brandHeader: {
     padding: spacing.space6,
@@ -243,11 +255,18 @@ const styles = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '3px',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
       borderColor: colors.brandAccent,
       color: colors.primaryText,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -286,11 +305,25 @@ const styles = stylex.create({
     cursor: 'pointer',
     outline: 'none',
     boxSizing: 'border-box',
+    transitionProperty: 'background-color, opacity',
+    transitionDuration: motion.durationFast,
+    transitionTimingFunction: motion.easingOut,
     ':hover': {
-      borderColor: colors.border,
+      borderColor: colors.accentGold,
     },
     ':focus': {
-      borderColor: colors.accentGold,
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
+    },
+    ':focus-visible': {
+      borderColor: colors.focusRing,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-1px',
     },
   },
   poolSelectChevron: {
@@ -340,6 +373,7 @@ const styles = stylex.create({
     width: '100%',
     boxSizing: 'border-box',
     textAlign: 'left',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -348,6 +382,12 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
     },
   },
   navItemActive: {
@@ -416,6 +456,7 @@ const styles = stylex.create({
     cursor: 'pointer',
     textAlign: 'left',
     boxSizing: 'border-box',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -424,6 +465,12 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
     },
     ':disabled': {
       opacity: 0.6,
@@ -471,7 +518,6 @@ const styles = stylex.create({
     paddingLeft: spacing.space4,
     paddingRight: spacing.space4,
     marginBottom: spacing.space2,
-    fontStyle: 'italic',
   },
   accountsScrollArea: {
     flex: 1,
@@ -498,9 +544,15 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space2,
+    contentVisibility: 'auto',
+    containIntrinsicSize: 'auto 140px',
+    contain: {
+      default: null,
+      '@supports not (content-visibility: auto)': 'layout style paint',
+    },
   },
   accountCardFiltered: {
-    borderColor: colors.brandAccent,
+    borderColor: colors.accentGold,
   },
   accountTop: {
     display: 'flex',
@@ -549,6 +601,7 @@ const styles = stylex.create({
     color: colors.secondaryText,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.surface,
@@ -556,7 +609,9 @@ const styles = stylex.create({
       color: colors.primaryText,
     },
     ':focus-visible': {
-      outline: `2px solid ${colors.focusRing}`,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
       outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
@@ -609,16 +664,20 @@ const styles = stylex.create({
     overflow: 'hidden',
   },
   progressBarFill: {
+    width: '100%',
     height: '100%',
     backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
-    transition: 'width 0.3s ease',
+    transformOrigin: 'left center',
+    transition: 'transform 0.3s ease',
   },
   poolProgressBarFill: {
+    width: '100%',
     height: '100%',
     backgroundColor: colors.poolGold,
     borderRadius: radius.pill,
-    transition: 'width 0.3s ease',
+    transformOrigin: 'left center',
+    transition: 'transform 0.3s ease',
   },
   progressBarBreach: {
     backgroundColor: colors.danger,
@@ -676,10 +735,17 @@ const styles = stylex.create({
     cursor: 'pointer',
     flexShrink: 0,
     fontWeight: '600',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -703,11 +769,18 @@ const styles = stylex.create({
     color: colors.secondaryText,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.surface,
       borderColor: colors.brandAccent,
       color: colors.brandAccent,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -731,10 +804,17 @@ const styles = stylex.create({
     color: colors.success,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.successSurface,
       borderColor: colors.success,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -758,10 +838,17 @@ const styles = stylex.create({
     color: colors.danger,
     cursor: 'pointer',
     flexShrink: 0,
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.dangerSurface,
       borderColor: colors.danger,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -824,6 +911,7 @@ const styles = stylex.create({
     textAlign: 'left',
     width: '100%',
     boxSizing: 'border-box',
+    outline: 'none',
     transition: motion.transitionFast,
     ':hover': {
       backgroundColor: colors.rowHover,
@@ -832,6 +920,12 @@ const styles = stylex.create({
     ':active': {
       backgroundColor: colors.selectionBg,
       transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
     },
   },
   authLinkBoxCopied: {
@@ -942,10 +1036,12 @@ const styles = stylex.create({
     overflow: 'hidden',
   },
   transferProgressBarFill: {
+    width: '100%',
     height: '100%',
     backgroundColor: colors.brandAccent,
     borderRadius: radius.pill,
-    transition: 'width 0.3s ease',
+    transformOrigin: 'left center',
+    transition: 'transform 0.3s ease',
   },
   transferProgressBarBreach: {
     backgroundColor: colors.danger,
@@ -958,13 +1054,15 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space2,
   },
+  progressScale: (scale: number) => ({
+    transform: `scaleX(${scale})`,
+  }),
 });
 
 export function hasActiveTransferStats(stats?: AccountTransferStats): boolean {
   if (!stats) return false;
-  const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
   const uploaded = stats.uploadedBytes24h ?? 0;
-  const remaining = stats.remainingUploadBytes24h ?? DAILY_LIMIT;
+  const remaining = stats.remainingUploadBytes24h ?? DAILY_UPLOAD_LIMIT_BYTES;
   const isRateLimited = stats.isUploadRateLimited || remaining <= 0;
   return uploaded > 0 || isRateLimited;
 }
@@ -975,9 +1073,8 @@ interface AccountTransferGaugeProps {
 }
 
 export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferGaugeProps) {
-  const DAILY_LIMIT = 750 * 1024 * 1024 * 1024;
   const uploaded = stats?.uploadedBytes24h ?? 0;
-  const remaining = stats?.remainingUploadBytes24h ?? DAILY_LIMIT;
+  const remaining = stats?.remainingUploadBytes24h ?? DAILY_UPLOAD_LIMIT_BYTES;
   const isRateLimited = stats?.isUploadRateLimited || remaining <= 0;
   const oldestTs = stats?.oldestTransferTimestamp ?? null;
 
@@ -998,8 +1095,8 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
     return null;
   }
 
-  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_LIMIT) * 100)));
-  const uploadedGb = (uploaded / (1024 * 1024 * 1024)).toFixed(1);
+  const pct = Math.min(100, Math.max(0, Math.round((uploaded / DAILY_UPLOAD_LIMIT_BYTES) * 100)));
+  const uploadedGb = formatGbCompact(uploaded);
 
   return (
     <div {...stylex.props(styles.transferSection)}>
@@ -1017,9 +1114,9 @@ export function AccountTransferGauge({ stats, onTimerExpired }: AccountTransferG
         <div
           {...stylex.props(
             styles.transferProgressBarFill,
-            isRateLimited && styles.transferProgressBarBreach
+            isRateLimited && styles.transferProgressBarBreach,
+            styles.progressScale((isRateLimited ? 100 : pct) / 100)
           )}
-          style={{ width: `${isRateLimited ? 100 : pct}%` }}
         />
       </div>
     </div>
@@ -1030,7 +1127,6 @@ export function Sidebar({
   accounts,
   tsubasaUsedBytes,
   poolHeadroomBytes,
-  totalLimitBytes,
   clusterTransfer,
   pools,
   activePoolId = 1,
@@ -1042,7 +1138,6 @@ export function Sidebar({
   onOpenMovePool,
   currentNav,
   onSelectNav,
-  onAuthorizeAccount,
   onOpenExternalChanges,
   onImportOAuth,
   onRefreshStorage,
@@ -1052,6 +1147,7 @@ export function Sidebar({
   isImporting = false,
   isSyncing,
   isMobileOpen = false,
+  isDimmed = false,
   onCloseMobile,
   onDropItemsToRoot,
   onDropItemsToTrash,
@@ -1061,8 +1157,62 @@ export function Sidebar({
 }: SidebarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [authUrls, setAuthUrls] = useState<Record<string, string>>({});
+  const authUrlsRef = useRef(authUrls);
+  authUrlsRef.current = authUrls;
+  const [authUrlErrors, setAuthUrlErrors] = useState<Record<string, boolean>>({});
+  const authUrlErrorsRef = useRef(authUrlErrors);
+  authUrlErrorsRef.current = authUrlErrors;
+  const pendingAuthRequestsRef = useRef<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dragOverNav, setDragOverNav] = useState<'files' | 'trash' | null>(null);
+  const isMobileViewport = useMediaQuery('(max-width: 768px)');
+  const mobileDialogRef = useRef<HTMLDialogElement>(null);
+  const mobilePointerDownOutsideRef = useRef(false);
+
+  useEffect(() => {
+    const dialog = mobileDialogRef.current;
+    if (!dialog) return;
+
+    if (isMobileViewport && isMobileOpen) {
+      dialog.removeAttribute('data-closing');
+      dialog.setAttribute('closedby', 'any');
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+      return;
+    }
+
+    if (!dialog.open) return;
+
+    const skipExitAnimation =
+      !isMobileViewport ||
+      document.body.classList.contains('resize-animation-stopper') ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (skipExitAnimation) {
+      dialog.removeAttribute('data-closing');
+      dialog.close();
+      return;
+    }
+
+    if (dialog.hasAttribute('data-closing')) return;
+    dialog.setAttribute('data-closing', '');
+
+    let cancelled = false;
+    const animations = dialog.getAnimations();
+    Promise.all(animations.map((anim) => anim.finished.catch(() => {}))).then(() => {
+      if (cancelled || !dialog.hasAttribute('data-closing')) return;
+      dialog.removeAttribute('data-closing');
+      if (dialog.open) {
+        dialog.close();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isMobileViewport, isMobileOpen]);
 
   useEffect(() => {
     const handleDragEnd = () => setDragOverNav(null);
@@ -1086,24 +1236,47 @@ export function Sidebar({
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     for (const acc of accounts) {
-      if (!acc.authorized && !authUrls[acc.id]) {
+      if (
+        !acc.authorized &&
+        !authUrlsRef.current[acc.id] &&
+        !authUrlErrorsRef.current[acc.id] &&
+        !pendingAuthRequestsRef.current.has(acc.id)
+      ) {
+        pendingAuthRequestsRef.current.add(acc.id);
         client.api.accounts['auth-url'][':id']
           .$get({ param: { id: acc.id }, query: {} })
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
             if (data && 'url' in data && data.url) {
-              setAuthUrls((prev) => ({ ...prev, [acc.id]: data.url }));
+              setAuthUrls((prev) => (prev[acc.id] === data.url ? prev : { ...prev, [acc.id]: data.url }));
+              setAuthUrlErrors((prev) => (prev[acc.id] ? { ...prev, [acc.id]: false } : prev));
+            } else {
+              setAuthUrlErrors((prev) => (prev[acc.id] ? prev : { ...prev, [acc.id]: true }));
             }
           })
-          .catch(() => {});
+          .catch(() => {
+            setAuthUrlErrors((prev) => (prev[acc.id] ? prev : { ...prev, [acc.id]: true }));
+          })
+          .finally(() => {
+            pendingAuthRequestsRef.current.delete(acc.id);
+          });
       }
     }
-  }, [accounts, authUrls]);
+  }, [accounts]);
 
   const handleCopyAuthUrl = async (accountId: string) => {
     let url = authUrls[accountId];
     if (!url) {
+      setAuthUrlErrors((prev) => (prev[accountId] ? { ...prev, [accountId]: false } : prev));
       try {
         const res = await client.api.accounts['auth-url'][':id'].$get({
           param: { id: accountId },
@@ -1111,21 +1284,34 @@ export function Sidebar({
         });
         if (res.ok) {
           const data = await res.json();
-          if ('url' in data) {
+          if ('url' in data && data.url) {
             url = data.url;
             setAuthUrls((prev) => ({ ...prev, [accountId]: data.url }));
+          } else {
+            setAuthUrlErrors((prev) => ({ ...prev, [accountId]: true }));
           }
+        } else {
+          setAuthUrlErrors((prev) => ({ ...prev, [accountId]: true }));
         }
-      } catch {}
+      } catch (err) {
+        setAuthUrlErrors((prev) => ({ ...prev, [accountId]: true }));
+        if (import.meta.env.DEV) {
+          console.error('[tsubasa] fetch auth URL failed:', err);
+        }
+      }
     }
 
     if (url) {
-      await copyTextToClipboard(url);
+      const copied = await copyTextToClipboard(url);
+      if (!copied) return;
       setCopiedId(accountId);
-      setTimeout(() => {
+      if (copyTimerRef.current !== null) {
+        clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = setTimeout(() => {
+        copyTimerRef.current = null;
         setCopiedId((prev) => (prev === accountId ? null : prev));
       }, 3000);
-      onAuthorizeAccount?.(accountId);
     }
   };
 
@@ -1159,11 +1345,46 @@ export function Sidebar({
   const standardPoolCount = sortedPools.filter((p) => !p.isSharePool).length;
   const activePool = sortedPools.find((p) => p.id === activePoolId) || sortedPools[0];
 
-  return (
+  const isOutsideMobileDialog = (e: React.PointerEvent<HTMLDialogElement>, dialog: HTMLDialogElement) => {
+    const rect = dialog.getBoundingClientRect();
+    return (
+      e.clientX < rect.left ||
+      e.clientX > rect.right ||
+      e.clientY < rect.top ||
+      e.clientY > rect.bottom
+    );
+  };
+
+  const handleMobileDialogPointerDown = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    mobilePointerDownOutsideRef.current = isOutsideMobileDialog(e, e.currentTarget);
+  };
+
+  const handleMobileDialogPointerUp = (e: React.PointerEvent<HTMLDialogElement>) => {
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    const startedOutside = mobilePointerDownOutsideRef.current;
+    mobilePointerDownOutsideRef.current = false;
+    if (startedOutside && isOutsideMobileDialog(e, e.currentTarget)) {
+      onCloseMobile?.();
+    }
+  };
+
+  const handleMobileDialogCancel = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.preventDefault();
+    onCloseMobile?.();
+  };
+
+  const handleMobileDialogClose = (e: React.SyntheticEvent<HTMLDialogElement>) => {
+    e.currentTarget.returnValue = '';
+    e.currentTarget.removeAttribute('data-closing');
+    if (isMobileOpen) {
+      onCloseMobile?.();
+    }
+  };
+
+  const sidebarContent = (
     <>
-      {isMobileOpen && <div {...stylex.props(styles.backdrop)} onClick={onCloseMobile} />}
-      <aside {...stylex.props(styles.sidebar, isMobileOpen && styles.sidebarOpen)}>
-        <div {...stylex.props(styles.brandHeader)}>
+      <div {...stylex.props(styles.brandHeader)}>
           <div {...stylex.props(styles.brandRow)}>
             <div {...stylex.props(styles.brandLogoContainer)}>
               <img src={brandLogo} alt="Tsubasa" draggable={false} {...stylex.props(styles.brandLogoImage)} />
@@ -1185,7 +1406,6 @@ export function Sidebar({
                     type="button"
                     {...stylex.props(styles.poolActionBtn)}
                     onClick={() => onRenamePoolPrompt(activePool)}
-                    title="Rename pool display name"
                     aria-label="Rename storage pool"
                   >
                     <IconEdit size={11} />
@@ -1197,7 +1417,6 @@ export function Sidebar({
                     type="button"
                     {...stylex.props(styles.poolActionBtn, styles.poolDeleteBtn)}
                     onClick={() => onDeletePoolPrompt(activePool)}
-                    title="Delete empty storage pool"
                     aria-label="Delete storage pool"
                   >
                     <IconTrash size={11} />
@@ -1209,7 +1428,6 @@ export function Sidebar({
                     type="button"
                     {...stylex.props(styles.poolActionBtn)}
                     onClick={onCreatePool}
-                    title="Create new storage pool"
                     aria-label="Create new storage pool"
                   >
                     <IconPlus size={11} strokeWidth={2.5} />
@@ -1250,6 +1468,7 @@ export function Sidebar({
             onClick={() => onSelectNav('files')}
             onDragOver={(e) => {
               if (activePool?.isSharePool) return;
+              if (rejectInvalidInternalDragOver(e, '/', () => setDragOverNav((prev) => (prev === 'files' ? null : prev)))) return;
               const hasItems = e.dataTransfer?.types?.includes('application/x-tsubasa-items');
               const hasFiles = e.dataTransfer?.types?.includes('Files');
               if (hasItems || hasFiles) {
@@ -1268,16 +1487,14 @@ export function Sidebar({
               if (activePool?.isSharePool) return;
               e.preventDefault();
               e.stopPropagation();
-              (e.nativeEvent as any).__tsubasaHandled = true;
+              markDropHandled(e);
               setDragOverNav(null);
               if (e.dataTransfer.types.includes('application/x-tsubasa-items')) {
-                try {
-                  const raw = e.dataTransfer.getData('application/x-tsubasa-items');
-                  const parsed = JSON.parse(raw);
-                  if (Array.isArray(parsed) && parsed.length > 0) {
-                    onDropItemsToRoot?.(parsed);
-                  }
-                } catch {}
+                const parsed = parseInternalDropItems(e, '/');
+                if (parsed) {
+                  onDropItemsToRoot?.(parsed);
+                }
+                return;
               } else if (e.dataTransfer.types.includes('Files') && e.dataTransfer.files.length > 0) {
                 onDropExternalToRoot?.(e.dataTransfer);
               }
@@ -1311,7 +1528,7 @@ export function Sidebar({
             onDrop={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              (e.nativeEvent as any).__tsubasaHandled = true;
+              markDropHandled(e);
               setDragOverNav(null);
               if (currentNav !== 'trash' && e.dataTransfer.types.includes('application/x-tsubasa-items')) {
                 try {
@@ -1381,7 +1598,7 @@ export function Sidebar({
             const driveUsedGb = formatGb(acc.quotaUsedBytes);
             const nonTsubasaBytes = Math.max(0, acc.quotaUsedBytes - tsubasaUsedBytes);
             const nonTsubasaGb = formatGb(nonTsubasaBytes);
-            const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024; // > 10 MB
+            const hasNonTsubasaData = nonTsubasaBytes > 10 * 1024 * 1024;
             const isBreached = acc.quotaUsedBytes > acc.usableLimitBytes;
             const hasPoolFiles = tsubasaUsedBytes > 0;
             const canRebalance = isBreached && hasPoolFiles;
@@ -1451,7 +1668,7 @@ export function Sidebar({
                         Full
                       </span>
                     ) : acc.authorized ? (
-                      <span {...stylex.props(styles.authPill)} title="Authorized and active in storage pool">
+                      <span {...stylex.props(styles.authPill)}>
                         Active
                       </span>
                     ) : null}
@@ -1475,7 +1692,10 @@ export function Sidebar({
                         aria-label="Copy authorize link"
                       >
                         <span {...stylex.props(styles.authLinkText)}>
-                          {authUrls[acc.id] || 'Generating authorize link...'}
+                          {authUrls[acc.id] ||
+                            (authUrlErrors[acc.id]
+                              ? 'Authorize link unavailable (click to retry)'
+                              : 'Generating authorize link...')}
                         </span>
                         <span
                           {...stylex.props(
@@ -1497,7 +1717,6 @@ export function Sidebar({
                               type="button"
                               {...stylex.props(styles.miniSyncBtn)}
                               onClick={() => onOpenMovePool?.(acc)}
-                              title="Move account to another storage pool"
                             >
                               Move pool
                             </button>
@@ -1538,9 +1757,9 @@ export function Sidebar({
                         <div
                           {...stylex.props(
                             styles.progressBarFill,
-                            isBreached && styles.progressBarBreach
+                            isBreached && styles.progressBarBreach,
+                            styles.progressScale(Math.min(100, Math.max(0, usedPct)) / 100)
                           )}
-                          style={{ width: `${usedPct}%` }}
                         />
                       </div>
 
@@ -1577,7 +1796,6 @@ export function Sidebar({
                             type="button"
                             {...stylex.props(styles.miniSyncBtn)}
                             onClick={() => onOpenMovePool?.(acc)}
-                            title="Move account to another storage pool"
                           >
                             Move pool
                           </button>
@@ -1587,7 +1805,6 @@ export function Sidebar({
                             type="button"
                             {...stylex.props(styles.miniEnableBtn)}
                             onClick={() => onEnableAccount(acc.id)}
-                            title="Re-enable drive in storage pool"
                           >
                             Enable
                           </button>
@@ -1597,7 +1814,6 @@ export function Sidebar({
                             type="button"
                             {...stylex.props(styles.miniSyncBtn)}
                             onClick={() => onDisableAccount(acc)}
-                            title="Disable drive and exclude from storage pool"
                           >
                             Disable
                           </button>
@@ -1634,9 +1850,9 @@ export function Sidebar({
             <div
               {...stylex.props(
                 styles.poolProgressBarFill,
-                poolPercentage >= 100 && styles.progressBarBreach
+                poolPercentage >= 100 && styles.progressBarBreach,
+                styles.progressScale(Math.min(100, Math.max(0, poolPercentage)) / 100)
               )}
-              style={{ width: `${poolPercentage}%` }}
             />
           </div>
           <div {...stylex.props(styles.footerStats)}>
@@ -1647,12 +1863,38 @@ export function Sidebar({
           </div>
           {clusterTransfer && clusterTransfer.totalUploadedBytes24h > 0 && (
             <div {...stylex.props(styles.footerTransfer)}>
-              24h cluster transfers: {(clusterTransfer.totalUploadedBytes24h / (1024 * 1024 * 1024)).toFixed(1)} / {(clusterTransfer.dailyUploadLimitBytes / (1024 * 1024 * 1024)).toFixed(0)} GB ({Math.round((clusterTransfer.totalUploadedBytes24h / clusterTransfer.dailyUploadLimitBytes) * 100)}%)
+              24h cluster transfers: {formatGbCompact(clusterTransfer.totalUploadedBytes24h)} / {(clusterTransfer.dailyUploadLimitBytes / (1024 * 1024 * 1024)).toFixed(0)} GB ({Math.round((clusterTransfer.totalUploadedBytes24h / clusterTransfer.dailyUploadLimitBytes) * 100)}%)
             </div>
           )}
         </div>
-      </aside>
     </>
+  );
+
+  if (isMobileViewport) {
+    return (
+      <dialog
+        ref={mobileDialogRef}
+        id="mobile-sidebar-dialog"
+        data-tsubasa-dialog="drawer-left"
+        aria-label="Navigation sidebar"
+        onCancel={handleMobileDialogCancel}
+        onClose={handleMobileDialogClose}
+        onPointerDown={handleMobileDialogPointerDown}
+        onPointerUp={handleMobileDialogPointerUp}
+        {...stylex.props(styles.mobileDialog)}
+      >
+        <aside {...stylex.props(styles.mobileDialogAside)}>
+          {sidebarContent}
+        </aside>
+        {isDimmed && <div aria-hidden="true" {...stylex.props(styles.mobileDimScrim)} />}
+      </dialog>
+    );
+  }
+
+  return (
+    <aside {...stylex.props(styles.sidebar)}>
+      {sidebarContent}
+    </aside>
   );
 }
 

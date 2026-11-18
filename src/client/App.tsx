@@ -1,10 +1,35 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, {
+  Suspense,
+  lazy,
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { flushSync } from 'react-dom';
 import * as stylex from '@stylexjs/stylex';
-import type { InferResponseType } from 'hono/client';
 import { client } from './api.js';
-import { colors, darkColors, radius, typography } from './tokens.stylex.js';
-import { Header, type ThemeChoice } from './components/Header.js';
-import { Sidebar, type AccountItem, type AccountTransferStats, type PoolSummary } from './components/Sidebar.js';
+import { colors, darkColors, motion, radius, spacing, typography } from './tokens.stylex.js';
+import {
+  filterMovableItemsToPath,
+  getParentDir,
+  isDropHandled,
+  normalizeVirtualPath,
+} from './utils/virtualPath.js';
+import {
+  applyDocumentTheme,
+  readInitialTheme,
+  readThemeChoice,
+  saveThemeChoice,
+  type EffectiveTheme,
+  type ThemeChoice,
+} from './utils/theme.js';
+import { Header } from './components/Header.js';
+import { Sidebar, type AccountItem, type PoolSummary } from './components/Sidebar.js';
 import {
   ActionPortal,
   type ActionPortalClipboard,
@@ -18,66 +43,215 @@ import {
   type ClientFolder,
 } from './components/FileTable.js';
 import { DitherDivider } from './components/DitherDivider.js';
-import { UploadDrawer, type StagedItem } from './components/UploadDrawer.js';
-import { ExternalChangesDrawer } from './components/ExternalChangesDrawer.js';
-import { NewFolderModal } from './components/NewFolderModal.js';
-import { ConfirmPurgeModal } from './components/ConfirmPurgeModal.js';
-import { ConfirmDriveActionModal } from './components/ConfirmDriveActionModal.js';
-import { RenameModal, type RenameTarget } from './components/RenameModal.js';
-import { MovePoolModal } from './components/MovePoolModal.js';
-import { MoveFilesModal } from './components/MoveFilesModal.js';
-import { ShareModal, type ShareExecuteResult, type ShareTargetItem } from './components/ShareModal.js';
+import { IconAlertTriangle, IconClose } from './components/Icons.js';
+import type { StagedItem } from './components/UploadDrawer.js';
+import type { RenameTarget } from './components/RenameModal.js';
+import type { MoveConflictItem, MoveConflictResolutionMode } from './components/MoveConflictModal.js';
+import type { ShareExecuteResult, ShareTargetItem } from './components/ShareModal.js';
+
+const UploadDrawer = lazy(() =>
+  import('./components/UploadDrawer.js').then((m) => ({ default: m.UploadDrawer }))
+);
+const ExternalChangesDrawer = lazy(() =>
+  import('./components/ExternalChangesDrawer.js').then((m) => ({ default: m.ExternalChangesDrawer }))
+);
+const NewFolderModal = lazy(() =>
+  import('./components/NewFolderModal.js').then((m) => ({ default: m.NewFolderModal }))
+);
+const ConfirmPurgeModal = lazy(() =>
+  import('./components/ConfirmPurgeModal.js').then((m) => ({ default: m.ConfirmPurgeModal }))
+);
+const ConfirmDriveActionModal = lazy(() =>
+  import('./components/ConfirmDriveActionModal.js').then((m) => ({
+    default: m.ConfirmDriveActionModal,
+  }))
+);
+const RenameModal = lazy(() =>
+  import('./components/RenameModal.js').then((m) => ({ default: m.RenameModal }))
+);
+const MovePoolModal = lazy(() =>
+  import('./components/MovePoolModal.js').then((m) => ({ default: m.MovePoolModal }))
+);
+const MoveFilesModal = lazy(() =>
+  import('./components/MoveFilesModal.js').then((m) => ({ default: m.MoveFilesModal }))
+);
+const MoveConflictModal = lazy(() =>
+  import('./components/MoveConflictModal.js').then((m) => ({ default: m.MoveConflictModal }))
+);
+const ShareModal = lazy(() =>
+  import('./components/ShareModal.js').then((m) => ({ default: m.ShareModal }))
+);
+function reportDevError(context: string, err: unknown): void {
+  if (import.meta.env.DEV) {
+    console.error(`[tsubasa] ${context}:`, err);
+  }
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (typeof err === 'string' && err.trim().length > 0) return err;
+  if (err instanceof Error && err.message.trim().length > 0) return err.message;
+  if (
+    err &&
+    typeof err === 'object' &&
+    'error' in err &&
+    typeof err.error === 'string' &&
+    err.error.trim().length > 0
+  ) {
+    return err.error;
+  }
+  return fallback;
+}
+
+interface ItemOperationResult {
+  id?: string;
+  kind?: 'file' | 'folder';
+  oldPath?: string;
+  newPath?: string;
+  success?: boolean;
+  skipped?: boolean;
+  error?: string;
+}
+
+function remapPathPrefix(virtualPath: string, oldPrefix: string, newPrefix: string): string | null {
+  if (virtualPath === oldPrefix) return newPrefix;
+  if (virtualPath.startsWith(`${oldPrefix}/`)) {
+    return `${newPrefix}${virtualPath.slice(oldPrefix.length)}`;
+  }
+  return null;
+}
+
+function applyMoveResultsToClipboard(
+  clipboard: ActionPortalClipboard | null,
+  poolId: number,
+  results: ItemOperationResult[]
+): ActionPortalClipboard | null {
+  if (!clipboard) return null;
+  const movedNonSkipped = results.filter((r) => r.success && !r.skipped);
+  const movedIds = new Set(
+    movedNonSkipped.map((r) => r.id).filter((id): id is string => Boolean(id))
+  );
+  const movedFolders = movedNonSkipped.filter(
+    (r): r is ItemOperationResult & { oldPath: string; newPath: string } =>
+      r.kind === 'folder' && Boolean(r.oldPath && r.newPath && r.oldPath !== r.newPath)
+  );
+  const movedFilesById = new Map<string, string>();
+  for (const r of movedNonSkipped) {
+    if (r.kind === 'file' && r.id && r.newPath) {
+      movedFilesById.set(r.id, r.newPath);
+    }
+  }
+
+  const baseItems =
+    clipboard.mode === 'cut'
+      ? clipboard.items.filter((item) => !movedIds.has(item.id))
+      : clipboard.items;
+  if (baseItems.length === 0) return null;
+
+  const nextItems = baseItems.map((item) => {
+    const directFilePath = item.kind === 'file' ? movedFilesById.get(item.id) : undefined;
+    if (directFilePath) {
+      const updatedName = directFilePath.split('/').pop() || item.name;
+      return { ...item, virtualPath: directFilePath, name: updatedName };
+    }
+    for (const folderMove of movedFolders) {
+      const remapped = remapPathPrefix(item.virtualPath, folderMove.oldPath, folderMove.newPath);
+      if (remapped !== null) {
+        return {
+          ...item,
+          virtualPath: remapped,
+          ...(item.kind === 'folder' ? { id: `${poolId}:${remapped}` } : {}),
+        };
+      }
+    }
+    return item;
+  });
+
+  return { ...clipboard, items: nextItems };
+}
+
+function parseItemOperationResults(data: unknown): ItemOperationResult[] {
+  if (Array.isArray(data)) return data as ItemOperationResult[];
+  if (data && typeof data === 'object' && 'results' in data && Array.isArray(data.results)) {
+    return data.results as ItemOperationResult[];
+  }
+  return [];
+}
+
+interface PendingMoveConflict {
+  items: Array<{ kind: 'file' | 'folder'; id: string }>;
+  targetFolderPath: string;
+  poolId: number;
+  conflicts: MoveConflictItem[];
+  cleanCount: number;
+  errorMessage?: string | null;
+}
+
+interface MoveConflictPayload {
+  code: 'MOVE_CONFLICT';
+  conflicts: MoveConflictItem[];
+  cleanCount?: number;
+}
+
+function isMoveConflictPayload(data: unknown): data is MoveConflictPayload {
+  if (!data || typeof data !== 'object') return false;
+  const candidate = data as Record<string, unknown>;
+  return candidate.code === 'MOVE_CONFLICT' && Array.isArray(candidate.conflicts);
+}
 import { copyTextToClipboard, SHARE_POOL_RESERVE_ID } from './utils/format.js';
 import { useBeforeUnload, useMediaQuery } from './utils/useBeforeUnload.js';
+import { subscribeAuthCompleted } from './utils/useTabLock.js';
+import {
+  dedupeInFlight,
+  getPoolCache,
+  invalidateShareInspectCache,
+  markPoolTrashStale,
+  runWithConcurrency,
+  setDiscrepancyReportCache,
+  setPoolCache,
+  type DiscrepancyReport,
+  type DiscoveredAccount,
+  type StorageOverview,
+  type StoredShareLink,
+} from './utils/queryCache.js';
 
-interface AccountSummary {
-  id: string;
-  email: string;
-  displayName: string;
-  avatarUrl: string | null;
-  quotaLimitBytes: number;
-  quotaUsedBytes: number;
-  usableLimitBytes: number;
-  headroomBytes: number;
-  tsubasaUsedBytes?: number;
-  syncState: string;
-  isDisabled?: boolean;
-  transferStats?: AccountTransferStats;
-  poolId?: number;
-  canSwitchPool?: boolean;
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === 'AbortError') ||
+    (err instanceof Error && err.name === 'AbortError')
+  );
 }
 
-interface StorageOverview {
-  totalAccounts: number;
-  totalLimitBytes: number;
-  totalUsedBytes: number;
-  totalHeadroomBytes: number;
-  totalTsubasaUsedBytes?: number;
-  systemStorage?: {
-    systemFilesCount: number;
-    systemBytesTotal: number;
-  };
-  clusterTransfer?: {
-    totalUploadedBytes24h: number;
-    totalRemainingUploadBytes24h: number;
-    dailyUploadLimitBytes: number;
-    rateLimitedAccountsCount: number;
-  };
-  accounts: AccountSummary[];
+async function readResponseError(res: Response, fallback: string): Promise<string> {
+  const body = await res.json().catch(() => null);
+  return extractErrorMessage(body, res.statusText || fallback);
 }
 
-interface DiscoveredAccount {
-  accountId: string;
-  clientId: string;
-  authorized: boolean;
-  sourceFile: string;
-  isDisabled?: boolean;
-  mtimeMs?: number;
-  poolId?: number;
-  canSwitchPool?: boolean;
+function safeStorageGet(storage: Storage | undefined, key: string): string | null {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 
-type StoredShareLink = InferResponseType<typeof client.api.share.links.$get, 200>['links'][number];
+function safeStorageSet(storage: Storage | undefined, key: string, value: string): void {
+  if (!storage) return;
+  try {
+    storage.setItem(key, value);
+  } catch {
+    // Ignore storage access errors in restricted browser contexts.
+  }
+}
+
+function safeStorageRemove(storage: Storage | undefined, key: string): void {
+  if (!storage) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Ignore storage access errors in restricted browser contexts.
+  }
+}
 
 const styles = stylex.create({
   shell: {
@@ -97,108 +271,177 @@ const styles = stylex.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  statusToast: {
-    position: 'fixed',
-    bottom: '24px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    backgroundColor: colors.surfaceElevated,
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: colors.border,
-    color: colors.primaryText,
-    paddingTop: '8px',
-    paddingBottom: '8px',
-    paddingLeft: '18px',
-    paddingRight: '18px',
-    borderRadius: radius.card,
-    fontSize: typography.fontSizeMeta,
-    fontWeight: typography.fontWeightTitle,
-    zIndex: 10000,
-    pointerEvents: 'none',
-    whiteSpace: 'nowrap',
-    userSelect: 'none',
+  workspaceErrorRegion: {
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space6,
+    paddingRight: spacing.space6,
+    backgroundColor: colors.surface,
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.borderSubtle,
+    flexShrink: 0,
   },
-  errorToast: {
+  workspaceErrorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space3,
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
     backgroundColor: colors.dangerSurface,
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: colors.danger,
-    color: colors.danger,
-    pointerEvents: 'auto',
+    borderColor: colors.dangerBorder,
+    borderRadius: radius.compact,
+    color: colors.dangerTextOnSurface,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBody,
+    lineHeight: typography.lineHeightBody,
+    boxSizing: 'border-box',
+  },
+  workspaceErrorContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+    flex: 1,
+  },
+  workspaceErrorIcon: {
+    flexShrink: 0,
+  },
+  workspaceErrorText: {
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+  },
+  workspaceErrorDismissBtn: {
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.dangerBorder,
+    backgroundColor: colors.surface,
+    color: colors.primaryText,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: typography.fontWeightSection,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: spacing.space1,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
     cursor: 'pointer',
+    outline: 'none',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.rowHover,
+      color: colors.primaryText,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+      minWidth: '44px',
+    },
+  },
+  fileTableStage: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    position: 'relative',
+  },
+  fileTablePane: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+  },
+  fileTablePaneHidden: {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    contentVisibility: 'hidden',
+    display: {
+      default: 'flex',
+      '@supports not (content-visibility: hidden)': 'none',
+    },
   },
 });
 
+function runWithViewTransition(update: () => void) {
+  if (
+    typeof document !== 'undefined' &&
+    'startViewTransition' in document &&
+    typeof document.startViewTransition === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: no-preference)').matches
+  ) {
+    document.startViewTransition(update);
+  } else {
+    update();
+  }
+}
+
 const lastDiscrepancyScanByPool = new Map<number, number>();
 const DISCREPANCY_COOLDOWN_MS = 60_000;
+const EMPTY_SELECTED_IDS = new Set<string>();
+
+function isModalActive(): boolean {
+  return typeof document !== 'undefined' && Boolean(document.querySelector('dialog[open], [role="dialog"]'));
+}
 
 export function App() {
-  const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('tsubasa-theme-choice') as ThemeChoice;
-      if (saved === 'auto' || saved === 'light' || saved === 'dark') {
-        return saved;
-      }
-    }
-    return 'auto';
-  });
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>(() => readThemeChoice());
 
-  const [effectiveTheme, setEffectiveTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('tsubasa-theme-choice');
-      if (saved === 'light' || saved === 'dark') return saved;
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return 'dark';
-  });
+  const [effectiveTheme, setEffectiveTheme] = useState<EffectiveTheme>(() => readInitialTheme());
 
   const handleThemeChange = useCallback((newTheme: ThemeChoice) => {
-    setThemeChoice(newTheme);
-    try {
-      localStorage.setItem('tsubasa-theme-choice', newTheme);
-    } catch {}
+    saveThemeChoice(newTheme);
+    runWithViewTransition(() => {
+      flushSync(() => {
+        setThemeChoice(newTheme);
+      });
+    });
   }, []);
 
-  useEffect(() => {
-    let active: 'light' | 'dark' = 'dark';
+  useLayoutEffect(() => {
+    let active: EffectiveTheme = 'dark';
     if (themeChoice === 'auto') {
       const mql = window.matchMedia('(prefers-color-scheme: dark)');
       active = mql.matches ? 'dark' : 'light';
       setEffectiveTheme(active);
+      applyDocumentTheme(active);
       const listener = (e: MediaQueryListEvent) => {
-        const next = e.matches ? 'dark' : 'light';
+        const next: EffectiveTheme = e.matches ? 'dark' : 'light';
         setEffectiveTheme(next);
-        document.documentElement.setAttribute('data-theme', next);
-        document.documentElement.style.backgroundColor = next === 'dark' ? '#0b1412' : '#eef2ec';
-        document.documentElement.style.color = next === 'dark' ? '#e5f2eb' : '#111d18';
-        if (next === 'dark') {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
+        applyDocumentTheme(next);
       };
       mql.addEventListener('change', listener);
       return () => mql.removeEventListener('change', listener);
-    } else {
-      active = themeChoice;
-      setEffectiveTheme(themeChoice);
     }
-    document.documentElement.setAttribute('data-theme', active);
-    document.documentElement.style.backgroundColor = active === 'dark' ? '#0b1412' : '#eef2ec';
-    document.documentElement.style.color = active === 'dark' ? '#e5f2eb' : '#111d18';
-    if (active === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    active = themeChoice;
+    setEffectiveTheme(themeChoice);
+    applyDocumentTheme(active);
   }, [themeChoice]);
   const [pools, setPools] = useState<PoolSummary[]>([
     { id: 1, name: 'Pool 1', driveFolderName: '_Tsubasa~ Pool 1', accountCount: 0, fileCount: 0, totalBytes: 0 },
   ]);
   const [activePoolId, setActivePoolId] = useState<number>(() => {
     if (typeof window !== 'undefined') {
-      const saved = Number(window.sessionStorage.getItem('tsubasa-active-pool-id'));
+      const saved = Number(safeStorageGet(window.sessionStorage, 'tsubasa-active-pool-id'));
       if (Number.isInteger(saved) && saved >= 1) return saved;
     }
     return 1;
@@ -206,7 +449,7 @@ export function App() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem('tsubasa-active-pool-id', String(activePoolId));
+      safeStorageSet(window.sessionStorage, 'tsubasa-active-pool-id', String(activePoolId));
     }
   }, [activePoolId]);
 
@@ -228,6 +471,13 @@ export function App() {
   const trashRequestSeqRef = useRef(0);
   const clusterRequestSeqRef = useRef(0);
   const discrepancyRequestSeqRef = useRef(0);
+  const filesAbortRef = useRef<{ poolId: number; controller: AbortController } | null>(null);
+  const trashAbortRef = useRef<{ poolId: number; controller: AbortController } | null>(null);
+  const clusterAbortRef = useRef<{ poolId: number; controller: AbortController } | null>(null);
+  const discrepancyAbortRef = useRef<{ poolId: number; controller: AbortController } | null>(null);
+  const trashStaleRef = useRef(false);
+  const failedFilesLoadPoolRef = useRef<number | null>(null);
+  const skipNextPoolEffectRef = useRef<number | null>(null);
   const activePoolIdRef = useRef(activePoolId);
   activePoolIdRef.current = activePoolId;
   const poolsRef = useRef(pools);
@@ -254,27 +504,40 @@ export function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const urlPath = urlParams.get('path');
       if (urlPath) return urlPath;
-      return window.sessionStorage.getItem('tsubasa-current-path') || '/';
+      return safeStorageGet(window.sessionStorage, 'tsubasa-current-path') || '/';
     }
     return '/';
   });
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentNav, setCurrentNav] = useState<'files' | 'trash'>(() => {
     if (typeof window !== 'undefined') {
-      const saved = window.sessionStorage.getItem('tsubasa-current-nav');
+      const saved = safeStorageGet(window.sessionStorage, 'tsubasa-current-nav');
       if (saved === 'files' || saved === 'trash') return saved;
     }
     return 'files';
   });
+  const currentNavRef = useRef(currentNav);
+  currentNavRef.current = currentNav;
   const [clipboard, setClipboard] = useState<ActionPortalClipboard | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const surfaceWorkspaceError = useCallback((context: string, err: unknown, fallback: string) => {
+    const message = extractErrorMessage(err, fallback);
+    setWorkspaceError(message);
+    reportDevError(context, err instanceof Error ? err : message);
+  }, []);
   const [renameModalItem, setRenameModalItem] = useState<RenameTarget | null>(null);
   const [movePoolTargetAccount, setMovePoolTargetAccount] = useState<AccountItem | null>(null);
   const [moveFilesModalGroup, setMoveFilesModalGroup] = useState<SelectedAccountGroup | null>(null);
+  const [pendingMoveConflict, setPendingMoveConflict] = useState<PendingMoveConflict | null>(null);
+  const [isResolvingMoveConflict, setIsResolvingMoveConflict] = useState(false);
+  const resolvingMoveConflictRef = useRef(false);
+  const [scrollRequest, setScrollRequest] = useState<{ id: string; seq: number } | null>(null);
   const [filteredAccountIds, setFilteredAccountIds] = useState<Set<string>>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const raw = window.sessionStorage.getItem('tsubasa-filtered-account-ids');
+        const raw = safeStorageGet(window.sessionStorage, 'tsubasa-filtered-account-ids');
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
@@ -290,57 +553,76 @@ export function App() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      try {
-        if (filteredAccountIds.size === 0) {
-          window.sessionStorage.removeItem('tsubasa-filtered-account-ids');
-        } else {
-          window.sessionStorage.setItem(
-            'tsubasa-filtered-account-ids',
-            JSON.stringify(Array.from(filteredAccountIds))
-          );
-        }
-      } catch {
-        // Ignore storage errors
+      if (filteredAccountIds.size === 0) {
+        safeStorageRemove(window.sessionStorage, 'tsubasa-filtered-account-ids');
+      } else {
+        safeStorageSet(
+          window.sessionStorage,
+          'tsubasa-filtered-account-ids',
+          JSON.stringify(Array.from(filteredAccountIds))
+        );
       }
     }
   }, [filteredAccountIds]);
 
   const handleToggleAccountFilter = useCallback((accountId: string) => {
-    setSelectedIds(new Set());
-    setFilteredAccountIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(accountId)) {
-        next.delete(accountId);
-      } else {
-        next.add(accountId);
-      }
-      return next;
+    startTransition(() => {
+      setSelectedIds(new Set());
+      setFilteredAccountIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(accountId)) {
+          next.delete(accountId);
+        } else {
+          next.add(accountId);
+        }
+        return next;
+      });
+    });
+  }, []);
+
+  const [hasVisitedFiles, setHasVisitedFiles] = useState<boolean>(() => currentNav === 'files');
+  const [hasVisitedTrash, setHasVisitedTrash] = useState<boolean>(() => currentNav === 'trash');
+
+  useEffect(() => {
+    if (currentNav === 'files') setHasVisitedFiles(true);
+    if (currentNav === 'trash') setHasVisitedTrash(true);
+  }, [currentNav]);
+
+  const handleSelectNav = useCallback((nav: 'files' | 'trash') => {
+    setWorkspaceError(null);
+    runWithViewTransition(() => {
+      flushSync(() => {
+        setCurrentNav(nav);
+      });
     });
   }, []);
 
   const handleNavigate = useCallback(
     (newPath: string) => {
+      setWorkspaceError(null);
       if (typeof window !== 'undefined') {
         const nextUrl = getPathUrl(newPath);
         if (newPath !== currentPath) {
           window.history.pushState({ path: newPath }, '', nextUrl);
         }
       }
-      setCurrentPath(newPath);
-      setSelectedIds(new Set());
+      startTransition(() => {
+        setCurrentPath(newPath);
+        setSelectedIds(new Set());
+      });
     },
     [currentPath]
   );
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem('tsubasa-current-path', currentPath);
+      safeStorageSet(window.sessionStorage, 'tsubasa-current-path', currentPath);
     }
   }, [currentPath]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem('tsubasa-current-nav', currentNav);
+      safeStorageSet(window.sessionStorage, 'tsubasa-current-nav', currentNav);
     }
   }, [currentNav]);
 
@@ -362,6 +644,7 @@ export function App() {
   }, [folders, currentPath, handleNavigate]);
 
   useEffect(() => {
+    if (loadedFilesPoolId !== activePoolId || failedFilesLoadPoolRef.current === activePoolId) return;
     setFilteredAccountIds((prev) => {
       if (prev.size === 0) return prev;
       const valid = new Set<string>();
@@ -373,27 +656,29 @@ export function App() {
       if (valid.size === prev.size) return prev;
       return valid;
     });
-  }, [files]);
+  }, [files, loadedFilesPoolId, activePoolId]);
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [pendingOpsCount, setPendingOpsCount] = useState<number>(0);
+  const isSyncingRef = useRef(isSyncing);
+  isSyncingRef.current = isSyncing;
+  const pendingOpsCountRef = useRef(pendingOpsCount);
+  pendingOpsCountRef.current = pendingOpsCount;
   const [isMobileOpen, setIsMobileOpen] = useState<boolean>(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [transferringFileId, setTransferringFileId] = useState<string | null>(null);
+  const [transferringFileIds, setTransferringFileIds] = useState<Set<string>>(() => new Set());
   const [driveActionModal, setDriveActionModal] = useState<{
     isOpen: boolean;
-    action: 'remove';
     account: AccountItem | null;
     isLoading: boolean;
     errorMessage: string | null;
   }>({
     isOpen: false,
-    action: 'remove',
     account: null,
     isLoading: false,
     errorMessage: null,
   });
+  const executingDriveActionRef = useRef(false);
 
   const runPendingOp = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
     setPendingOpsCount((c) => c + 1);
@@ -407,16 +692,22 @@ export function App() {
   const hasInFlightAppProcess =
     isSyncing ||
     isImporting ||
-    transferringFileId !== null ||
+    transferringFileIds.size > 0 ||
     driveActionModal.isLoading ||
     pendingOpsCount > 0;
 
   useBeforeUnload(hasInFlightAppProcess);
 
   const isMobileViewport = useMediaQuery('(max-width: 768px)');
+  const prevMobileViewportRef = useRef(isMobileViewport);
   useEffect(() => {
-    if (!isMobileViewport) {
-      setIsMobileOpen(false);
+    if (prevMobileViewportRef.current !== isMobileViewport) {
+      prevMobileViewportRef.current = isMobileViewport;
+      if (!isMobileViewport) {
+        setIsMobileOpen(false);
+      }
+      setIsExternalChangesOpen(false);
+      setExternalChangesAccountId(undefined);
     }
   }, [isMobileViewport]);
 
@@ -435,11 +726,9 @@ export function App() {
       clearTimeout(resizeTimer);
     };
   }, []);
-  const [errorNotice, setErrorNotice] = useState<string | null>(null);
-
-  // Drawers and modals state
   const [stagedFiles, setStagedFiles] = useState<Array<File | StagedItem>>([]);
   const [stagedEmptyFolders, setStagedEmptyFolders] = useState<string[]>([]);
+  const [uploadTargetPath, setUploadTargetPath] = useState<string | undefined>(undefined);
   const [isUploadDrawerOpen, setIsUploadDrawerOpen] = useState<boolean>(false);
 
   const [isExternalChangesOpen, setIsExternalChangesOpen] = useState<boolean>(false);
@@ -447,6 +736,7 @@ export function App() {
 
   const [trashedFiles, setTrashedFiles] = useState<ClientFileRecord[]>([]);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState<boolean>(false);
+  const [pendingPurgeFiles, setPendingPurgeFiles] = useState<ClientFileRecord[] | null>(null);
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
   const [shareModalState, setShareModalState] = useState<{
     items: ShareTargetItem[];
@@ -455,7 +745,6 @@ export function App() {
   const [isClearSharePoolOpen, setIsClearSharePoolOpen] = useState<boolean>(false);
   const [pendingDiscrepancies, setPendingDiscrepancies] = useState<Record<string, boolean>>({});
 
-  // Synchronize browser history and popstate events (e.g. Mouse Back/Forward, Browser Back/Forward, Alt+Left/Right)
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -465,7 +754,7 @@ export function App() {
     }
 
     function handlePopState(e: PopStateEvent) {
-      if (driveActionModal.isLoading || pendingOpsCount > 0) {
+      if (driveActionModal.isLoading || pendingOpsCount > 0 || isResolvingMoveConflict) {
         window.history.pushState({ path: currentPath }, '', getPathUrl(currentPath));
         return;
       }
@@ -474,12 +763,18 @@ export function App() {
 
       if (renameModalItem) setRenameModalItem(null);
       if (movePoolTargetAccount) setMovePoolTargetAccount(null);
+      if (moveFilesModalGroup) setMoveFilesModalGroup(null);
+      if (pendingMoveConflict) setPendingMoveConflict(null);
       if (isUploadDrawerOpen) setIsUploadDrawerOpen(false);
       if (isExternalChangesOpen) setIsExternalChangesOpen(false);
       if (isNewFolderOpen) setIsNewFolderOpen(false);
       if (confirmEmptyTrash) setConfirmEmptyTrash(false);
+      if (pendingPurgeFiles) setPendingPurgeFiles(null);
       if (shareModalState) setShareModalState(null);
       if (isClearSharePoolOpen) setIsClearSharePoolOpen(false);
+      if (driveActionModal.isOpen && !driveActionModal.isLoading) {
+        setDriveActionModal((prev) => ({ ...prev, isOpen: false }));
+      }
 
       setCurrentNav('files');
       setCurrentPath(targetPath);
@@ -492,21 +787,63 @@ export function App() {
     currentPath,
     renameModalItem,
     movePoolTargetAccount,
+    moveFilesModalGroup,
+    pendingMoveConflict,
+    isResolvingMoveConflict,
     isUploadDrawerOpen,
     isExternalChangesOpen,
     isNewFolderOpen,
     confirmEmptyTrash,
+    pendingPurgeFiles,
     shareModalState,
     isClearSharePoolOpen,
+    driveActionModal.isOpen,
     driveActionModal.isLoading,
     pendingOpsCount,
   ]);
 
-  const showToast = useCallback((msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 4000);
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const foldersRef = useRef(folders);
+  foldersRef.current = folders;
+  const trashedFilesRef = useRef(trashedFiles);
+  trashedFilesRef.current = trashedFiles;
+  const storageRef = useRef(storage);
+  storageRef.current = storage;
+  const loadedFilesPoolIdRef = useRef(loadedFilesPoolId);
+  loadedFilesPoolIdRef.current = loadedFilesPoolId;
+  const loadedTrashPoolIdRef = useRef(loadedTrashPoolId);
+  loadedTrashPoolIdRef.current = loadedTrashPoolId;
+  const shareLinksByBatchRef = useRef(shareLinksByBatch);
+  shareLinksByBatchRef.current = shareLinksByBatch;
+  const shareLinksPoolIdRef = useRef(shareLinksPoolId);
+  shareLinksPoolIdRef.current = shareLinksPoolId;
+  const pendingDiscrepanciesRef = useRef(pendingDiscrepancies);
+  pendingDiscrepanciesRef.current = pendingDiscrepancies;
+
+  const markTrashStale = useCallback((poolId?: number) => {
+    const targetPoolId = poolId ?? activePoolIdRef.current;
+    if (targetPoolId === activePoolIdRef.current) {
+      trashStaleRef.current = true;
+    }
+    markPoolTrashStale(targetPoolId);
+  }, []);
+
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Defer aborting so React StrictMode remounts reuse live in-flight reads instead of canceling them.
+      setTimeout(() => {
+        if (!isMountedRef.current) {
+          filesAbortRef.current?.controller.abort();
+          trashAbortRef.current?.controller.abort();
+          clusterAbortRef.current?.controller.abort();
+          discrepancyAbortRef.current?.controller.abort();
+        }
+      }, 0);
+    };
   }, []);
 
   const checkAccountDiscrepancies = useCallback(
@@ -528,18 +865,40 @@ export function App() {
       }
       lastDiscrepancyScanByPool.set(poolId, now);
       const reqSeq = ++discrepancyRequestSeqRef.current;
-      await Promise.all(
-        authAccounts.map(async (acc) => {
-          try {
-            const res = await client.api.sync['external-changes'][':accountId'].$get({
-              param: { accountId: acc.accountId },
-              query: force ? { refresh: '1' } : {},
-            });
-            if (activePoolIdRef.current !== poolId || discrepancyRequestSeqRef.current !== reqSeq) {
-              return;
-            }
-            if (res.ok) {
-              const report = await res.json();
+
+      if (discrepancyAbortRef.current && (discrepancyAbortRef.current.poolId !== poolId || force)) {
+        discrepancyAbortRef.current.controller.abort();
+        discrepancyAbortRef.current = null;
+      }
+      const controller =
+        !force &&
+        discrepancyAbortRef.current?.poolId === poolId &&
+        !discrepancyAbortRef.current.controller.signal.aborted
+          ? discrepancyAbortRef.current.controller
+          : new AbortController();
+      discrepancyAbortRef.current = { poolId, controller };
+
+      try {
+        await Promise.all(
+          authAccounts.map(async (acc) => {
+            try {
+              const report = await dedupeInFlight(
+                `discrepancy:${poolId}:${acc.accountId}:${force ? '1' : '0'}`,
+                async (signal) => {
+                  const res = await client.api.sync['external-changes'][':accountId'].$get(
+                    {
+                      param: { accountId: acc.accountId },
+                      query: force ? { refresh: '1' } : {},
+                    },
+                    { init: { signal } }
+                  );
+                  if (!res.ok) return null;
+                  return (await res.json()) as DiscrepancyReport;
+                },
+                controller.signal
+              );
+              if (!report) return;
+              setDiscrepancyReportCache(acc.accountId, report);
               if (activePoolIdRef.current !== poolId || discrepancyRequestSeqRef.current !== reqSeq) {
                 return;
               }
@@ -549,16 +908,22 @@ export function App() {
                 (report?.unindexed?.length ?? 0) +
                 (report?.modified?.length ?? 0) +
                 (report?.missingRemote?.length ?? 0);
-              setPendingDiscrepancies((prev) => ({
-                ...prev,
-                [acc.accountId]: count > 0,
-              }));
+              setPendingDiscrepancies((prev) => {
+                const next = { ...prev, [acc.accountId]: count > 0 };
+                setPoolCache(poolId, { pendingDiscrepancies: next });
+                return next;
+              });
+            } catch (err) {
+              if (isAbortError(err)) return;
+              // Background discrepancy polling skips transient network or scan failures.
             }
-          } catch {
-            // Silently skip if network or scan is unavailable
-          }
-        })
-      );
+          })
+        );
+      } finally {
+        if (discrepancyAbortRef.current?.controller === controller) {
+          discrepancyAbortRef.current = null;
+        }
+      }
     },
     [isPoolSharePool]
   );
@@ -567,22 +932,55 @@ export function App() {
     async (targetPoolId?: number): Promise<DiscoveredAccount[] | undefined> => {
       const effectivePoolId = targetPoolId ?? activePoolIdRef.current;
       const reqSeq = ++clusterRequestSeqRef.current;
+      const isActivePool = activePoolIdRef.current === effectivePoolId;
+
+      if (isActivePool && clusterAbortRef.current && clusterAbortRef.current.poolId !== effectivePoolId) {
+        clusterAbortRef.current.controller.abort();
+        clusterAbortRef.current = null;
+      }
+      const controller =
+        clusterAbortRef.current?.poolId === effectivePoolId &&
+        !clusterAbortRef.current.controller.signal.aborted
+          ? clusterAbortRef.current.controller
+          : new AbortController();
+      if (isActivePool) {
+        clusterAbortRef.current = { poolId: effectivePoolId, controller };
+      }
+
       try {
-        const [poolsRes, storageRes, poolRes] = await Promise.all([
-          client.api.pools.$get(),
-          client.api.storage.overview.$get({ query: { poolId: String(effectivePoolId) } }),
-          client.api.accounts.pool.$get({ query: { poolId: String(effectivePoolId) } }),
-        ]);
-        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+        const result = await dedupeInFlight(
+          `cluster:${effectivePoolId}`,
+          async (signal) => {
+            const [poolsRes, storageRes, poolRes] = await Promise.all([
+              client.api.pools.$get(undefined, { init: { signal } }),
+              client.api.storage.overview.$get(
+                { query: { poolId: String(effectivePoolId) } },
+                { init: { signal } }
+              ),
+              client.api.accounts.pool.$get(
+                { query: { poolId: String(effectivePoolId) } },
+                { init: { signal } }
+              ),
+            ]);
+            const [poolsData, storageData, poolData, poolsErr, storageErr, poolErr] = await Promise.all([
+              poolsRes.ok ? poolsRes.json() : Promise.resolve(null),
+              storageRes.ok ? storageRes.json() : Promise.resolve(null),
+              poolRes.ok ? poolRes.json() : Promise.resolve(null),
+              poolsRes.ok ? Promise.resolve(null) : readResponseError(poolsRes, 'Failed to load pools'),
+              storageRes.ok ? Promise.resolve(null) : readResponseError(storageRes, 'Failed to load storage overview'),
+              poolRes.ok ? Promise.resolve(null) : readResponseError(poolRes, 'Failed to load accounts'),
+            ]);
+            const error = poolsErr || storageErr || poolErr;
+            return { poolsData, storageData, poolData, error };
+          },
+          controller.signal
+        );
 
-        const [poolsData, storageData, poolData] = await Promise.all([
-          poolsRes.ok ? poolsRes.json() : Promise.resolve(null),
-          storageRes.ok ? storageRes.json() : Promise.resolve(null),
-          poolRes.ok ? poolRes.json() : Promise.resolve(null),
-        ]);
-        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
+        const isStillActive = activePoolIdRef.current === effectivePoolId;
+        if (isStillActive && clusterRequestSeqRef.current !== reqSeq) return undefined;
+        const { poolsData, storageData, poolData, error } = result;
 
-        if (poolsData) {
+        if (poolsData && isStillActive) {
           setPools(poolsData.pools);
           if (poolsData.pools.length > 0 && !poolsData.pools.some((p) => p.id === effectivePoolId)) {
             const fallbackPool = poolsData.pools.find((p) => !p.isSharePool) ?? poolsData.pools[0];
@@ -590,99 +988,262 @@ export function App() {
           }
         }
         if (storageData) {
-          setStorage(storageData);
+          setPoolCache(effectivePoolId, { storage: storageData as StorageOverview });
+          if (isStillActive) {
+            setStorage(storageData as StorageOverview);
+          }
         }
         if (poolData) {
-          setDiscovered(poolData.accounts);
-          return poolData.accounts as DiscoveredAccount[];
+          const accounts = poolData.accounts as DiscoveredAccount[];
+          setPoolCache(effectivePoolId, { discovered: accounts });
+          if (isStillActive) {
+            setDiscovered(accounts);
+          }
+          if (error && isStillActive) {
+            surfaceWorkspaceError('loadClusterData', error, 'Failed to load workspace status');
+          }
+          return accounts;
+        }
+        if (error && isStillActive) {
+          surfaceWorkspaceError('loadClusterData', error, 'Failed to load workspace status');
         }
       } catch (err) {
-        if (clusterRequestSeqRef.current !== reqSeq) return undefined;
-        setErrorNotice(err instanceof Error ? err.message : 'Cluster offline');
+        if (isAbortError(err)) return undefined;
+        if (activePoolIdRef.current !== effectivePoolId || clusterRequestSeqRef.current !== reqSeq) {
+          return undefined;
+        }
+        surfaceWorkspaceError('loadClusterData', err, 'Failed to load workspace status');
+      } finally {
+        if (clusterAbortRef.current?.controller === controller) {
+          clusterAbortRef.current = null;
+        }
       }
       return undefined;
     },
-    []
+    [surfaceWorkspaceError]
   );
 
   const loadFiles = useCallback(
     async (path: string, targetPoolId?: number) => {
-      const reqPoolId = targetPoolId ?? activePoolId;
+      const reqPoolId = targetPoolId ?? activePoolIdRef.current;
       const reqSeq = ++filesRequestSeqRef.current;
       const reqIsSharePool =
         poolsRef.current.some((p) => p.id === reqPoolId && p.isSharePool) || reqPoolId >= SHARE_POOL_RESERVE_ID;
+      const isActivePool = activePoolIdRef.current === reqPoolId;
+
+      if (isActivePool && filesAbortRef.current && filesAbortRef.current.poolId !== reqPoolId) {
+        filesAbortRef.current.controller.abort();
+        filesAbortRef.current = null;
+      }
+      const controller =
+        filesAbortRef.current?.poolId === reqPoolId &&
+        !filesAbortRef.current.controller.signal.aborted
+          ? filesAbortRef.current.controller
+          : new AbortController();
+      if (isActivePool) {
+        filesAbortRef.current = { poolId: reqPoolId, controller };
+      }
+
       try {
-        const [res, linksRes] = await Promise.all([
-          client.api.files.$get({ query: { path, poolId: String(reqPoolId) } }),
-          reqIsSharePool
-            ? client.api.share.links.$get({ query: { poolId: String(reqPoolId) } }).catch(() => null)
-            : Promise.resolve(null),
-        ]);
-        if (res.ok) {
-          const [data, linksData] = await Promise.all([
-            res.json(),
-            reqIsSharePool && linksRes?.ok ? linksRes.json().catch(() => null) : Promise.resolve(null),
-          ]);
-          if (filesRequestSeqRef.current !== reqSeq) return;
-          setFiles(data.files as ClientFileRecord[]);
-          setFolders(data.folders as ClientFolder[]);
-          setLoadedFilesPoolId(reqPoolId);
+        const result = await dedupeInFlight(
+          `files:${reqPoolId}`,
+          async (signal) => {
+            let linksError: string | null = null;
+            const [res, linksRes] = await Promise.all([
+              client.api.files.$get(
+                { query: { path, poolId: String(reqPoolId) } },
+                { init: { signal } }
+              ),
+              reqIsSharePool
+                ? client.api.share.links
+                    .$get(
+                      { query: { poolId: String(reqPoolId) } },
+                      { init: { signal } }
+                    )
+                    .catch((err) => {
+                      if (!isAbortError(err)) {
+                        linksError = extractErrorMessage(err, 'Failed to load share links');
+                      }
+                      return null;
+                    })
+                : Promise.resolve(null),
+            ]);
+            if (!res.ok) {
+              const error = await readResponseError(res, 'Failed to load files');
+              return { ok: false as const, error };
+            }
+            if (reqIsSharePool && linksRes && !linksRes.ok) {
+              linksError = await readResponseError(linksRes, 'Failed to load share links');
+            }
+            const [data, linksData] = await Promise.all([
+              res.json(),
+              reqIsSharePool && linksRes?.ok ? linksRes.json().catch(() => null) : Promise.resolve(null),
+            ]);
+            return { ok: true as const, data, linksData, linksError };
+          },
+          controller.signal
+        );
+
+        const isStillActive = activePoolIdRef.current === reqPoolId;
+        if (isStillActive && filesRequestSeqRef.current !== reqSeq) return;
+        if (result.ok) {
+          if (failedFilesLoadPoolRef.current === reqPoolId) {
+            failedFilesLoadPoolRef.current = null;
+          }
+          const nextFiles = result.data.files as ClientFileRecord[];
+          const nextFolders = result.data.folders as ClientFolder[];
+
           if (reqIsSharePool) {
-            if (linksData) {
+            if (result.linksData) {
               const grouped: Record<string, StoredShareLink[]> = {};
-              for (const link of linksData.links) {
+              for (const link of result.linksData.links) {
                 if (!grouped[link.batchFolderName]) {
                   grouped[link.batchFolderName] = [];
                 }
                 grouped[link.batchFolderName].push(link);
               }
-              setShareLinksByBatch(grouped);
-              setShareLinksPoolId(reqPoolId);
+              setPoolCache(reqPoolId, {
+                files: nextFiles,
+                folders: nextFolders,
+                loadedFilesPoolId: reqPoolId,
+                shareLinksByBatch: grouped,
+                shareLinksPoolId: reqPoolId,
+              });
+              if (isStillActive) {
+                setFiles(nextFiles);
+                setFolders(nextFolders);
+                setLoadedFilesPoolId(reqPoolId);
+                setShareLinksByBatch(grouped);
+                setShareLinksPoolId(reqPoolId);
+              }
+            } else {
+              setPoolCache(reqPoolId, {
+                files: nextFiles,
+                folders: nextFolders,
+                loadedFilesPoolId: reqPoolId,
+              });
+              if (isStillActive) {
+                setFiles(nextFiles);
+                setFolders(nextFolders);
+                setLoadedFilesPoolId(reqPoolId);
+              }
+            }
+            if (result.linksError && isStillActive) {
+              surfaceWorkspaceError('loadFiles.shareLinks', result.linksError, 'Failed to load share links');
             }
           } else {
-            setShareLinksByBatch({});
-            setShareLinksPoolId(reqPoolId);
+            setPoolCache(reqPoolId, {
+              files: nextFiles,
+              folders: nextFolders,
+              loadedFilesPoolId: reqPoolId,
+              shareLinksByBatch: {},
+              shareLinksPoolId: reqPoolId,
+            });
+            if (isStillActive) {
+              setFiles(nextFiles);
+              setFolders(nextFolders);
+              setLoadedFilesPoolId(reqPoolId);
+              setShareLinksByBatch({});
+              setShareLinksPoolId(reqPoolId);
+            }
           }
-        } else {
-          if (filesRequestSeqRef.current !== reqSeq) return;
+        } else if (isStillActive) {
+          failedFilesLoadPoolRef.current = reqPoolId;
           setLoadedFilesPoolId(reqPoolId);
+          surfaceWorkspaceError('loadFiles', result.error, 'Failed to load files');
         }
       } catch (err) {
-        if (filesRequestSeqRef.current !== reqSeq) return;
-        setErrorNotice(err instanceof Error ? err.message : 'Failed to query files');
+        if (isAbortError(err)) return;
+        if (activePoolIdRef.current !== reqPoolId || filesRequestSeqRef.current !== reqSeq) return;
+        failedFilesLoadPoolRef.current = reqPoolId;
+        surfaceWorkspaceError('loadFiles', err, 'Failed to load files');
         setLoadedFilesPoolId(reqPoolId);
+      } finally {
+        if (filesAbortRef.current?.controller === controller) {
+          filesAbortRef.current = null;
+        }
       }
     },
-    [activePoolId]
+    [surfaceWorkspaceError]
   );
 
   const loadTrashFiles = useCallback(async (targetPoolId?: number) => {
-    const reqPoolId = targetPoolId ?? activePoolId;
+    const reqPoolId = targetPoolId ?? activePoolIdRef.current;
     const reqSeq = ++trashRequestSeqRef.current;
-    try {
-      const res = await client.api.trash.$get({ query: { poolId: String(reqPoolId) } });
-      if (trashRequestSeqRef.current !== reqSeq) return;
-      if (res.ok) {
-        const data = await res.json();
-        if (trashRequestSeqRef.current !== reqSeq) return;
-        setTrashedFiles((data.files as ClientFileRecord[]) || []);
-      }
-      setLoadedTrashPoolId(reqPoolId);
-    } catch (err) {
-      if (trashRequestSeqRef.current !== reqSeq) return;
-      setErrorNotice(err instanceof Error ? err.message : 'Failed to query trash');
-      setLoadedTrashPoolId(reqPoolId);
+    const isActivePool = activePoolIdRef.current === reqPoolId;
+
+    if (isActivePool && trashAbortRef.current && trashAbortRef.current.poolId !== reqPoolId) {
+      trashAbortRef.current.controller.abort();
+      trashAbortRef.current = null;
     }
-  }, [activePoolId]);
+    const controller =
+      trashAbortRef.current?.poolId === reqPoolId &&
+      !trashAbortRef.current.controller.signal.aborted
+        ? trashAbortRef.current.controller
+        : new AbortController();
+    if (isActivePool) {
+      trashAbortRef.current = { poolId: reqPoolId, controller };
+    }
+
+    try {
+      const result = await dedupeInFlight(
+        `trash:${reqPoolId}`,
+        async (signal) => {
+          const res = await client.api.trash.$get(
+            { query: { poolId: String(reqPoolId) } },
+            { init: { signal } }
+          );
+          if (!res.ok) {
+            const error = await readResponseError(res, 'Failed to load trash');
+            return { ok: false as const, error };
+          }
+          return { ok: true as const, data: await res.json() };
+        },
+        controller.signal
+      );
+
+      const isStillActive = activePoolIdRef.current === reqPoolId;
+      if (isStillActive && trashRequestSeqRef.current !== reqSeq) return;
+      if (result.ok) {
+        const nextTrashed = (result.data.files as ClientFileRecord[]) || [];
+        setPoolCache(reqPoolId, {
+          trashedFiles: nextTrashed,
+          loadedTrashPoolId: reqPoolId,
+          trashStale: false,
+        });
+        if (isStillActive) {
+          setTrashedFiles(nextTrashed);
+          trashStaleRef.current = false;
+          setLoadedTrashPoolId(reqPoolId);
+        }
+      } else if (isStillActive) {
+        setLoadedTrashPoolId(reqPoolId);
+        surfaceWorkspaceError('loadTrashFiles', result.error, 'Failed to load trash');
+      }
+    } catch (err) {
+      if (isAbortError(err)) return;
+      if (activePoolIdRef.current !== reqPoolId || trashRequestSeqRef.current !== reqSeq) return;
+      surfaceWorkspaceError('loadTrashFiles', err, 'Failed to load trash');
+      setLoadedTrashPoolId(reqPoolId);
+    } finally {
+      if (trashAbortRef.current?.controller === controller) {
+        trashAbortRef.current = null;
+      }
+    }
+  }, [surfaceWorkspaceError]);
 
   // /api/files returns the whole pool, so path changes within a pool need no refetch.
   const currentPathRef = useRef(currentPath);
   currentPathRef.current = currentPath;
 
   useEffect(() => {
-    loadClusterData();
-    loadFiles(currentPathRef.current);
-  }, [loadClusterData, loadFiles]);
+    if (skipNextPoolEffectRef.current === activePoolId) {
+      skipNextPoolEffectRef.current = null;
+      return;
+    }
+    void loadClusterData(activePoolId);
+    void loadFiles(currentPathRef.current, activePoolId);
+  }, [activePoolId, loadClusterData, loadFiles]);
 
   const discoveredRef = useRef(discovered);
   discoveredRef.current = discovered;
@@ -703,8 +1264,22 @@ export function App() {
   }, [activePoolId, isSharePoolActive, authAccountsKey, checkAccountDiscrepancies]);
 
   const clearWorkspaceState = useCallback(() => {
+    clusterAbortRef.current?.controller.abort();
+    clusterAbortRef.current = null;
+    discrepancyAbortRef.current?.controller.abort();
+    discrepancyAbortRef.current = null;
+    filesAbortRef.current?.controller.abort();
+    filesAbortRef.current = null;
+    trashAbortRef.current?.controller.abort();
+    trashAbortRef.current = null;
+
     clusterRequestSeqRef.current++;
     discrepancyRequestSeqRef.current++;
+    filesRequestSeqRef.current++;
+    trashRequestSeqRef.current++;
+
+    setStorage(null);
+    setDiscovered([]);
     setFiles([]);
     setFolders([]);
     setTrashedFiles([]);
@@ -715,25 +1290,81 @@ export function App() {
     setFilteredAccountIds(new Set());
     setSelectedIds(new Set());
     setClipboard(null);
+    setWorkspaceError(null);
+    setPendingMoveConflict(null);
+    setPendingPurgeFiles(null);
+    setIsResolvingMoveConflict(false);
+    setScrollRequest(null);
     setPendingDiscrepancies({});
+    trashStaleRef.current = false;
   }, []);
 
   const handleSelectPool = useCallback(
     (nextPoolId: number) => {
-      if (nextPoolId === activePoolId) return;
+      const prevPoolId = activePoolIdRef.current;
+      if (nextPoolId === prevPoolId) return;
+
+      setPoolCache(prevPoolId, {
+        files: filesRef.current,
+        folders: foldersRef.current,
+        trashedFiles: trashedFilesRef.current,
+        storage: storageRef.current,
+        discovered: discoveredRef.current,
+        shareLinksByBatch: shareLinksByBatchRef.current,
+        pendingDiscrepancies: pendingDiscrepanciesRef.current,
+        loadedFilesPoolId: loadedFilesPoolIdRef.current,
+        loadedTrashPoolId: loadedTrashPoolIdRef.current,
+        shareLinksPoolId: shareLinksPoolIdRef.current,
+        trashStale: trashStaleRef.current,
+      });
+
+      clusterAbortRef.current?.controller.abort();
+      discrepancyAbortRef.current?.controller.abort();
+      filesAbortRef.current?.controller.abort();
+      trashAbortRef.current?.controller.abort();
+
       clusterRequestSeqRef.current++;
       discrepancyRequestSeqRef.current++;
-      clearWorkspaceState();
-      setActivePoolId(nextPoolId);
-      setCurrentPath('/');
-      setIsUploadDrawerOpen(false);
-      setIsExternalChangesOpen(false);
-      setShareModalState(null);
-      setIsClearSharePoolOpen(false);
-      setMoveFilesModalGroup(null);
-      setRenameModalItem(null);
+      filesRequestSeqRef.current++;
+      trashRequestSeqRef.current++;
+
+      const cached = getPoolCache(nextPoolId);
+      activePoolIdRef.current = nextPoolId;
+      startTransition(() => {
+        if (cached) {
+          setFiles(cached.files);
+          setFolders(cached.folders);
+          setTrashedFiles(cached.trashedFiles);
+          setStorage(cached.storage);
+          setDiscovered(cached.discovered);
+          setShareLinksByBatch(cached.shareLinksByBatch);
+          setPendingDiscrepancies(cached.pendingDiscrepancies);
+          setLoadedFilesPoolId(cached.loadedFilesPoolId);
+          setLoadedTrashPoolId(cached.loadedTrashPoolId);
+          setShareLinksPoolId(cached.shareLinksPoolId);
+          trashStaleRef.current = cached.trashStale;
+          setFilteredAccountIds(new Set());
+          setSelectedIds(new Set());
+          setClipboard(null);
+        } else {
+          clearWorkspaceState();
+        }
+        setActivePoolId(nextPoolId);
+        setCurrentPath('/');
+        setWorkspaceError(null);
+        setIsUploadDrawerOpen(false);
+        setIsExternalChangesOpen(false);
+        setShareModalState(null);
+        setIsClearSharePoolOpen(false);
+        setMoveFilesModalGroup(null);
+        setPendingMoveConflict(null);
+        setPendingPurgeFiles(null);
+        setIsResolvingMoveConflict(false);
+        setRenameModalItem(null);
+        setDriveActionModal((prev) => (prev.isOpen ? { ...prev, isOpen: false } : prev));
+      });
     },
-    [activePoolId, clearWorkspaceState]
+    [clearWorkspaceState]
   );
 
   const presentAuthorizedAccount = useCallback(
@@ -741,17 +1372,15 @@ export function App() {
       accountFilterId,
       targetPool,
       conflictsCount,
-      conflictToast,
-      cleanToast,
     }: {
       accountFilterId?: string;
       targetPool: number;
       conflictsCount: number;
-      conflictToast: string;
-      cleanToast: string;
     }) => {
-      const nextPath = targetPool !== activePoolId ? '/' : currentPath;
-      if (targetPool !== activePoolId) {
+      const switchingPool = targetPool !== activePoolIdRef.current;
+      const nextPath = switchingPool ? '/' : currentPathRef.current;
+      if (switchingPool) {
+        skipNextPoolEffectRef.current = targetPool;
         handleSelectPool(targetPool);
       }
       lastDiscrepancyScanByPool.set(targetPool, 0);
@@ -763,59 +1392,37 @@ export function App() {
         await checkAccountDiscrepancies(freshAccounts, true, targetPool);
       }
       if (conflictsCount > 0) {
-        showToast(conflictToast);
         if (accountFilterId) {
           setExternalChangesAccountId(accountFilterId);
         }
         setIsExternalChangesOpen(true);
-      } else {
-        showToast(cleanToast);
       }
     },
-    [
-      activePoolId,
-      currentPath,
-      handleSelectPool,
-      loadClusterData,
-      loadFiles,
-      checkAccountDiscrepancies,
-      showToast,
-    ]
+    [handleSelectPool, loadClusterData, loadFiles, checkAccountDiscrepancies]
   );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('auth') === 'success') {
       const rawAccount = params.get('account') || undefined;
-      const accountLabel = rawAccount || 'Google account';
       const poolIdParam = Number(params.get('poolId'));
       const parsedConflicts = Number(params.get('conflicts') || '0');
       const conflictsCount =
         Number.isFinite(parsedConflicts) && parsedConflicts > 0 ? parsedConflicts : 0;
       const targetPool =
-        Number.isFinite(poolIdParam) && poolIdParam > 0 ? poolIdParam : activePoolId;
+        Number.isFinite(poolIdParam) && poolIdParam > 0 ? poolIdParam : activePoolIdRef.current;
       window.history.replaceState({}, '', window.location.pathname);
       void presentAuthorizedAccount({
         accountFilterId: rawAccount,
         targetPool,
         conflictsCount,
-        conflictToast: `Account "${accountLabel}" authorized with ${conflictsCount} file ${conflictsCount === 1 ? 'conflict' : 'conflicts'}.`,
-        cleanToast: `Account "${accountLabel}" successfully authorized.`,
       });
     }
-  }, [activePoolId, presentAuthorizedAccount]);
+  }, [presentAuthorizedAccount]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
-    const channel = new BroadcastChannel('tsubasa-instance-channel');
-    const handleMessage = (event: MessageEvent) => {
-      const data = event.data as
-        | { type?: string; account?: string; poolId?: number; conflicts?: number }
-        | null
-        | undefined;
-      if (!data || data.type !== 'AUTH_COMPLETED') return;
+    return subscribeAuthCompleted((data) => {
       const rawAccount = typeof data.account === 'string' && data.account ? data.account : undefined;
-      const accountLabel = rawAccount || 'Google account';
       const targetPool =
         typeof data.poolId === 'number' && Number.isFinite(data.poolId) && data.poolId > 0
           ? data.poolId
@@ -828,38 +1435,39 @@ export function App() {
         accountFilterId: rawAccount,
         targetPool,
         conflictsCount,
-        conflictToast: `Account "${accountLabel}" authorized with ${conflictsCount} file ${conflictsCount === 1 ? 'conflict' : 'conflicts'}.`,
-        cleanToast: `Account "${accountLabel}" successfully authorized.`,
       });
-    };
-    channel.addEventListener('message', handleMessage);
-    return () => {
-      channel.removeEventListener('message', handleMessage);
-      channel.close();
-    };
+    });
   }, [presentAuthorizedAccount]);
 
   const lastFocusRefreshRef = useRef<number>(0);
   useEffect(() => {
-    function handleFocus() {
-      if (isSyncing || pendingOpsCount > 0) return;
+    function handleFocusOrVisible() {
+      if (document.visibilityState !== 'visible') return;
+      if (isSyncingRef.current || pendingOpsCountRef.current > 0) return;
       const now = Date.now();
       if (now - lastFocusRefreshRef.current < 10_000) return;
       lastFocusRefreshRef.current = now;
-      loadClusterData();
+      void loadClusterData();
     }
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [loadClusterData, isSyncing, pendingOpsCount]);
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+    return () => {
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+    };
+  }, [loadClusterData]);
 
   useEffect(() => {
     if (currentNav === 'trash') {
-      loadTrashFiles();
-      setConfirmEmptyTrash(false);
+      if (loadedTrashPoolId !== activePoolId || trashStaleRef.current) {
+        void loadTrashFiles(activePoolId);
+      }
     }
-  }, [currentNav, loadTrashFiles]);
+    setConfirmEmptyTrash(false);
+    setPendingPurgeFiles(null);
+  }, [currentNav, activePoolId, loadedTrashPoolId, loadTrashFiles]);
 
-  function handleSelect(id: string, isMulti: boolean) {
+  const handleSelect = useCallback((id: string, isMulti: boolean) => {
     setSelectedIds((prev) => {
       if (id === '__parent__') {
         if (prev.has('__parent__') && prev.size === 1) {
@@ -877,12 +1485,9 @@ export function App() {
         }
         return next;
       }
-      if (prev.has(id) && prev.size === 1) {
-        return new Set();
-      }
       return new Set([id]);
     });
-  }
+  }, []);
 
   const handleSelectMultiple = useCallback((ids: string[], mode: 'set' | 'add' | 'toggle' = 'set') => {
     setSelectedIds((prev) => {
@@ -906,7 +1511,7 @@ export function App() {
     });
   }, []);
 
-  // Mouse button navigation for directory history (mouse buttons 3 & 4)
+  // Prevent mouse back/forward buttons from triggering browser history navigation.
   useEffect(() => {
     function handlePointerDown(e: PointerEvent) {
       if (e.button === 3 || e.button === 4) {
@@ -925,18 +1530,7 @@ export function App() {
         e.preventDefault();
         e.stopPropagation();
 
-        const isAnyModalOpen = Boolean(
-          renameModalItem ||
-          movePoolTargetAccount ||
-          isUploadDrawerOpen ||
-          isExternalChangesOpen ||
-          confirmEmptyTrash ||
-          isNewFolderOpen ||
-          driveActionModal.isOpen ||
-          shareModalState ||
-          isClearSharePoolOpen
-        );
-        if (isAnyModalOpen) return;
+        if (isModalActive()) return;
 
         if (e.button === 3) {
           window.history.back();
@@ -964,126 +1558,128 @@ export function App() {
       window.removeEventListener('mouseup', handleMouseUp, { capture: true });
       window.removeEventListener('auxclick', handleAuxClick, { capture: true });
     };
-  }, [
-    renameModalItem,
-    movePoolTargetAccount,
-    isUploadDrawerOpen,
-    isExternalChangesOpen,
-    confirmEmptyTrash,
-    isNewFolderOpen,
-    driveActionModal.isOpen,
-    shareModalState,
-    isClearSharePoolOpen,
-  ]);
+  }, []);
 
-  async function handleAuthorizeAccount(accountId: string) {
-    showToast('Authorize link copied to clipboard. Paste it in your browser.');
-  }
+  const handleImportOAuth = useCallback(
+    async (file: File) => {
+      setWorkspaceError(null);
+      setIsImporting(true);
+      try {
+        const text = await file.text();
 
-  async function handleImportOAuth(file: File) {
-    setIsImporting(true);
-    showToast(`Inspecting credentials from ${file.name}...`);
-    try {
-      const text = await file.text();
-
-      if (file.name.toLowerCase().endsWith('.json') || text.trim().startsWith('{')) {
-        try {
-          const parsed = JSON.parse(text);
-          if (parsed.web && !parsed.installed) {
-            setErrorNotice(
-              "The uploaded credential is a 'Web application'. Tsubasa requires credentials with Application Type: 'Desktop app' (see docs/roadmap.md lines 170-173)."
-            );
-            return;
+        if (file.name.toLowerCase().endsWith('.json') || text.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed.web && !parsed.installed) {
+              surfaceWorkspaceError(
+                'importOAuth',
+                "Uploaded credential is 'Web application'; Tsubasa requires 'Desktop app' credentials.",
+                "Uploaded credential is 'Web application'; Tsubasa requires 'Desktop app' credentials."
+              );
+              return;
+            }
+          } catch {
+            // If JSON parse fails here, server will handle it with validation error
           }
-        } catch {
-          // If JSON parse fails here, server will handle it with validation error
         }
-      }
 
-      const res = await client.api.accounts.oauth.import.$post({
-        json: {
-          filename: file.name,
-          content: text,
-          poolId: activePoolId,
-        },
-      });
+        const res = await client.api.accounts.oauth.import.$post({
+          json: {
+            filename: file.name,
+            content: text,
+            poolId: activePoolIdRef.current,
+          },
+        });
 
-      if (res.ok) {
-        const result = await res.json();
-        if (result.authorized && result.accountId) {
-          const targetPool =
-            'poolId' in result && typeof result.poolId === 'number' ? result.poolId : activePoolId;
-          const conflictsCount =
-            'conflictsCount' in result && typeof result.conflictsCount === 'number'
-              ? result.conflictsCount
-              : 0;
-          await presentAuthorizedAccount({
-            accountFilterId: result.accountId,
-            targetPool,
-            conflictsCount,
-            conflictToast: `Imported "${result.accountId}" with ${conflictsCount} file ${conflictsCount === 1 ? 'conflict' : 'conflicts'}.`,
-            cleanToast: `Imported credentials for "${result.accountId}".`,
-          });
+        if (res.ok) {
+          invalidateShareInspectCache();
+          const result = await res.json();
+          if (result.authorized && result.accountId) {
+            const targetPool =
+              'poolId' in result && typeof result.poolId === 'number'
+                ? result.poolId
+                : activePoolIdRef.current;
+            const conflictsCount =
+              'conflictsCount' in result && typeof result.conflictsCount === 'number'
+                ? result.conflictsCount
+                : 0;
+            await presentAuthorizedAccount({
+              accountFilterId: result.accountId,
+              targetPool,
+              conflictsCount,
+            });
+          } else {
+            await loadClusterData();
+          }
         } else {
-          await loadClusterData();
-          showToast(`Account "${result.accountId}" added. Click "Authorize" to complete Google sign-in.`);
+          const msg = await readResponseError(res, 'Failed to import OAuth credentials');
+          surfaceWorkspaceError('importOAuth', msg, 'Failed to import OAuth credentials');
         }
-      } else {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setErrorNotice(err.error || 'Failed to import OAuth credentials');
+      } catch (err) {
+        surfaceWorkspaceError('importOAuth', err, 'Failed to import OAuth credentials');
+      } finally {
+        setIsImporting(false);
       }
-    } catch (err) {
-      setErrorNotice(`Import error: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsImporting(false);
-    }
-  }
+    },
+    [presentAuthorizedAccount, loadClusterData, surfaceWorkspaceError]
+  );
 
-  async function handleSyncAll() {
-    const reqPoolId = activePoolId;
+  const handleSyncAll = useCallback(async () => {
+    const reqPoolId = activePoolIdRef.current;
     if (isPoolSharePool(reqPoolId)) return;
+    setWorkspaceError(null);
     setIsSyncing(true);
-    showToast('Fetching changes from Google Drive...');
     try {
       const res = await client.api.sync.all.$post({
         query: { poolId: String(reqPoolId) },
       });
       if (activePoolIdRef.current !== reqPoolId) return;
       if (res.ok) {
-        const report = await res.json();
+        invalidateShareInspectCache();
+        await res.json();
         if (activePoolIdRef.current !== reqPoolId) return;
-        showToast(`Update complete: ${report.synced.length} drives checked.`);
+        if (currentNavRef.current !== 'trash') {
+          markTrashStale(reqPoolId);
+        }
         const [freshAccounts] = await Promise.all([
           loadClusterData(reqPoolId),
           loadFiles(currentPathRef.current, reqPoolId),
         ]);
         if (activePoolIdRef.current !== reqPoolId) return;
-        await checkAccountDiscrepancies(freshAccounts ?? discovered, true, reqPoolId);
+        await checkAccountDiscrepancies(freshAccounts ?? discoveredRef.current, true, reqPoolId);
+      } else {
+        const msg = await readResponseError(res, 'Failed to sync pool');
+        surfaceWorkspaceError('handleSyncAll', msg, 'Failed to sync pool');
       }
     } catch (err) {
       if (activePoolIdRef.current !== reqPoolId) return;
-      setErrorNotice(err instanceof Error ? err.message : 'Fetch changes failed');
+      surfaceWorkspaceError('handleSyncAll', err, 'Failed to sync pool');
     } finally {
       setIsSyncing(false);
     }
-  }
+  }, [isPoolSharePool, markTrashStale, loadClusterData, loadFiles, checkAccountDiscrepancies, surfaceWorkspaceError]);
 
-  function handleUploadFiles(fileList: FileList) {
-    if (isSharePoolActive) return;
-    const list = Array.from(fileList);
-    if (list.length > 0) {
-      setStagedFiles(list);
-      setStagedEmptyFolders([]);
-      setIsUploadDrawerOpen(true);
-    }
-  }
+  const handleUploadFiles = useCallback(
+    (fileList: FileList) => {
+      if (isSharePoolActive) return;
+      const list = Array.from(fileList);
+      if (list.length > 0) {
+        setStagedFiles(list);
+        setStagedEmptyFolders([]);
+        setUploadTargetPath(undefined);
+        setIsUploadDrawerOpen(true);
+      }
+    },
+    [isSharePoolActive]
+  );
 
   const handleStageDroppedUpload = useCallback(
-    (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[] }) => {
-      if (isSharePoolActive) return;
+    (dropped: { files: Array<{ file: File; virtualPath: string }>; emptyFolders: string[]; basePath?: string }) => {
+      if (isSharePoolActive || isModalActive()) return;
       if (dropped.files.length > 0 || dropped.emptyFolders.length > 0) {
         setStagedFiles(dropped.files);
         setStagedEmptyFolders(dropped.emptyFolders);
+        setUploadTargetPath(dropped.basePath);
         setIsUploadDrawerOpen(true);
       }
     },
@@ -1092,20 +1688,25 @@ export function App() {
 
   const handleDropExternalToPath = useCallback(
     async (targetPath: string, dataTransfer: DataTransfer) => {
-      if (isSharePoolActive) return;
-      const extracted = await extractDataTransferEntries(dataTransfer, targetPath);
-      if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
-        setStagedFiles(extracted.files);
-        setStagedEmptyFolders(extracted.emptyFolders);
-        setIsUploadDrawerOpen(true);
+      if (isSharePoolActive || isModalActive()) return;
+      try {
+        const extracted = await extractDataTransferEntries(dataTransfer, targetPath);
+        if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
+          setStagedFiles(extracted.files);
+          setStagedEmptyFolders(extracted.emptyFolders);
+          setUploadTargetPath(extracted.basePath);
+          setIsUploadDrawerOpen(true);
+        }
+      } catch (err) {
+        surfaceWorkspaceError('handleDropExternalToPath', err, 'Failed to read dropped files');
       }
     },
-    [isSharePoolActive]
+    [isSharePoolActive, surfaceWorkspaceError]
   );
 
   useEffect(() => {
     const handleWindowDragOver = (e: DragEvent) => {
-      if (currentNav === 'trash' || isSharePoolActive) return;
+      if (currentNav === 'trash' || isSharePoolActive || isModalActive()) return;
       if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
@@ -1115,15 +1716,24 @@ export function App() {
 
     const handleWindowDrop = async (e: DragEvent) => {
       if (currentNav === 'trash' || isSharePoolActive) return;
+      if (isModalActive()) {
+        e.preventDefault();
+        return;
+      }
       if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
-        if ((e as any).__tsubasaHandled) return;
-        const extracted = await extractDataTransferEntries(e.dataTransfer, currentPath);
-        if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
-          setStagedFiles(extracted.files);
-          setStagedEmptyFolders(extracted.emptyFolders);
-          setIsUploadDrawerOpen(true);
+        if (isDropHandled(e)) return;
+        try {
+          const extracted = await extractDataTransferEntries(e.dataTransfer, currentPath);
+          if (extracted.files.length > 0 || extracted.emptyFolders.length > 0) {
+            setStagedFiles(extracted.files);
+            setStagedEmptyFolders(extracted.emptyFolders);
+            setUploadTargetPath(extracted.basePath);
+            setIsUploadDrawerOpen(true);
+          }
+        } catch (err) {
+          surfaceWorkspaceError('handleWindowDrop', err, 'Failed to read dropped files');
         }
       }
     };
@@ -1135,239 +1745,684 @@ export function App() {
       window.removeEventListener('dragover', handleWindowDragOver);
       window.removeEventListener('drop', handleWindowDrop);
     };
-  }, [currentNav, currentPath, isSharePoolActive]);
+  }, [currentNav, currentPath, isSharePoolActive, surfaceWorkspaceError]);
 
-  function handleOpenNewFolder() {
+  const handleOpenNewFolder = useCallback(() => {
     if (isSharePoolActive) return;
     setIsNewFolderOpen(true);
-  }
+  }, [isSharePoolActive]);
 
-  async function handleCreateFolder(folderName: string) {
-    if (isSharePoolActive) return;
-    const newPath = (currentPath === '/' ? '' : currentPath) + '/' + folderName;
-    try {
-      const res = await client.api.folders.$post({
-        json: { virtualPath: newPath, name: folderName, poolId: activePoolId },
-      });
-      if (res.ok) {
-        showToast(`Created folder "${folderName}".`);
-        await loadFiles(currentPath);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Failed to create folder');
+  const handleCreateFolder = useCallback(
+    async (folderName: string) => {
+      if (isSharePoolActive) return;
+      setWorkspaceError(null);
+      const targetPath = currentPathRef.current;
+      const poolId = activePoolIdRef.current;
+      const newPath = normalizeVirtualPath((targetPath === '/' ? '' : targetPath) + '/' + folderName);
+      const prevFolders = foldersRef.current;
+      const prevFiles = filesRef.current;
+      if (prevFolders.some((f) => f.virtualPath === newPath)) {
+        throw new Error(`A folder named "${folderName}" already exists in this directory`);
       }
-    } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : String(err));
+      if (prevFiles.some((f) => !f.isTrashed && f.virtualPath === newPath)) {
+        throw new Error(`A file named "${folderName}" already exists in this directory`);
+      }
+
+      const parentFolder = prevFolders.find((f) => f.virtualPath === targetPath) ?? null;
+      const nowIso = new Date().toISOString();
+      const optimisticFolder: ClientFolder = {
+        id: `optimistic-folder-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: folderName,
+        virtualPath: newPath,
+        parentFolderId: parentFolder?.id ?? null,
+        poolId,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      setFolders((prev) => [...prev, optimisticFolder]);
+
+      const rollbackFolder = () => {
+        if (activePoolIdRef.current === poolId) {
+          setFolders((prev) => prev.filter((f) => f.id !== optimisticFolder.id));
+        } else {
+          const cached = getPoolCache(poolId);
+          if (cached) {
+            setPoolCache(poolId, {
+              folders: cached.folders.filter((f) => f.id !== optimisticFolder.id),
+            });
+          }
+        }
+      };
+
+      try {
+        return await runPendingOp(async () => {
+          const res = await client.api.folders.$post({
+            json: { virtualPath: newPath, name: folderName, poolId },
+          });
+          if (res.ok) {
+            invalidateShareInspectCache();
+            const created = (await res.json().catch(() => null)) as { id?: string } | null;
+            const createdId = created?.id || `${poolId}:${newPath}`;
+            await loadFiles(targetPath, poolId);
+            if (activePoolIdRef.current === poolId && currentPathRef.current === targetPath) {
+              setSelectedIds(new Set([createdId]));
+              setScrollRequest((prev) => ({ id: createdId, seq: (prev?.seq ?? 0) + 1 }));
+            }
+            return;
+          }
+          rollbackFolder();
+          const msg = await readResponseError(res, 'Failed to create folder');
+          if (res.status !== 409) {
+            surfaceWorkspaceError('createFolder', msg, 'Failed to create folder');
+          }
+          throw Object.assign(new Error(msg), { handled: true });
+        });
+      } catch (err) {
+        rollbackFolder();
+        if (!(err instanceof Error && 'handled' in err)) {
+          surfaceWorkspaceError('createFolder', err, 'Failed to create folder');
+        }
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    },
+    [isSharePoolActive, loadFiles, runPendingOp, surfaceWorkspaceError]
+  );
+
+  const handleDownload = useCallback((file: ClientFileRecord) => {
+    const url = `/api/files/${encodeURIComponent(file.id)}/download`;
+    const win = window.open(url, '_blank');
+    if (!win) {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name || '';
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
-  }
+  }, []);
 
-  function handleDownload(file: ClientFileRecord) {
-    window.open(`/api/files/${encodeURIComponent(file.id)}/download`, '_blank');
-  }
-
-  async function trashFileRequest(file: ClientFileRecord): Promise<boolean> {
+  async function trashFileRequest(file: ClientFileRecord): Promise<{ ok: boolean; error?: string }> {
     try {
       const res = await client.api.files[':id'].trash.$post({ param: { id: file.id } });
-      return res.ok;
+      if (res.ok) return { ok: true };
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: ('error' in err ? (err.error as string) : null) || 'Trash failed' };
     } catch (err) {
-      setErrorNotice(`Trash error: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      return { ok: false, error: `Trash error: ${err instanceof Error ? err.message : String(err)}` };
     }
   }
 
-  async function restoreFileRequest(file: ClientFileRecord): Promise<boolean> {
+  async function restoreFileRequest(file: ClientFileRecord): Promise<{ ok: boolean; error?: string }> {
     try {
       const res = await client.api.files[':id'].restore.$post({
         param: { id: file.id },
       });
-      if (res.ok) return true;
+      if (res.ok) return { ok: true };
       const err = await res.json().catch(() => ({}));
-      setErrorNotice(('error' in err ? err.error : null) || 'Restore failed');
-      return false;
+      return { ok: false, error: ('error' in err ? (err.error as string) : null) || 'Restore failed' };
     } catch (err) {
-      setErrorNotice(`Restore error: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      return { ok: false, error: `Restore error: ${err instanceof Error ? err.message : String(err)}` };
     }
   }
 
-  async function permanentDeleteFileRequest(file: ClientFileRecord): Promise<boolean> {
+  async function permanentDeleteFileRequest(file: ClientFileRecord): Promise<{ ok: boolean; error?: string }> {
     try {
       const res = await client.api.files[':id'].permanent.$delete({
         param: { id: file.id },
       });
-      if (res.ok) return true;
+      if (res.ok) return { ok: true };
       const err = await res.json().catch(() => ({}));
-      setErrorNotice(('error' in err ? err.error : null) || 'Delete failed');
-      return false;
+      return { ok: false, error: ('error' in err ? (err.error as string) : null) || 'Delete failed' };
     } catch (err) {
-      setErrorNotice(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      return { ok: false, error: `Delete error: ${err instanceof Error ? err.message : String(err)}` };
     }
   }
 
-  async function deleteFolderRequest(folder: ClientFolder): Promise<{ ok: boolean; navigateParent?: string }> {
+  async function deleteFolderRequest(
+    folder: ClientFolder
+  ): Promise<{ ok: boolean; navigateParent?: string; error?: string }> {
     try {
       const res = await client.api.folders.$delete({
-        query: { virtualPath: folder.virtualPath, poolId: String(activePoolId) },
+        query: { virtualPath: folder.virtualPath, poolId: String(activePoolIdRef.current) },
       });
       if (res.ok) {
         let navigateParent: string | undefined;
-        if (currentPath === folder.virtualPath || currentPath.startsWith(folder.virtualPath + '/')) {
-          const parts = folder.virtualPath.split('/').filter(Boolean);
-          navigateParent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
+        const currPath = currentPathRef.current;
+        if (currPath === folder.virtualPath || currPath.startsWith(folder.virtualPath + '/')) {
+          navigateParent = getParentDir(folder.virtualPath);
         }
         return { ok: true, navigateParent };
       }
       const err = await res.json().catch(() => ({}));
-      setErrorNotice(('error' in err ? err.error : null) || 'Failed to delete folder');
-      return { ok: false };
+      return { ok: false, error: ('error' in err ? (err.error as string) : null) || 'Failed to delete folder' };
     } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : String(err));
-      return { ok: false };
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  async function handleTrash(file: ClientFileRecord) {
-    if (await trashFileRequest(file)) {
-      showToast(`Moved "${file.name}" to trash.`);
-      await Promise.all([
-        loadFiles(currentPath),
-        currentNav === 'trash' ? loadTrashFiles() : Promise.resolve(),
-        loadClusterData(),
-      ]);
-    }
-  }
-
-  async function handleRestoreFile(file: ClientFileRecord) {
-    if (await restoreFileRequest(file)) {
-      showToast(`Restored "${file.name}".`);
-      await Promise.all([
-        currentNav === 'trash' ? loadTrashFiles() : Promise.resolve(),
-        loadFiles(currentPath),
-        loadClusterData(),
-      ]);
-    }
-  }
-
-  async function handlePermanentDelete(file: ClientFileRecord) {
-    if (await permanentDeleteFileRequest(file)) {
-      showToast(`Permanently deleted "${file.name}".`);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(file.id);
-        return next;
-      });
-      await Promise.all([
-        currentNav === 'trash' ? loadTrashFiles() : Promise.resolve(),
-        loadClusterData(),
-      ]);
-    }
-  }
-
-  async function handleDeleteFolder(folder: ClientFolder) {
-    const result = await deleteFolderRequest(folder);
-    if (result.ok) {
-      showToast(`Deleted folder "${folder.name}".`);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(folder.id);
-        return next;
-      });
-      if (result.navigateParent !== undefined) {
-        handleNavigate(result.navigateParent);
-        await loadFiles(result.navigateParent);
+  const handleTrash = useCallback(
+    async (file: ClientFileRecord) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      const wasTrashView = currentNavRef.current === 'trash';
+      setFiles((prev) => prev.filter((f) => f.id !== file.id));
+      if (wasTrashView) {
+        setTrashedFiles((prev) => [{ ...file, isTrashed: true }, ...prev]);
       } else {
-        await loadFiles(currentPath);
+        markTrashStale(poolId);
       }
-    }
-  }
 
-  async function handleDeleteSelected() {
-    const idsToDelete = new Set(Array.from(selectedIds).filter((id) => id !== '__parent__'));
-    if (idsToDelete.size === 0) return;
-    setSelectedIds(new Set());
-
-    const selectedFolders = folders.filter((f) => idsToDelete.has(f.id));
-    const selectedFiles = (currentNav === 'trash' ? trashedFiles : files).filter((f) => idsToDelete.has(f.id));
-
-    await runPendingOp(async () => {
-      if (currentNav === 'trash') {
-        let deletedCount = 0;
-        for (const f of selectedFiles) {
-          if (await permanentDeleteFileRequest(f)) {
-            deletedCount++;
-          }
-        }
-        if (deletedCount > 0) {
-          showToast(`Permanently deleted ${deletedCount} ${deletedCount === 1 ? 'file' : 'files'}.`);
-        }
-        await Promise.all([loadTrashFiles(), loadClusterData()]);
-      } else {
-        let deletedFolders = 0;
-        let trashedFilesCount = 0;
-        let nextPath = currentPath;
-        for (const folder of selectedFolders) {
-          const result = await deleteFolderRequest(folder);
-          if (result.ok) {
-            deletedFolders++;
-            if (result.navigateParent !== undefined) {
-              nextPath = result.navigateParent;
+      await runPendingOp(async () => {
+        const result = await trashFileRequest(file);
+        if (result.ok) {
+          invalidateShareInspectCache();
+          await Promise.all([
+            loadFiles(currentPathRef.current, poolId),
+            currentNavRef.current === 'trash' ? loadTrashFiles(poolId) : Promise.resolve(),
+            loadClusterData(poolId),
+          ]);
+        } else {
+          if (activePoolIdRef.current === poolId) {
+            setFiles((prev) => (prev.some((f) => f.id === file.id) ? prev : [...prev, file]));
+            if (wasTrashView) {
+              setTrashedFiles((prev) => prev.filter((f) => f.id !== file.id));
+            }
+            surfaceWorkspaceError('handleTrash', result.error, 'Failed to move file to trash');
+          } else {
+            const cached = getPoolCache(poolId);
+            if (cached) {
+              setPoolCache(poolId, {
+                files: cached.files.some((f) => f.id === file.id) ? cached.files : [...cached.files, file],
+                trashedFiles: wasTrashView
+                  ? cached.trashedFiles.filter((f) => f.id !== file.id)
+                  : cached.trashedFiles,
+              });
             }
           }
         }
-        for (const file of selectedFiles) {
-          if (await trashFileRequest(file)) {
-            trashedFilesCount++;
+      });
+    },
+    [markTrashStale, runPendingOp, loadFiles, loadTrashFiles, loadClusterData, surfaceWorkspaceError]
+  );
+
+  const handleRestoreFile = useCallback(
+    async (file: ClientFileRecord) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      setTrashedFiles((prev) => prev.filter((f) => f.id !== file.id));
+      setFiles((prev) => [...prev, { ...file, isTrashed: false }]);
+
+      await runPendingOp(async () => {
+        const result = await restoreFileRequest(file);
+        if (result.ok) {
+          invalidateShareInspectCache();
+          await Promise.all([
+            currentNavRef.current === 'trash' ? loadTrashFiles(poolId) : Promise.resolve(),
+            loadFiles(currentPathRef.current, poolId),
+            loadClusterData(poolId),
+          ]);
+        } else {
+          if (activePoolIdRef.current === poolId) {
+            setTrashedFiles((prev) => (prev.some((f) => f.id === file.id) ? prev : [file, ...prev]));
+            setFiles((prev) => prev.filter((f) => f.id !== file.id));
+            surfaceWorkspaceError('handleRestoreFile', result.error, 'Restore failed');
+          } else {
+            const cached = getPoolCache(poolId);
+            if (cached) {
+              setPoolCache(poolId, {
+                trashedFiles: cached.trashedFiles.some((f) => f.id === file.id)
+                  ? cached.trashedFiles
+                  : [file, ...cached.trashedFiles],
+                files: cached.files.filter((f) => f.id !== file.id),
+              });
+            }
           }
         }
-        if (nextPath !== currentPath) {
-          handleNavigate(nextPath);
+      });
+    },
+    [runPendingOp, loadTrashFiles, loadFiles, loadClusterData, surfaceWorkspaceError]
+  );
+
+  const handlePermanentDelete = useCallback((file: ClientFileRecord) => {
+    setConfirmEmptyTrash(false);
+    setPendingPurgeFiles([file]);
+  }, []);
+
+  const handleConfirmPurgeFiles = useCallback(async () => {
+    if (!pendingPurgeFiles || pendingPurgeFiles.length === 0) return;
+    setWorkspaceError(null);
+    const poolId = activePoolIdRef.current;
+    const toPurge = pendingPurgeFiles;
+
+    await runPendingOp(async () => {
+      try {
+        const results = await runWithConcurrency(toPurge, 6, (f) =>
+          permanentDeleteFileRequest(f)
+        );
+        const succeededIds = new Set<string>();
+        let firstError: string | undefined;
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].ok) {
+            succeededIds.add(toPurge[i].id);
+          } else if (!firstError) {
+            firstError = results[i].error;
+          }
         }
-        const totalDone = deletedFolders + trashedFilesCount;
-        if (totalDone > 0) {
-          showToast(`Deleted ${totalDone} ${totalDone === 1 ? 'item' : 'items'}.`);
+
+        if (succeededIds.size > 0) {
+          invalidateShareInspectCache();
+          if (activePoolIdRef.current === poolId) {
+            setTrashedFiles((prev) => prev.filter((f) => !succeededIds.has(f.id)));
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of succeededIds) next.delete(id);
+              return next;
+            });
+          } else {
+            const cached = getPoolCache(poolId);
+            if (cached) {
+              setPoolCache(poolId, {
+                trashedFiles: cached.trashedFiles.filter((f) => !succeededIds.has(f.id)),
+              });
+            }
+          }
         }
-        await Promise.all([loadFiles(nextPath), loadClusterData()]);
+
+        await Promise.all([loadTrashFiles(poolId), loadClusterData(poolId)]);
+
+        if (firstError) {
+          if (activePoolIdRef.current === poolId && succeededIds.size > 0) {
+            setPendingPurgeFiles((prev) =>
+              prev ? prev.filter((f) => !succeededIds.has(f.id)) : null
+            );
+          }
+          throw Object.assign(
+            new Error(firstError || 'Some files could not be permanently deleted'),
+            { handled: true }
+          );
+        }
+      } catch (err) {
+        if (err instanceof Error && 'handled' in err) {
+          throw err;
+        }
+        throw new Error(extractErrorMessage(err, 'Some files could not be permanently deleted'));
       }
     });
-  }
+  }, [pendingPurgeFiles, runPendingOp, loadTrashFiles, loadClusterData]);
+
+  const handleDeleteFolder = useCallback(
+    async (folder: ClientFolder) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      const folderPrefix = folder.virtualPath === '/' ? '/' : `${folder.virtualPath}/`;
+      const removedFolders = foldersRef.current.filter(
+        (f) => f.id === folder.id || f.virtualPath.startsWith(folderPrefix)
+      );
+      const removedFiles = filesRef.current.filter((f) => f.virtualPath.startsWith(folderPrefix));
+      const removedFolderIds = new Set(removedFolders.map((f) => f.id));
+      const removedFileIds = new Set(removedFiles.map((f) => f.id));
+      const prevClipboard = clipboard;
+      const prevSelected = selectedIds;
+
+      setFolders((prev) =>
+        prev.filter((f) => f.id !== folder.id && !f.virtualPath.startsWith(folderPrefix))
+      );
+      setFiles((prev) =>
+        prev.filter((f) => !f.virtualPath.startsWith(folderPrefix))
+      );
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of removedFolderIds) next.delete(id);
+        for (const id of removedFileIds) next.delete(id);
+        return next;
+      });
+      setClipboard((prev) => {
+        if (!prev || prev.mode !== 'cut') return prev;
+        const remaining = prev.items.filter(
+          (i) => !(i.kind === 'folder' ? removedFolderIds.has(i.id) : removedFileIds.has(i.id))
+        );
+        return remaining.length > 0 ? { ...prev, items: remaining } : null;
+      });
+
+      await runPendingOp(async () => {
+        const result = await deleteFolderRequest(folder);
+        if (result.ok) {
+          invalidateShareInspectCache();
+          const targetLoadPath =
+            result.navigateParent !== undefined ? result.navigateParent : currentPathRef.current;
+          if (result.navigateParent !== undefined && activePoolIdRef.current === poolId) {
+            handleNavigate(result.navigateParent);
+          }
+          if (currentNavRef.current === 'trash') {
+            await Promise.all([
+              loadFiles(targetLoadPath, poolId),
+              loadTrashFiles(poolId),
+              loadClusterData(poolId),
+            ]);
+          } else {
+            markTrashStale(poolId);
+            await Promise.all([loadFiles(targetLoadPath, poolId), loadClusterData(poolId)]);
+          }
+        } else {
+          if (activePoolIdRef.current === poolId) {
+            setFolders((prev) => {
+              const existingIds = new Set(prev.map((f) => f.id));
+              const toRestore = removedFolders.filter((f) => !existingIds.has(f.id));
+              return toRestore.length > 0 ? [...prev, ...toRestore] : prev;
+            });
+            setFiles((prev) => {
+              const existingIds = new Set(prev.map((f) => f.id));
+              const toRestore = removedFiles.filter((f) => !existingIds.has(f.id));
+              return toRestore.length > 0 ? [...prev, ...toRestore] : prev;
+            });
+            setSelectedIds(prevSelected);
+            setClipboard(prevClipboard);
+            surfaceWorkspaceError('handleDeleteFolder', result.error, 'Failed to delete folder');
+          } else {
+            const cached = getPoolCache(poolId);
+            if (cached) {
+              const existingFolderIds = new Set(cached.folders.map((f) => f.id));
+              const existingFileIds = new Set(cached.files.map((f) => f.id));
+              setPoolCache(poolId, {
+                folders: [...cached.folders, ...removedFolders.filter((f) => !existingFolderIds.has(f.id))],
+                files: [...cached.files, ...removedFiles.filter((f) => !existingFileIds.has(f.id))],
+              });
+            }
+          }
+        }
+      });
+    },
+    [
+      selectedIds,
+      clipboard,
+      runPendingOp,
+      handleNavigate,
+      loadFiles,
+      markTrashStale,
+      loadTrashFiles,
+      loadClusterData,
+      surfaceWorkspaceError,
+    ]
+  );
+
+  const executeDeleteBatch = useCallback(
+    async (
+      selectedFolders: ClientFolder[],
+      selectedFilesList: ClientFileRecord[]
+    ) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      const prevFiles = filesRef.current;
+      const prevFolders = foldersRef.current;
+      const prevSelected = selectedIds;
+      const prevClipboard = clipboard;
+
+      const folderIds = new Set(selectedFolders.map((f) => f.id));
+      const fileIds = new Set(selectedFilesList.map((f) => f.id));
+      const deletedPrefixes = selectedFolders.map((f) =>
+        f.virtualPath === '/' ? '/' : `${f.virtualPath}/`
+      );
+      setSelectedIds(new Set());
+
+      setFolders((prev) => prev.filter((f) => !folderIds.has(f.id)));
+      setFiles((prev) => prev.filter((f) => !fileIds.has(f.id)));
+      setClipboard((prev) => {
+        if (!prev || prev.mode !== 'cut') return prev;
+        const remaining = prev.items.filter((i) => {
+          if (i.kind === 'folder' ? folderIds.has(i.id) : fileIds.has(i.id)) {
+            return false;
+          }
+          return !deletedPrefixes.some((prefix) => i.virtualPath.startsWith(prefix));
+        });
+        return remaining.length > 0 ? { ...prev, items: remaining } : null;
+      });
+      markTrashStale(poolId);
+
+      await runPendingOp(async () => {
+        let nextPath = currentPathRef.current;
+        const folderResults = await runWithConcurrency(selectedFolders, 6, (folder) =>
+          deleteFolderRequest(folder)
+        );
+        const fileResults = await runWithConcurrency(selectedFilesList, 6, (file) =>
+          trashFileRequest(file)
+        );
+
+        for (const res of folderResults) {
+          if (res.ok && res.navigateParent !== undefined) {
+            nextPath = res.navigateParent;
+          }
+        }
+        const failedFolder = folderResults.find((r) => !r.ok);
+        const failedFile = fileResults.find((r) => !r.ok);
+        if (folderResults.some((r) => r.ok) || fileResults.some((r) => r.ok)) {
+          invalidateShareInspectCache();
+        }
+
+        if (failedFolder || failedFile) {
+          if (activePoolIdRef.current === poolId) {
+            setFiles(prevFiles);
+            setFolders(prevFolders);
+            setSelectedIds(prevSelected);
+            setClipboard(prevClipboard);
+            surfaceWorkspaceError(
+              'executeDeleteBatch',
+              failedFolder?.error || failedFile?.error,
+              'Some items could not be deleted'
+            );
+          } else {
+            setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+          }
+        } else if (nextPath !== currentPathRef.current && activePoolIdRef.current === poolId) {
+          handleNavigate(nextPath);
+        }
+        await Promise.all([loadFiles(nextPath, poolId), loadClusterData(poolId)]);
+      });
+    },
+    [selectedIds, clipboard, markTrashStale, runPendingOp, loadClusterData, handleNavigate, loadFiles, surfaceWorkspaceError]
+  );
+
+  const handleDeleteSelected = useCallback(async () => {
+    const idsToDelete = new Set(Array.from(selectedIds).filter((id) => id !== '__parent__'));
+    if (idsToDelete.size === 0) return;
+
+    const navMode = currentNavRef.current;
+    if (navMode === 'trash') {
+      const selectedTrashFiles = trashedFilesRef.current.filter(
+        (f) => idsToDelete.has(f.id) && (filteredAccountIds.size === 0 || filteredAccountIds.has(f.accountId))
+      );
+      if (selectedTrashFiles.length > 0) {
+        setConfirmEmptyTrash(false);
+        setPendingPurgeFiles(selectedTrashFiles);
+      }
+      return;
+    }
+
+    const selectedFolders = foldersRef.current.filter((f) => idsToDelete.has(f.id));
+    const selectedFilesList = filesRef.current.filter((f) => idsToDelete.has(f.id));
+    await executeDeleteBatch(selectedFolders, selectedFilesList);
+  }, [selectedIds, filteredAccountIds, executeDeleteBatch]);
+
+  const refreshAfterMove = useCallback(
+    async (poolId: number) => {
+      if (currentNavRef.current === 'trash') {
+        await Promise.all([
+          loadFiles(currentPathRef.current, poolId),
+          loadTrashFiles(poolId),
+          loadClusterData(poolId),
+        ]);
+      } else {
+        markTrashStale(poolId);
+        await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
+      }
+    },
+    [loadFiles, loadTrashFiles, loadClusterData, markTrashStale]
+  );
 
   const handleMoveItems = useCallback(
     async (itemsToMove: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
       if (isSharePoolActive || itemsToMove.length === 0) return;
+      const poolId = activePoolIdRef.current;
+      const prevFiles = filesRef.current;
+      const prevFolders = foldersRef.current;
+      const prevClipboard = clipboard;
+      const prevSelected = selectedIds;
+
+      const fileById = new Map(prevFiles.map((f) => [f.id, f]));
+      const folderById = new Map(prevFolders.map((f) => [f.id, f]));
+      const { normalizedTarget: normTarget, validItems } = filterMovableItemsToPath(
+        itemsToMove,
+        targetFolderPath,
+        (item) => (item.kind === 'folder' ? folderById.get(item.id) : fileById.get(item.id))?.virtualPath
+      );
+      if (validItems.length === 0) return;
+      setWorkspaceError(null);
+
+      const movedIds = new Set(validItems.map((i) => i.id));
+      const destPrefix = normTarget === '/' ? '' : normTarget;
+      setFiles((prev) =>
+        prev.map((f) => (movedIds.has(f.id) ? { ...f, virtualPath: `${destPrefix}/${f.name}` } : f))
+      );
+      setFolders((prev) =>
+        prev.map((f) => (movedIds.has(f.id) ? { ...f, virtualPath: `${destPrefix}/${f.name}` } : f))
+      );
+      setClipboard((prev) => {
+        if (!prev || prev.mode !== 'cut') return prev;
+        const remaining = prev.items.filter((i) => !movedIds.has(i.id));
+        return remaining.length > 0 ? { ...prev, items: remaining } : null;
+      });
+      setSelectedIds(new Set());
+
       await runPendingOp(async () => {
         try {
           const res = await client.api.items.move.$post({
-            json: { items: itemsToMove, targetFolderPath, poolId: activePoolId },
+            json: { items: validItems, targetFolderPath: normTarget, poolId, conflictMode: 'reject' },
           });
-          const data = await res.json().catch(() => ({}));
+          const data: unknown = await res.json().catch(() => ({}));
+          const isStillActive = activePoolIdRef.current === poolId;
+          if (res.status === 409 && isMoveConflictPayload(data)) {
+            if (isStillActive) {
+              setFiles(prevFiles);
+              setFolders(prevFolders);
+              setClipboard(prevClipboard);
+              setSelectedIds(prevSelected);
+              setPendingMoveConflict({
+                items: validItems,
+                targetFolderPath: normTarget,
+                poolId,
+                conflicts: data.conflicts,
+                cleanCount: typeof data.cleanCount === 'number' ? data.cleanCount : 0,
+              });
+            } else {
+              setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+            }
+            return;
+          }
           if (res.ok) {
-            const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
-            const successCount = results.filter((r: any) => r.success).length;
-            const failed = results.filter((r: any) => !r.success);
+            invalidateShareInspectCache();
+            const results = parseItemOperationResults(data);
+            const failed = results.filter((r) => !r.success);
+            const anySucceeded = results.some((r) => r.success && !r.skipped);
+            if (anySucceeded && isStillActive) {
+              setClipboard(applyMoveResultsToClipboard(prevClipboard, poolId, results));
+            }
             if (failed.length > 0) {
-              setErrorNotice(failed[0].error || 'Some items could not be moved');
+              if (!anySucceeded && isStillActive) {
+                setClipboard(prevClipboard);
+              }
+              if (isStillActive) {
+                setFiles(prevFiles);
+                setFolders(prevFolders);
+                setSelectedIds(prevSelected);
+                surfaceWorkspaceError('handleMoveItems', failed[0].error, 'Some items could not be moved');
+              } else {
+                setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+              }
             }
-            if (successCount > 0) {
-              showToast(`Moved ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
-            }
-            setClipboard((prev) => {
-              if (!prev || prev.mode !== 'cut') return prev;
-              const movedIds = new Set(itemsToMove.map((i) => i.id));
-              const remaining = prev.items.filter((i) => !movedIds.has(i.id));
-              return remaining.length > 0 ? { ...prev, items: remaining } : null;
-            });
-            setSelectedIds(new Set());
-            await Promise.all([loadFiles(currentPath), loadTrashFiles(), loadClusterData()]);
+            await refreshAfterMove(poolId);
           } else {
-            setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to move items');
+            if (isStillActive) {
+              setFiles(prevFiles);
+              setFolders(prevFolders);
+              setClipboard(prevClipboard);
+              setSelectedIds(prevSelected);
+              surfaceWorkspaceError('handleMoveItems', data, 'Failed to move items');
+            } else {
+              setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+            }
           }
         } catch (err) {
-          setErrorNotice(err instanceof Error ? err.message : String(err));
+          if (activePoolIdRef.current === poolId) {
+            setFiles(prevFiles);
+            setFolders(prevFolders);
+            setClipboard(prevClipboard);
+            setSelectedIds(prevSelected);
+            surfaceWorkspaceError('handleMoveItems', err, 'Failed to move items');
+          } else {
+            setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+          }
         }
       });
     },
-    [currentPath, loadFiles, loadTrashFiles, loadClusterData, showToast, activePoolId, isSharePoolActive, runPendingOp]
+    [
+      isSharePoolActive,
+      clipboard,
+      selectedIds,
+      runPendingOp,
+      refreshAfterMove,
+      surfaceWorkspaceError,
+    ]
+  );
+
+  const handleResolveMoveConflict = useCallback(
+    async (mode: MoveConflictResolutionMode) => {
+      if (!pendingMoveConflict || resolvingMoveConflictRef.current) return;
+      resolvingMoveConflictRef.current = true;
+      const { items, targetFolderPath, poolId } = pendingMoveConflict;
+      setIsResolvingMoveConflict(true);
+      setPendingMoveConflict((prev) => (prev ? { ...prev, errorMessage: null } : prev));
+      setWorkspaceError(null);
+
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.items.move.$post({
+            json: { items, targetFolderPath, poolId, conflictMode: mode },
+          });
+          const isStillActive = activePoolIdRef.current === poolId;
+          if (res.ok) {
+            invalidateShareInspectCache();
+            const data = await res.json().catch(() => ({}));
+            const results = parseItemOperationResults(data);
+            const failed = results.filter((r) => !r.success);
+            if (isStillActive) {
+              setClipboard((prev) => applyMoveResultsToClipboard(prev, poolId, results));
+              setSelectedIds(new Set());
+              if (failed.length > 0) {
+                surfaceWorkspaceError(
+                  'handleResolveMoveConflict',
+                  failed[0].error,
+                  'Some items could not be moved'
+                );
+              }
+              setPendingMoveConflict(null);
+            }
+            await refreshAfterMove(poolId);
+          } else if (isStillActive) {
+            const msg = await readResponseError(res, 'Failed to move items');
+            setPendingMoveConflict((prev) => (prev ? { ...prev, errorMessage: msg } : prev));
+          }
+        } catch (err) {
+          if (activePoolIdRef.current === poolId) {
+            const msg = extractErrorMessage(err, 'Failed to move items');
+            setPendingMoveConflict((prev) => (prev ? { ...prev, errorMessage: msg } : prev));
+          }
+        } finally {
+          resolvingMoveConflictRef.current = false;
+          setIsResolvingMoveConflict(false);
+        }
+      });
+    },
+    [pendingMoveConflict, runPendingOp, refreshAfterMove, surfaceWorkspaceError]
   );
 
   const handleTrashItems = useCallback(
@@ -1382,110 +2437,163 @@ export function App() {
     ) => {
       const activeItems = itemsToTrash.filter((item) => !item.isTrashed);
       if (activeItems.length === 0) return;
+      setWorkspaceError(null);
+
+      const poolId = activePoolIdRef.current;
+      const prevFiles = filesRef.current;
+      const prevFolders = foldersRef.current;
+      const prevSelected = selectedIds;
+      const prevClipboard = clipboard;
 
       const trashedFolders = activeItems.filter((i) => i.kind === 'folder');
       const trashedFilesList = activeItems.filter((i) => i.kind === 'file');
+      const activeIds = new Set(activeItems.map((i) => i.id));
 
-      let effectivePath = currentPath;
-      const trashedIds = new Set<string>();
+      setFiles((prev) => prev.filter((f) => !activeIds.has(f.id)));
+      setFolders((prev) => prev.filter((f) => !activeIds.has(f.id)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of activeIds) next.delete(id);
+        return next;
+      });
+      setClipboard((prev) => {
+        if (!prev || prev.mode !== 'cut') return prev;
+        const remaining = prev.items.filter((i) => !activeIds.has(i.id));
+        return remaining.length > 0 ? { ...prev, items: remaining } : null;
+      });
+
+      let effectivePath = currentPathRef.current;
 
       await runPendingOp(async () => {
         try {
-          for (const folder of trashedFolders) {
+          const folderResults = await runWithConcurrency(trashedFolders, 6, async (folder) => {
             const fPath = folder.virtualPath || folder.id;
             const res = await client.api.folders.$delete({
-              query: { virtualPath: fPath, poolId: String(activePoolId) },
+              query: { virtualPath: fPath, poolId: String(poolId) },
             });
-            if (res.ok) {
-              trashedIds.add(folder.id);
-              if (fPath && (effectivePath === fPath || effectivePath.startsWith(fPath + '/'))) {
-                const parts = fPath.split('/').filter(Boolean);
-                effectivePath = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
-              }
-            }
-          }
+            const error = res.ok ? undefined : await readResponseError(res, 'Failed to delete folder');
+            return { ok: res.ok, error, folder, fPath };
+          });
 
-          for (const file of trashedFilesList) {
+          const fileResults = await runWithConcurrency(trashedFilesList, 6, async (file) => {
             const res = await client.api.files[':id'].trash.$post({
               param: { id: file.id },
             });
-            if (res.ok) {
-              trashedIds.add(file.id);
+            const error = res.ok ? undefined : await readResponseError(res, 'Failed to move file to trash');
+            return { ok: res.ok, error, file };
+          });
+
+          const trashedIds = new Set<string>();
+          let firstError: string | undefined;
+          for (const fr of folderResults) {
+            if (fr.ok) {
+              trashedIds.add(fr.folder.id);
+              if (
+                fr.fPath &&
+                (effectivePath === fr.fPath || effectivePath.startsWith(fr.fPath + '/'))
+              ) {
+                effectivePath = getParentDir(fr.fPath);
+              }
+            } else if (!firstError) {
+              firstError = fr.error;
+            }
+          }
+          for (const fr of fileResults) {
+            if (fr.ok) {
+              trashedIds.add(fr.file.id);
+            } else if (!firstError) {
+              firstError = fr.error;
             }
           }
 
+          const isStillActive = activePoolIdRef.current === poolId;
           if (trashedIds.size > 0) {
-            setSelectedIds((prev) => {
-              const next = new Set(prev);
-              for (const id of trashedIds) {
-                next.delete(id);
-              }
-              return next;
-            });
-
-            setClipboard((prev) => {
-              if (!prev || prev.mode !== 'cut') return prev;
-              const remaining = prev.items.filter((i) => !trashedIds.has(i.id));
-              return remaining.length > 0 ? { ...prev, items: remaining } : null;
-            });
-
-            if (effectivePath !== currentPath) {
-              handleNavigate(effectivePath);
-            }
-
-            await Promise.all([
-              loadFiles(effectivePath),
-              loadTrashFiles(),
-              loadClusterData(),
-            ]);
-
-            if (trashedIds.size === 1) {
-              const single = activeItems.find((i) => trashedIds.has(i.id));
-              const singleName = single?.name || (single?.virtualPath ? single.virtualPath.split('/').pop() : 'item');
-              showToast(`Moved "${singleName}" to trash.`);
+            invalidateShareInspectCache();
+          }
+          if (trashedIds.size < activeItems.length) {
+            if (isStillActive) {
+              setFiles(prevFiles);
+              setFolders(prevFolders);
+              setSelectedIds(prevSelected);
+              setClipboard(prevClipboard);
+              surfaceWorkspaceError(
+                'handleTrashItems',
+                firstError ?? null,
+                'Some items could not be moved to trash'
+              );
             } else {
-              showToast(`Moved ${trashedIds.size} items to trash.`);
+              setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
             }
+          } else if (trashedIds.size > 0 && effectivePath !== currentPathRef.current && isStillActive) {
+            handleNavigate(effectivePath);
+          }
+
+          if (currentNavRef.current === 'trash') {
+            await Promise.all([loadFiles(effectivePath, poolId), loadTrashFiles(poolId), loadClusterData(poolId)]);
+          } else {
+            markTrashStale(poolId);
+            await Promise.all([loadFiles(effectivePath, poolId), loadClusterData(poolId)]);
           }
         } catch (err) {
-          setErrorNotice(err instanceof Error ? err.message : String(err));
+          if (activePoolIdRef.current === poolId) {
+            setFiles(prevFiles);
+            setFolders(prevFolders);
+            setSelectedIds(prevSelected);
+            setClipboard(prevClipboard);
+            surfaceWorkspaceError('handleTrashItems', err, 'Some items could not be moved to trash');
+          } else {
+            setPoolCache(poolId, { files: prevFiles, folders: prevFolders });
+          }
         }
       });
     },
-    [currentPath, handleNavigate, loadFiles, loadTrashFiles, loadClusterData, showToast, activePoolId, runPendingOp]
+    [
+      selectedIds,
+      clipboard,
+      runPendingOp,
+      handleNavigate,
+      loadFiles,
+      loadTrashFiles,
+      loadClusterData,
+      markTrashStale,
+      surfaceWorkspaceError,
+    ]
   );
 
   const handleCopyItems = useCallback(
     async (itemsToCopy: Array<{ kind: 'file' | 'folder'; id: string }>, targetFolderPath: string) => {
       if (itemsToCopy.length === 0) return;
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
       await runPendingOp(async () => {
         try {
-          showToast(`Copying ${itemsToCopy.length} ${itemsToCopy.length === 1 ? 'item' : 'items'}...`);
           const res = await client.api.items.copy.$post({
-            json: { items: itemsToCopy, targetFolderPath, poolId: activePoolId },
+            json: { items: itemsToCopy, targetFolderPath, poolId },
           });
           const data = await res.json().catch(() => ({}));
+          const isStillActive = activePoolIdRef.current === poolId;
           if (res.ok) {
-            const results = 'results' in data && Array.isArray(data.results) ? data.results : [];
-            const successCount = results.filter((r: any) => r.success).length;
-            const failed = results.filter((r: any) => !r.success);
-            if (failed.length > 0) {
-              setErrorNotice(failed[0].error || 'Some items could not be copied');
+            invalidateShareInspectCache();
+            const results = parseItemOperationResults(data);
+            const failed = results.filter((r) => !r.success);
+            if (isStillActive) {
+              if (failed.length > 0) {
+                surfaceWorkspaceError('handleCopyItems', failed[0].error, 'Some items could not be copied');
+              }
+              setSelectedIds(new Set());
             }
-            if (successCount > 0) {
-              showToast(`Copied ${successCount} ${successCount === 1 ? 'item' : 'items'} to ${targetFolderPath}.`);
-            }
-            setSelectedIds(new Set());
-            await Promise.all([loadFiles(currentPath), loadClusterData()]);
-          } else {
-            setErrorNotice(('error' in data ? (data.error as string) : null) || 'Failed to copy items');
+            await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
+          } else if (isStillActive) {
+            surfaceWorkspaceError('handleCopyItems', data, 'Failed to copy items');
           }
         } catch (err) {
-          setErrorNotice(err instanceof Error ? err.message : String(err));
+          if (activePoolIdRef.current === poolId) {
+            surfaceWorkspaceError('handleCopyItems', err, 'Failed to copy items');
+          }
         }
       });
     },
-    [currentPath, loadFiles, loadClusterData, showToast, activePoolId, runPendingOp]
+    [loadFiles, loadClusterData, runPendingOp, surfaceWorkspaceError]
   );
 
   const handleCutSelected = useCallback(() => {
@@ -1500,9 +2608,8 @@ export function App() {
     ];
     if (items.length > 0) {
       setClipboard({ mode: 'cut', items });
-      showToast(`Cut ${items.length} ${items.length === 1 ? 'item' : 'items'}. Press Ctrl+V or Paste to move here.`);
     }
-  }, [isSharePoolActive, selectedIds, currentNav, folders, files, showToast]);
+  }, [isSharePoolActive, selectedIds, currentNav, folders, files]);
 
   const handleCopySelected = useCallback(() => {
     if (isSharePoolActive) return;
@@ -1516,17 +2623,16 @@ export function App() {
     ];
     if (items.length > 0) {
       setClipboard({ mode: 'copy', items });
-      showToast(`Copied ${items.length} ${items.length === 1 ? 'item' : 'items'}. Press Ctrl+V or Paste to duplicate.`);
     }
-  }, [isSharePoolActive, selectedIds, currentNav, folders, files, showToast]);
+  }, [isSharePoolActive, selectedIds, currentNav, folders, files]);
 
   const handlePaste = useCallback(() => {
     if (isSharePoolActive) return;
     if (!clipboard || clipboard.items.length === 0 || currentNav === 'trash') return;
     if (clipboard.mode === 'cut') {
-      handleMoveItems(clipboard.items, currentPath);
+      void handleMoveItems(clipboard.items, currentPath);
     } else {
-      handleCopyItems(clipboard.items, currentPath);
+      void handleCopyItems(clipboard.items, currentPath);
     }
   }, [isSharePoolActive, clipboard, currentNav, currentPath, handleMoveItems, handleCopyItems]);
 
@@ -1548,95 +2654,315 @@ export function App() {
 
   const handleRename = useCallback(
     async (kind: 'file' | 'folder' | 'pool', id: string, newName: string) => {
+      const poolId = activePoolIdRef.current;
+
       if (kind === 'pool') {
-        try {
-          const res = await client.api.pools[':id'].$patch({
-            param: { id },
-            json: { name: newName },
-          });
-          if (res.ok) {
-            showToast(`Renamed pool to "${newName}".`);
-            setRenameModalItem(null);
-            setPools((prev) => prev.map((p) => (p.id === Number(id) ? { ...p, name: newName } : p)));
-            await loadClusterData();
-          } else {
-            const err = (await res.json().catch(() => ({}))) as { error?: string };
-            const errMsg = err.error || 'Failed to rename pool';
-            setErrorNotice(errMsg);
-            throw new Error(errMsg);
+        const targetPoolId = Number(id);
+        const prevPoolName = poolsRef.current.find((p) => p.id === targetPoolId)?.name;
+        setPools((prev) => prev.map((p) => (p.id === targetPoolId ? { ...p, name: newName } : p)));
+        return await runPendingOp(async () => {
+          try {
+            const res = await client.api.pools[':id'].$patch({
+              param: { id },
+              json: { name: newName },
+            });
+            if (res.ok) {
+              invalidateShareInspectCache();
+              await loadClusterData(poolId);
+              return;
+            }
+            if (prevPoolName !== undefined) {
+              setPools((prev) => prev.map((p) => (p.id === targetPoolId ? { ...p, name: prevPoolName } : p)));
+            }
+            const errMsg = await readResponseError(res, 'Failed to rename pool');
+            reportDevError('handleRename.pool', errMsg);
+            throw Object.assign(new Error(errMsg), { handled: true });
+          } catch (err) {
+            if (prevPoolName !== undefined) {
+              setPools((prev) => prev.map((p) => (p.id === targetPoolId ? { ...p, name: prevPoolName } : p)));
+            }
+            if (!(err instanceof Error && 'handled' in err)) {
+              reportDevError('handleRename.pool', err);
+            }
+            throw err instanceof Error ? err : new Error(String(err));
           }
-        } catch (err) {
-          setErrorNotice(err instanceof Error ? err.message : String(err));
-          throw err;
-        }
-        return;
+        });
       }
 
-      try {
-        const res = await client.api.items.rename.$post({
-          json: { kind, id, name: newName, poolId: activePoolId },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          showToast(`Renamed to "${newName}".`);
-          setRenameModalItem(null);
-          const oldFolderP = ('oldPath' in data ? (data.oldPath as string) : null) || ('oldVirtualPath' in data ? (data.oldVirtualPath as string) : null);
-          const newFolderP = ('newPath' in data ? (data.newPath as string) : null) || ('newVirtualPath' in data ? (data.newVirtualPath as string) : null);
-          if (
-            kind === 'folder' &&
-            oldFolderP &&
-            (currentPath === oldFolderP || currentPath.startsWith(oldFolderP + '/'))
-          ) {
-            const relativeSuffix = currentPath.slice(oldFolderP.length);
-            const nextPath = `${newFolderP}${relativeSuffix}`;
-            handleNavigate(nextPath);
-            await loadFiles(nextPath);
-          } else {
-            await loadFiles(currentPath);
+      const prevFiles = filesRef.current;
+      const prevFolders = foldersRef.current;
+      const prevTrashed = trashedFilesRef.current;
+      const targetPath = currentPathRef.current;
+      const wasTrashView = currentNavRef.current === 'trash';
+
+      const prevFolder = kind === 'folder' ? prevFolders.find((f) => f.id === id) : undefined;
+      const prevFile =
+        kind === 'file'
+          ? prevFiles.find((f) => f.id === id) ?? prevTrashed.find((f) => f.id === id)
+          : undefined;
+
+      if (kind === 'folder') {
+        if (prevFolder) {
+          const parentPath = getParentDir(prevFolder.virtualPath);
+          const candidatePath = (parentPath === '/' ? '' : parentPath) + '/' + newName;
+          if (prevFolders.some((f) => f.id !== id && f.virtualPath === candidatePath)) {
+            throw new Error(`A folder named "${newName}" already exists in this directory`);
+          }
+          if (prevFiles.some((f) => !f.isTrashed && f.virtualPath === candidatePath)) {
+            throw new Error(`A file named "${newName}" already exists in this directory`);
+          }
+        }
+      } else if (prevFile && !prevFile.isTrashed) {
+        const parentPath = getParentDir(prevFile.virtualPath);
+        const candidatePath = (parentPath === '/' ? '' : parentPath) + '/' + newName;
+        if (prevFolders.some((f) => f.virtualPath === candidatePath)) {
+          throw new Error(`A folder named "${newName}" already exists in this directory`);
+        }
+        if (prevFiles.some((f) => !f.isTrashed && f.id !== id && f.virtualPath === candidatePath)) {
+          throw new Error(`A file named "${newName}" already exists in this directory`);
+        }
+      }
+
+      if (kind === 'file') {
+        setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+        setTrashedFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+      } else {
+        setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+      }
+
+      const rollbackItemRename = () => {
+        if (activePoolIdRef.current === poolId) {
+          if (kind === 'file' && prevFile) {
+            setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: prevFile.name } : f)));
+            setTrashedFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: prevFile.name } : f)));
+          } else if (kind === 'folder' && prevFolder) {
+            setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: prevFolder.name } : f)));
           }
         } else {
-          const errMsg = ('error' in data ? (data.error as string) : null) || 'Failed to rename item';
-          setErrorNotice(errMsg);
-          throw new Error(errMsg);
+          const cached = getPoolCache(poolId);
+          if (cached) {
+            if (kind === 'file' && prevFile) {
+              setPoolCache(poolId, {
+                files: cached.files.map((f) => (f.id === id ? { ...f, name: prevFile.name } : f)),
+                trashedFiles: cached.trashedFiles.map((f) =>
+                  f.id === id ? { ...f, name: prevFile.name } : f
+                ),
+              });
+            } else if (kind === 'folder' && prevFolder) {
+              setPoolCache(poolId, {
+                folders: cached.folders.map((f) => (f.id === id ? { ...f, name: prevFolder.name } : f)),
+              });
+            }
+          }
         }
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-        throw err;
-      }
+      };
+
+      return await runPendingOp(async () => {
+        try {
+          const res = await client.api.items.rename.$post({
+            json: { kind, id, name: newName, poolId },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            invalidateShareInspectCache();
+            const oldFolderP =
+              ('oldPath' in data ? (data.oldPath as string) : null) ||
+              ('oldVirtualPath' in data ? (data.oldVirtualPath as string) : null);
+            const newFolderP =
+              ('newPath' in data ? (data.newPath as string) : null) ||
+              ('newVirtualPath' in data ? (data.newVirtualPath as string) : null);
+            const renamedId = kind === 'folder' && newFolderP ? `${poolId}:${newFolderP}` : id;
+
+            if (kind === 'folder' && oldFolderP && newFolderP) {
+              if (activePoolIdRef.current === poolId) {
+                setClipboard((prev) => {
+                  if (!prev) return prev;
+                  let changed = false;
+                  const nextItems = prev.items.map((item) => {
+                    const remapped = remapPathPrefix(item.virtualPath, oldFolderP, newFolderP);
+                    if (remapped === null) return item;
+                    changed = true;
+                    const isExactFolder = item.kind === 'folder' && item.virtualPath === oldFolderP;
+                    return {
+                      ...item,
+                      virtualPath: remapped,
+                      ...(isExactFolder ? { name: newName } : {}),
+                      ...(item.kind === 'folder' ? { id: `${poolId}:${remapped}` } : {}),
+                    };
+                  });
+                  return changed ? { ...prev, items: nextItems } : prev;
+                });
+              }
+            } else if (kind === 'file') {
+              if (activePoolIdRef.current === poolId) {
+                setClipboard((prev) => {
+                  if (!prev) return prev;
+                  let changed = false;
+                  const nextItems = prev.items.map((item) => {
+                    if (item.kind !== 'file' || item.id !== id) return item;
+                    changed = true;
+                    const parentPath = getParentDir(item.virtualPath);
+                    const nextVirtualPath =
+                      newFolderP || (parentPath === '/' ? '' : parentPath) + '/' + newName;
+                    return {
+                      ...item,
+                      name: newName,
+                      virtualPath: nextVirtualPath,
+                    };
+                  });
+                  return changed ? { ...prev, items: nextItems } : prev;
+                });
+              }
+            }
+
+            const isInsideRenamedFolder =
+              kind === 'folder' &&
+              Boolean(oldFolderP) &&
+              (targetPath === oldFolderP || targetPath.startsWith(oldFolderP + '/'));
+
+            if (isInsideRenamedFolder && oldFolderP) {
+              const relativeSuffix = targetPath.slice(oldFolderP.length);
+              const nextPath = `${newFolderP}${relativeSuffix}`;
+              if (activePoolIdRef.current === poolId) {
+                handleNavigate(nextPath);
+              }
+              await loadFiles(nextPath, poolId);
+            } else {
+              await Promise.all([
+                loadFiles(targetPath, poolId),
+                wasTrashView || currentNavRef.current === 'trash' ? loadTrashFiles(poolId) : Promise.resolve(),
+              ]);
+              if (activePoolIdRef.current === poolId && currentPathRef.current === targetPath) {
+                setSelectedIds(new Set([renamedId]));
+                setScrollRequest((prev) => ({ id: renamedId, seq: (prev?.seq ?? 0) + 1 }));
+              }
+            }
+            return;
+          }
+          rollbackItemRename();
+          const errMsg = ('error' in data ? (data.error as string) : null) || 'Failed to rename item';
+          if (res.status !== 409) {
+            reportDevError('handleRename', errMsg);
+          }
+          throw Object.assign(new Error(errMsg), { handled: true });
+        } catch (err) {
+          rollbackItemRename();
+          if (!(err instanceof Error && 'handled' in err)) {
+            reportDevError('handleRename', err);
+          }
+          throw err instanceof Error ? err : new Error(String(err));
+        }
+      });
     },
-    [currentPath, loadFiles, showToast, handleNavigate, activePoolId, loadClusterData]
+    [runPendingOp, loadFiles, loadTrashFiles, handleNavigate, loadClusterData]
+  );
+
+  const executeBatchRestore = useCallback(
+    async (toRestore: ClientFileRecord[]) => {
+      if (toRestore.length === 0) return;
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      const prevTrashed = trashedFilesRef.current;
+      const prevFiles = filesRef.current;
+      const prevSelected = selectedIds;
+      const restoreIds = new Set(toRestore.map((f) => f.id));
+
+      setTrashedFiles((prev) => prev.filter((f) => !restoreIds.has(f.id)));
+      setFiles((prev) => [...prev, ...toRestore.map((f) => ({ ...f, isTrashed: false }))]);
+      setSelectedIds(new Set());
+
+      await runPendingOp(async () => {
+        const results = await runWithConcurrency(toRestore, 6, (file) => restoreFileRequest(file));
+        const failed = results.filter((r) => !r.ok);
+        if (results.some((r) => r.ok)) {
+          invalidateShareInspectCache();
+        }
+        if (failed.length > 0) {
+          if (activePoolIdRef.current === poolId) {
+            setTrashedFiles(prevTrashed);
+            setFiles(prevFiles);
+            setSelectedIds(prevSelected);
+            surfaceWorkspaceError(
+              'executeBatchRestore',
+              failed[0].error,
+              'Some files could not be restored'
+            );
+          } else {
+            setPoolCache(poolId, { trashedFiles: prevTrashed, files: prevFiles });
+          }
+        }
+        await Promise.all([
+          loadTrashFiles(poolId),
+          loadFiles(currentPathRef.current, poolId),
+          loadClusterData(poolId),
+        ]);
+      });
+    },
+    [selectedIds, runPendingOp, loadTrashFiles, loadFiles, loadClusterData, surfaceWorkspaceError]
   );
 
   const handleBatchRestore = useCallback(async () => {
     const actionableIds = Array.from(selectedIds).filter((id) => id !== '__parent__');
     if (actionableIds.length === 0 || currentNav !== 'trash') return;
     const toRestore = trashedFiles.filter((f) => actionableIds.includes(f.id));
-    if (toRestore.length === 0) return;
-    await runPendingOp(async () => {
-      let restoredCount = 0;
-      for (const file of toRestore) {
-        if (await restoreFileRequest(file)) {
-          restoredCount++;
-        }
-      }
-      setSelectedIds(new Set());
-      if (restoredCount > 0) {
-        showToast(`Restored ${restoredCount} ${restoredCount === 1 ? 'file' : 'files'}.`);
-      }
-      await Promise.all([loadTrashFiles(), loadFiles(currentPath), loadClusterData()]);
-    });
-  }, [selectedIds, currentNav, trashedFiles, showToast, runPendingOp, loadTrashFiles, loadFiles, currentPath, loadClusterData]);
+    await executeBatchRestore(toRestore);
+  }, [selectedIds, currentNav, trashedFiles, executeBatchRestore]);
+
+  const keydownStateRef = useRef({
+    selectedIds,
+    folders,
+    files,
+    trashedFiles,
+    currentNav,
+    clipboard,
+    currentPath,
+    isSharePoolActive,
+    activePoolId,
+    handleNavigate,
+    handleCutSelected,
+    handleCopySelected,
+    handlePaste,
+    handleOpenNewFolder,
+    handleOpenRenameSelected,
+    handleDeleteSelected,
+    handleDownload,
+  });
+  keydownStateRef.current = {
+    selectedIds,
+    folders,
+    files,
+    trashedFiles,
+    currentNav,
+    clipboard,
+    currentPath,
+    isSharePoolActive,
+    activePoolId,
+    handleNavigate,
+    handleCutSelected,
+    handleCopySelected,
+    handlePaste,
+    handleOpenNewFolder,
+    handleOpenRenameSelected,
+    handleDeleteSelected,
+    handleDownload,
+  };
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
-      if (
-        activeTag === 'input' ||
-        activeTag === 'textarea' ||
-        (document.activeElement as HTMLElement)?.isContentEditable
-      ) {
+      const target = e.target as HTMLElement | null;
+      const activeEl = document.activeElement as HTMLElement | null;
+      const interactiveSelector =
+        'input, textarea, select, button, a, [contenteditable], [contenteditable="true"], dialog[open], [role="dialog"], [popover]:popover-open';
+      const isInteractiveEl = (node: HTMLElement | null) =>
+        Boolean(node && (node.closest(interactiveSelector) !== null || node.isContentEditable));
+      if (isInteractiveEl(target) || isInteractiveEl(activeEl)) {
         return;
       }
+      if (document.querySelector('dialog[open], [role="dialog"]')) {
+        return;
+      }
+
+      const state = keydownStateRef.current;
 
       if (e.altKey && e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -1651,77 +2977,121 @@ export function App() {
       }
 
       if (e.key === 'Escape') {
-        if (document.querySelector('[role="dialog"]')) {
-          return;
-        }
-        if (selectedIds.size > 0) {
+        if (state.selectedIds.size > 0) {
           e.preventDefault();
           setSelectedIds(new Set());
+        } else if (state.clipboard?.mode === 'cut') {
+          e.preventDefault();
+          setClipboard(null);
         }
         return;
       }
 
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size > 0) {
-        if (selectedIds.size === 1 && selectedIds.has('__parent__')) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && state.selectedIds.size > 0) {
+        if (state.selectedIds.size === 1 && state.selectedIds.has('__parent__')) {
           return;
         }
         e.preventDefault();
-        handleDeleteSelected();
+        void state.handleDeleteSelected();
+        return;
+      }
+
+      if (
+        e.key === 'Backspace' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        state.selectedIds.size === 0 &&
+        state.currentNav === 'files' &&
+        state.currentPath !== '/'
+      ) {
+        e.preventDefault();
+        state.handleNavigate(getParentDir(state.currentPath));
+        return;
+      }
+
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.shiftKey &&
+        !e.altKey &&
+        (e.key === 'n' || e.key === 'N')
+      ) {
+        if (!state.isSharePoolActive && state.currentNav === 'files') {
+          e.preventDefault();
+          state.handleOpenNewFolder();
+        }
         return;
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
-        if (!isSharePoolActive && selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
+        if (
+          !state.isSharePoolActive &&
+          state.selectedIds.size > 0 &&
+          !state.selectedIds.has('__parent__') &&
+          state.currentNav !== 'trash'
+        ) {
           e.preventDefault();
-          handleCutSelected();
+          state.handleCutSelected();
         }
         return;
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-        if (!isSharePoolActive && selectedIds.size > 0 && !selectedIds.has('__parent__') && currentNav !== 'trash') {
+        if (
+          !state.isSharePoolActive &&
+          state.selectedIds.size > 0 &&
+          !state.selectedIds.has('__parent__') &&
+          state.currentNav !== 'trash'
+        ) {
           e.preventDefault();
-          handleCopySelected();
+          state.handleCopySelected();
         }
         return;
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-        if (!isSharePoolActive && clipboard && clipboard.items.length > 0 && currentNav !== 'trash') {
+        if (
+          !state.isSharePoolActive &&
+          state.clipboard &&
+          state.clipboard.items.length > 0 &&
+          state.currentNav !== 'trash'
+        ) {
           e.preventDefault();
-          handlePaste();
+          state.handlePaste();
         }
         return;
       }
 
       if (e.key === 'F2') {
-        if (!isSharePoolActive && selectedIds.size === 1 && !selectedIds.has('__parent__')) {
+        if (
+          !state.isSharePoolActive &&
+          state.selectedIds.size === 1 &&
+          !state.selectedIds.has('__parent__')
+        ) {
           e.preventDefault();
-          handleOpenRenameSelected();
+          state.handleOpenRenameSelected();
         }
         return;
       }
 
       if (e.key === 'Enter') {
-        if (selectedIds.size === 1 && currentNav !== 'trash') {
-          const singleId = Array.from(selectedIds)[0];
+        if (state.selectedIds.size === 1 && state.currentNav !== 'trash') {
+          const singleId = Array.from(state.selectedIds)[0];
           if (singleId === '__parent__') {
             e.preventDefault();
-            const parts = currentPath.split('/').filter(Boolean);
-            const parent = parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/');
-            handleNavigate(parent);
+            state.handleNavigate(getParentDir(state.currentPath));
             return;
           }
-          const foundFolder = folders.find((f) => f.id === singleId);
+          const foundFolder = state.folders.find((f) => f.id === singleId);
           if (foundFolder) {
             e.preventDefault();
-            handleNavigate(foundFolder.virtualPath);
+            state.handleNavigate(foundFolder.virtualPath);
             return;
           }
-          const foundFile = files.find((f) => f.id === singleId && !f.isTrashed);
+          const foundFile = state.files.find((f) => f.id === singleId && !f.isTrashed);
           if (foundFile) {
             e.preventDefault();
-            handleDownload(foundFile);
+            state.handleDownload(foundFile);
             return;
           }
         }
@@ -1730,43 +3100,39 @@ export function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    selectedIds,
-    folders,
-    files,
-    trashedFiles,
-    currentNav,
-    clipboard,
-    currentPath,
-    handleNavigate,
-    handleCutSelected,
-    handleCopySelected,
-    handlePaste,
-    handleOpenRenameSelected,
-    isSharePoolActive,
-  ]);
+  }, []);
 
-  async function handleEmptyTrashExecute() {
+  const handleEmptyTrashExecute = useCallback(async () => {
+    setWorkspaceError(null);
+    const poolId = activePoolIdRef.current;
+
     await runPendingOp(async () => {
       try {
         const res = await client.api.trash.empty.$delete({
-          query: { poolId: String(activePoolId) },
+          query: { poolId: String(poolId) },
         });
         if (res.ok) {
-          setConfirmEmptyTrash(false);
-          setSelectedIds(new Set());
-          showToast('Trash emptied. Storage permanently reclaimed.');
-          await loadTrashFiles();
-          await loadClusterData();
+          invalidateShareInspectCache();
+          if (activePoolIdRef.current === poolId) {
+            setTrashedFiles([]);
+            setSelectedIds(new Set());
+            trashStaleRef.current = false;
+          } else {
+            setPoolCache(poolId, { trashedFiles: [], trashStale: false });
+          }
+          await Promise.all([loadTrashFiles(poolId), loadClusterData(poolId)]);
         } else {
-          const err = await res.json().catch(() => ({}));
-          setErrorNotice(('error' in err ? err.error : null) || 'Empty trash failed');
+          const msg = await readResponseError(res, 'Empty trash failed');
+          throw Object.assign(new Error(msg), { handled: true });
         }
       } catch (err) {
-        setErrorNotice(`Empty trash error: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof Error && 'handled' in err) {
+          throw err;
+        }
+        throw new Error(extractErrorMessage(err, 'Empty trash failed'));
       }
     });
-  }
+  }, [runPendingOp, loadTrashFiles, loadClusterData]);
 
   // Count active files per account to show the filter toggle only on accounts with files in the pool
   const accountFileCountMap = useMemo(() => {
@@ -1779,7 +3145,6 @@ export function App() {
     return map;
   }, [files]);
 
-  // Aggregate account list merging discovered with storage overview
   const accountItems: AccountItem[] = useMemo(() => {
     const items = discovered.map((d) => {
       const summary = storage?.accounts.find((a) => a.id === d.accountId);
@@ -1815,12 +3180,9 @@ export function App() {
     });
 
     return items.sort((a, b) => {
-      // 1. OAuth accounts that are not authorized yet
       if (!a.authorized && b.authorized) return -1;
       if (a.authorized && !b.authorized) return 1;
 
-      // Both are unauthorized (imported / pending auth):
-      // Put the newest imported account at the very top
       if (!a.authorized && !b.authorized) {
         const mtimeA = a.mtimeMs ?? 0;
         const mtimeB = b.mtimeMs ?? 0;
@@ -1830,123 +3192,160 @@ export function App() {
         return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' });
       }
 
-      // 2. Accounts that have changes and should be pinned to the top:
-      // Active accounts with any changes (external files or auto-rebalance),
-      // OR disabled accounts that have detected external modifications.
-      // If a disabled account has no external changes apart from "Auto-rebalance files", it is not pinned.
+      // Pin active accounts with changes, and disabled accounts with external discrepancies.
+      // Disabled accounts with only auto-rebalance breaches stay in normal sort order.
       const aIsPinned = Boolean(a.hasPendingChanges) && (!a.isDisabled || Boolean(a.hasDiscrepancy));
       const bIsPinned = Boolean(b.hasPendingChanges) && (!b.isDisabled || Boolean(b.hasDiscrepancy));
       if (aIsPinned && !bIsPinned) return -1;
       if (!aIsPinned && bIsPinned) return 1;
 
-      // 3. Normal accounts (and among accounts with changes):
-      // Alphabetical strictly based on Gmail address (email), fallback to id
       const emailA = (a.email || a.id).toLowerCase();
       const emailB = (b.email || b.id).toLowerCase();
       return emailA.localeCompare(emailB, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [discovered, storage, pendingDiscrepancies, activePoolId, accountFileCountMap]);
 
-  async function handleTransferFile(fileId: string, targetAccountId: string) {
-    if (isSharePoolActive) return;
-    const file = files.find((f) => f.id === fileId);
-    const targetAcc = accountItems.find((a) => a.id === targetAccountId);
-    const targetName = targetAcc?.displayName || targetAccountId;
-    setTransferringFileId(fileId);
-    try {
-      const res = await client.api.sync.rebalance.file.$post({
-        json: { fileId, targetAccountId },
-      });
-      if (res.ok) {
-        showToast(`Transferred "${file?.name || fileId}" to ${targetName}.`);
-        await Promise.all([loadFiles(currentPath), loadClusterData()]);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Failed to transfer file');
-      }
-    } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setTransferringFileId(null);
-    }
-  }
+  const accountItemsRef = useRef(accountItems);
+  accountItemsRef.current = accountItems;
 
-  async function handleTransferBatch(fileIds: string[], targetAccountId: string) {
-    if (isSharePoolActive) return;
-    const targetAcc = accountItems.find((a) => a.id === targetAccountId);
-    const targetName = targetAcc?.displayName || targetAccountId;
-    await runPendingOp(async () => {
+  const handleTransferFile = useCallback(
+    async (fileId: string, targetAccountId: string) => {
+      if (isSharePoolActive) return;
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      setTransferringFileIds((prev) => new Set(prev).add(fileId));
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.sync.rebalance.file.$post({
+            json: { fileId, targetAccountId },
+          });
+          if (res.ok) {
+            invalidateShareInspectCache();
+            await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
+          } else {
+            const msg = await readResponseError(res, 'Failed to transfer file');
+            if (activePoolIdRef.current === poolId) {
+              surfaceWorkspaceError('handleTransferFile', msg, 'Failed to transfer file');
+            }
+          }
+        } catch (err) {
+          if (activePoolIdRef.current === poolId) {
+            surfaceWorkspaceError('handleTransferFile', err, 'Failed to transfer file');
+          }
+        } finally {
+          setTransferringFileIds((prev) => {
+            const next = new Set(prev);
+            next.delete(fileId);
+            return next;
+          });
+        }
+      });
+    },
+    [isSharePoolActive, runPendingOp, loadFiles, loadClusterData, surfaceWorkspaceError]
+  );
+
+  const handleTransferBatch = useCallback(
+    async (fileIds: string[], targetAccountId: string) => {
+      if (isSharePoolActive) return;
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+
+      await runPendingOp(async () => {
+        try {
+          const res = await client.api.sync.rebalance.batch.$post({
+            json: { fileIds, targetAccountId },
+          });
+          if (!res.ok) {
+            const msg = await readResponseError(res, 'Failed to transfer files');
+            throw Object.assign(new Error(msg), { handled: true });
+          }
+        } catch (err) {
+          if (err instanceof Error && 'handled' in err) {
+            throw err;
+          }
+          throw new Error(extractErrorMessage(err, 'Failed to transfer files'));
+        } finally {
+          invalidateShareInspectCache();
+          await Promise.all([loadFiles(currentPathRef.current, poolId), loadClusterData(poolId)]);
+        }
+      });
+    },
+    [isSharePoolActive, runPendingOp, loadFiles, loadClusterData]
+  );
+
+  const handleDisableAccount = useCallback(
+    async (accountId: string) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
       try {
-        const res = await client.api.sync.rebalance.batch.$post({
-          json: { fileIds, targetAccountId },
+        const res = await client.api.accounts[':id'].disable.$post({
+          param: { id: accountId },
         });
         if (res.ok) {
-          showToast(`Transferred ${fileIds.length} file${fileIds.length === 1 ? '' : 's'} to ${targetName}.`);
-          setMoveFilesModalGroup(null);
+          invalidateShareInspectCache();
+          await loadClusterData(poolId);
         } else {
-          const err = await res.json().catch(() => ({}));
-          const errorMsg = ('error' in err ? (err.error as string) : null) || 'Failed to transfer files';
-          setErrorNotice(errorMsg);
-          throw new Error(errorMsg);
+          const msg = await readResponseError(res, 'Failed to disable drive');
+          if (activePoolIdRef.current === poolId) {
+            surfaceWorkspaceError('handleDisableAccount', msg, 'Failed to disable drive');
+          }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setErrorNotice(msg);
-        throw err;
-      } finally {
-        await loadFiles(currentPath);
-        await loadClusterData();
+        if (activePoolIdRef.current === poolId) {
+          surfaceWorkspaceError('handleDisableAccount', err, 'Failed to disable drive');
+        }
       }
-    });
-  }
+    },
+    [loadClusterData, surfaceWorkspaceError]
+  );
 
-  async function handleDisableAccount(accountId: string) {
-    try {
-      const res = await client.api.accounts[':id'].disable.$post({
-        param: { id: accountId },
+  const handleEnableAccount = useCallback(
+    async (accountId: string) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      try {
+        const res = await client.api.accounts[':id'].enable.$post({
+          param: { id: accountId },
+        });
+        if (res.ok) {
+          invalidateShareInspectCache();
+          await loadClusterData(poolId);
+        } else {
+          const msg = await readResponseError(res, 'Failed to enable drive');
+          if (activePoolIdRef.current === poolId) {
+            surfaceWorkspaceError('handleEnableAccount', msg, 'Failed to enable drive');
+          }
+        }
+      } catch (err) {
+        if (activePoolIdRef.current === poolId) {
+          surfaceWorkspaceError('handleEnableAccount', err, 'Failed to enable drive');
+        }
+      }
+    },
+    [loadClusterData, surfaceWorkspaceError]
+  );
+
+  const handleOpenDriveAction = useCallback(
+    (account: AccountItem) => {
+      const poolId = activePoolIdRef.current;
+      if (loadedTrashPoolIdRef.current !== poolId || trashStaleRef.current) {
+        void loadTrashFiles(poolId);
+      }
+      setDriveActionModal({
+        isOpen: true,
+        account,
+        isLoading: false,
+        errorMessage: null,
       });
-      if (res.ok) {
-        showToast('Drive disabled. Excluded from storage pool.');
-        await loadClusterData();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Failed to disable drive');
-      }
-    } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function handleEnableAccount(accountId: string) {
-    try {
-      const res = await client.api.accounts[':id'].enable.$post({
-        param: { id: accountId },
-      });
-      if (res.ok) {
-        showToast('Drive re-enabled in storage pool.');
-        await loadClusterData();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setErrorNotice(('error' in err ? err.error : null) || 'Failed to enable drive');
-      }
-    } catch (err) {
-      setErrorNotice(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  function handleOpenDriveAction(account: AccountItem, action: 'remove') {
-    setDriveActionModal({
-      isOpen: true,
-      action,
-      account,
-      isLoading: false,
-      errorMessage: null,
-    });
-  }
+    },
+    [loadTrashFiles]
+  );
 
   async function handleExecuteDriveAction() {
     const { account } = driveActionModal;
-    if (!account) return;
+    if (!account || executingDriveActionRef.current) return;
+    executingDriveActionRef.current = true;
+    const poolId = activePoolIdRef.current;
 
     setDriveActionModal((prev) => ({ ...prev, isLoading: true, errorMessage: null }));
 
@@ -1955,28 +3354,51 @@ export function App() {
         param: { id: account.id },
       });
       const data = await res.json().catch(() => ({}));
+      const isStillActive = activePoolIdRef.current === poolId;
       if (res.ok) {
+        invalidateShareInspectCache();
         setDriveActionModal((prev) => ({ ...prev, isOpen: false, isLoading: false }));
-        const filesMoved = ('filesMoved' in data ? (data.filesMoved as number) : 0) ?? 0;
-        showToast(`Drive removed. Evacuated ${filesMoved} ${filesMoved === 1 ? 'file' : 'files'}.`);
-        await Promise.all([loadClusterData(), loadFiles(currentPath)]);
-      } else {
+        if (isStillActive) {
+          await Promise.all([loadClusterData(poolId), loadFiles(currentPathRef.current, poolId)]);
+        } else {
+          await Promise.all([loadClusterData(poolId), loadFiles('/', poolId)]);
+        }
+      } else if (isStillActive) {
         setDriveActionModal((prev) => ({
           ...prev,
           isLoading: false,
           errorMessage: ('error' in data ? (data.error as string) : null) || 'Failed to remove drive',
         }));
+      } else {
+        setDriveActionModal((prev) => ({ ...prev, isLoading: false }));
       }
     } catch (err) {
-      setDriveActionModal((prev) => ({
-        ...prev,
-        isLoading: false,
-        errorMessage: err instanceof Error ? err.message : String(err),
-      }));
+      if (activePoolIdRef.current === poolId) {
+        setDriveActionModal((prev) => ({
+          ...prev,
+          isLoading: false,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        }));
+      } else {
+        setDriveActionModal((prev) => ({ ...prev, isLoading: false }));
+      }
+    } finally {
+      executingDriveActionRef.current = false;
     }
   }
 
-  const driveFiles = files.filter((f) => f.accountId === driveActionModal.account?.id);
+  const driveFiles = useMemo(() => {
+    const targetAccountId = driveActionModal.account?.id;
+    if (!targetAccountId) return [];
+    const byId = new Map<string, ClientFileRecord>();
+    for (const f of files) {
+      if (f.accountId === targetAccountId) byId.set(f.id, f);
+    }
+    for (const f of trashedFiles) {
+      if (f.accountId === targetAccountId && !byId.has(f.id)) byId.set(f.id, f);
+    }
+    return Array.from(byId.values());
+  }, [files, trashedFiles, driveActionModal.account?.id]);
   const driveFilesCount = driveFiles.length;
   const driveTotalBytes = driveFiles.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
 
@@ -1998,30 +3420,34 @@ export function App() {
   }, [accountItems, externalChangesAccountId]);
 
   const handleCreatePool = useCallback(async () => {
+    setWorkspaceError(null);
     await runPendingOp(async () => {
       try {
         const res = await client.api.pools.$post({ json: { name: undefined } });
         if (res.ok) {
+          invalidateShareInspectCache();
           const created = await res.json();
-          showToast(`Created "${created.name}".`);
           setPools((prev) => [...prev, created]);
+          skipNextPoolEffectRef.current = created.id;
           handleSelectPool(created.id);
-          await loadClusterData(created.id);
+          await Promise.all([loadClusterData(created.id), loadFiles('/', created.id)]);
         } else {
-          const err = await res.json().catch(() => ({}));
-          setErrorNotice(('error' in err ? (err.error as string) : null) || 'Failed to create pool');
+          const msg = await readResponseError(res, 'Failed to create pool');
+          surfaceWorkspaceError('handleCreatePool', msg, 'Failed to create pool');
         }
       } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
+        surfaceWorkspaceError('handleCreatePool', err, 'Failed to create pool');
       }
     });
-  }, [showToast, handleSelectPool, loadClusterData, runPendingOp]);
+  }, [handleSelectPool, loadClusterData, loadFiles, runPendingOp, surfaceWorkspaceError]);
 
   const handleDeletePool = useCallback(
     async (pool: PoolSummary) => {
-      const standardPools = pools.filter((p) => !p.isSharePool);
+      setWorkspaceError(null);
+      const currentPools = poolsRef.current;
+      const standardPools = currentPools.filter((p) => !p.isSharePool);
       const currentIndex = standardPools.findIndex((p) => p.id === pool.id);
-      const remainingStandardPools = pools.filter((p) => p.id !== pool.id && !p.isSharePool);
+      const remainingStandardPools = currentPools.filter((p) => p.id !== pool.id && !p.isSharePool);
       if (remainingStandardPools.length === 0) return;
 
       const nextAdjacent = remainingStandardPools[currentIndex];
@@ -2047,24 +3473,41 @@ export function App() {
             param: { id: String(pool.id) },
           });
           if (res.ok) {
-            showToast(`Deleted pool "${pool.name}".`);
-            setPools(pools.filter((p) => p.id !== pool.id));
+            invalidateShareInspectCache();
+            setPools((prev) => prev.filter((p) => p.id !== pool.id));
+            skipNextPoolEffectRef.current = targetPool.id;
             handleSelectPool(targetPool.id);
-            await loadClusterData(targetPool.id);
+            await Promise.all([loadClusterData(targetPool.id), loadFiles('/', targetPool.id)]);
           } else {
-            const err = (await res.json().catch(() => ({}))) as { error?: string };
-            setErrorNotice(err.error || 'Failed to delete pool');
+            const msg = await readResponseError(res, 'Failed to delete pool');
+            surfaceWorkspaceError('handleDeletePool', msg, 'Failed to delete pool');
           }
         } catch (err) {
-          setErrorNotice(err instanceof Error ? err.message : String(err));
+          surfaceWorkspaceError('handleDeletePool', err, 'Failed to delete pool');
         }
       });
     },
-    [pools, showToast, handleSelectPool, loadClusterData, runPendingOp]
+    [handleSelectPool, loadClusterData, loadFiles, runPendingOp, surfaceWorkspaceError]
   );
 
   const handleSwitchAccountPool = useCallback(
     async (accountId: string, targetPoolId: number) => {
+      setWorkspaceError(null);
+      const poolId = activePoolIdRef.current;
+      const prevDiscovered = discoveredRef.current;
+      const prevStorage = storageRef.current;
+
+      setDiscovered((prev) => prev.filter((a) => a.accountId !== accountId));
+      setStorage((prev) =>
+        prev
+          ? {
+              ...prev,
+              accounts: prev.accounts.filter((a) => a.id !== accountId),
+              totalAccounts: Math.max(0, prev.totalAccounts - 1),
+            }
+          : prev
+      );
+
       await runPendingOp(async () => {
         try {
           const res = await client.api.accounts[':id'].pool.$post({
@@ -2072,22 +3515,44 @@ export function App() {
             json: { poolId: targetPoolId },
           });
           if (res.ok) {
-            const targetPool = pools.find((p) => p.id === targetPoolId);
-            showToast(`Moved "${accountId}" to ${targetPool?.name || 'Pool ' + targetPoolId}.`);
-            await Promise.all([loadClusterData(), loadFiles(currentPath), loadTrashFiles()]);
+            invalidateShareInspectCache();
+            if (currentNavRef.current === 'trash') {
+              await Promise.all([
+                loadClusterData(poolId),
+                loadFiles(currentPathRef.current, poolId),
+                loadTrashFiles(poolId),
+              ]);
+            } else {
+              markTrashStale(poolId);
+              markTrashStale(targetPoolId);
+              await Promise.all([loadClusterData(poolId), loadFiles(currentPathRef.current, poolId)]);
+            }
           } else {
-            const err = (await res.json().catch(() => ({}))) as { error?: string };
-            const errMsg = err.error || 'Cannot switch account pool';
-            setErrorNotice(errMsg);
-            throw new Error(errMsg);
+            const msg = await readResponseError(res, 'Cannot switch account pool');
+            if (activePoolIdRef.current === poolId) {
+              setDiscovered(prevDiscovered);
+              setStorage(prevStorage);
+            } else {
+              setPoolCache(poolId, { discovered: prevDiscovered, storage: prevStorage });
+            }
+            throw Object.assign(new Error(msg), { handled: true });
           }
         } catch (err) {
-          setErrorNotice(err instanceof Error ? err.message : String(err));
-          throw err;
+          if (err instanceof Error && 'handled' in err) {
+            throw err;
+          }
+          const msg = extractErrorMessage(err, 'Cannot switch account pool');
+          if (activePoolIdRef.current === poolId) {
+            setDiscovered(prevDiscovered);
+            setStorage(prevStorage);
+          } else {
+            setPoolCache(poolId, { discovered: prevDiscovered, storage: prevStorage });
+          }
+          throw new Error(msg);
         }
       });
     },
-    [pools, showToast, loadClusterData, loadFiles, currentPath, loadTrashFiles, runPendingOp]
+    [loadClusterData, loadFiles, loadTrashFiles, markTrashStale, runPendingOp]
   );
 
   const handleShareSelected = useCallback(() => {
@@ -2128,8 +3593,13 @@ export function App() {
     async (result: ShareExecuteResult) => {
       clearWorkspaceState();
       const batchPath = '/' + result.batchFolderName;
-      setActivePoolId(result.sharePoolId);
-      setCurrentNav('files');
+      skipNextPoolEffectRef.current = result.sharePoolId;
+      activePoolIdRef.current = result.sharePoolId;
+      currentNavRef.current = 'files';
+      startTransition(() => {
+        setActivePoolId(result.sharePoolId);
+        setCurrentNav('files');
+      });
       handleNavigate(batchPath);
       await Promise.all([loadClusterData(result.sharePoolId), loadFiles(batchPath, result.sharePoolId)]);
     },
@@ -2137,61 +3607,91 @@ export function App() {
   );
 
   const handleClearSharePoolConfirm = useCallback(async () => {
+    setWorkspaceError(null);
+    const poolId = activePoolIdRef.current;
+
     await runPendingOp(async () => {
       try {
         const res = await client.api.pools[':id']['clear-share'].$post({
-          param: { id: String(activePoolId) },
+          param: { id: String(poolId) },
         });
         if (res.ok) {
-          setIsClearSharePoolOpen(false);
-          setSelectedIds(new Set());
-          setShareLinksByBatch({});
+          invalidateShareInspectCache();
           const nextPath = '/';
-          if (currentPath !== nextPath) {
-            handleNavigate(nextPath);
+          if (activePoolIdRef.current === poolId) {
+            setFiles([]);
+            setFolders([]);
+            setTrashedFiles([]);
+            setLoadedTrashPoolId(poolId);
+            trashStaleRef.current = false;
+            setShareLinksByBatch({});
+            setSelectedIds(new Set());
+            if (currentPathRef.current !== nextPath) {
+              handleNavigate(nextPath);
+            }
+          } else {
+            setPoolCache(poolId, {
+              files: [],
+              folders: [],
+              trashedFiles: [],
+              loadedTrashPoolId: poolId,
+              trashStale: false,
+              shareLinksByBatch: {},
+            });
           }
-          showToast('Share Pool cleared. Copied files and folders removed.');
-          await Promise.all([
-            loadFiles(nextPath),
-            loadTrashFiles(),
-            loadClusterData(activePoolId),
-          ]);
+          if (currentNavRef.current === 'trash') {
+            await Promise.all([loadFiles(nextPath, poolId), loadTrashFiles(poolId), loadClusterData(poolId)]);
+          } else {
+            await Promise.all([loadFiles(nextPath, poolId), loadClusterData(poolId)]);
+          }
         } else {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          const errMsg = err.error || 'Failed to clear Share Pool';
-          setErrorNotice(errMsg);
-          throw new Error(errMsg);
+          const msg = await readResponseError(res, 'Failed to clear Share Pool');
+          throw Object.assign(new Error(msg), { handled: true });
         }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        setErrorNotice(errMsg);
-        throw err;
+        if (err instanceof Error && 'handled' in err) {
+          throw err;
+        }
+        throw new Error(extractErrorMessage(err, 'Failed to clear Share Pool'));
       }
     });
-  }, [activePoolId, currentPath, handleNavigate, loadFiles, loadTrashFiles, loadClusterData, showToast, runPendingOp]);
+  }, [handleNavigate, loadFiles, loadTrashFiles, loadClusterData, runPendingOp]);
 
-  const handleCopyBatchLinks = useCallback(
-    async (batchFolderName: string): Promise<boolean> => {
-      const links = shareLinksByBatch[batchFolderName] ?? [];
-      const urls = links.map((l) => l.webViewLink).filter(Boolean);
-      if (urls.length === 0) return false;
+  const handleCopyBatchLinks = useCallback(async (batchFolderName: string): Promise<boolean> => {
+    const links = shareLinksByBatchRef.current[batchFolderName] ?? [];
+    const urls = links.map((l) => l.webViewLink).filter(Boolean);
+    if (urls.length === 0) return false;
 
-      const text = urls.join('\n');
-      const ok = await copyTextToClipboard(text);
-      if (!ok) return false;
-
-      showToast(
-        urls.length === 1
-          ? `Copied share link for ${batchFolderName}.`
-          : `Copied ${urls.length} share links for ${batchFolderName}.`
-      );
-      return true;
-    },
-    [shareLinksByBatch, showToast]
-  );
+    const text = urls.join('\n');
+    return await copyTextToClipboard(text);
+  }, []);
 
   const isSharePoolDataReady = isSharePoolActive && loadedFilesPoolId === activePoolId;
   const isShareLinksReady = isSharePoolDataReady && shareLinksPoolId === activePoolId;
+  const hasLockedSharePoolAccounts = useMemo(
+    () => accountItems.some((a) => !a.canSwitchPool),
+    [accountItems]
+  );
+
+  useEffect(() => {
+    if (
+      isSharePoolDataReady &&
+      files.length === 0 &&
+      folders.length === 0 &&
+      hasLockedSharePoolAccounts &&
+      (loadedTrashPoolId !== activePoolId || trashStaleRef.current)
+    ) {
+      void loadTrashFiles(activePoolId);
+    }
+  }, [
+    isSharePoolDataReady,
+    files.length,
+    folders.length,
+    hasLockedSharePoolAccounts,
+    loadedTrashPoolId,
+    activePoolId,
+    loadTrashFiles,
+  ]);
   const isTableLoading =
     currentNav === 'trash' ? loadedTrashPoolId !== activePoolId : loadedFilesPoolId !== activePoolId;
   const activeBatchFolderName =
@@ -2303,7 +3803,24 @@ export function App() {
   const selectedTotalBytes = useMemo(() => {
     return selectedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
   }, [selectedFiles]);
-  const trashedTotalBytes = displayedTrashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
+  const trashedTotalBytes = useMemo(
+    () => trashedFiles.reduce((acc, f) => acc + (f.sizeBytes || 0), 0),
+    [trashedFiles]
+  );
+  const pendingPurgeTotalBytes = useMemo(
+    () => (pendingPurgeFiles ?? []).reduce((acc, f) => acc + (f.sizeBytes || 0), 0),
+    [pendingPurgeFiles]
+  );
+  const sharePoolTotalBytes = useMemo(
+    () =>
+      Math.max(
+        activePool?.totalBytes ?? 0,
+        files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)
+      ) + trashedTotalBytes,
+    [activePool?.totalBytes, files, trashedTotalBytes]
+  );
+  const sharePoolTotalItemCount =
+    Math.max(activePool?.fileCount ?? 0, files.length) + folders.length + trashedFiles.length;
 
   const selectedAccountGroups: SelectedAccountGroup[] = useMemo(() => {
     if (currentNav === 'trash') return [];
@@ -2351,8 +3868,108 @@ export function App() {
   const modalFiles = useMemo(() => {
     if (!moveFilesModalGroup) return [];
     const idsSet = new Set(moveFilesModalGroup.fileIds);
-    return selectedFiles.filter((f) => idsSet.has(f.id));
+    return selectedFiles.filter(
+      (f) => idsSet.has(f.id) && f.accountId === moveFilesModalGroup.accountId
+    );
   }, [moveFilesModalGroup, selectedFiles]);
+
+  const handleRenamePoolPrompt = useCallback((pool: PoolSummary) => {
+    setRenameModalItem({ kind: 'pool', id: String(pool.id), name: pool.name });
+  }, []);
+
+  const handleOpenMovePool = useCallback((acc: AccountItem) => {
+    setMovePoolTargetAccount(acc);
+  }, []);
+
+  const handleOpenExternalChanges = useCallback((accId?: string) => {
+    setExternalChangesAccountId(accId);
+    setIsExternalChangesOpen(true);
+  }, []);
+
+  const handleDisableAccountItem = useCallback(
+    (acc: AccountItem) => {
+      void handleDisableAccount(acc.id);
+    },
+    [handleDisableAccount]
+  );
+
+  const handleRemoveAccountItem = useCallback(
+    (acc: AccountItem) => {
+      handleOpenDriveAction(acc);
+    },
+    [handleOpenDriveAction]
+  );
+
+  const handleCloseMobile = useCallback(() => {
+    setIsMobileOpen(false);
+  }, []);
+
+  const handleToggleMobileMenu = useCallback(() => {
+    setIsMobileOpen((o) => !o);
+  }, []);
+
+  const handleDropItemsToRoot = useCallback(
+    (items: Array<{ kind: 'file' | 'folder'; id: string }>) => {
+      void handleMoveItems(items, '/');
+    },
+    [handleMoveItems]
+  );
+
+  const handleDropExternalToRoot = useCallback(
+    (dt: DataTransfer) => {
+      void handleDropExternalToPath('/', dt);
+    },
+    [handleDropExternalToPath]
+  );
+
+  const handleNavigatePath = useCallback(
+    (path: string) => {
+      if (currentNavRef.current === 'trash') {
+        handleSelectNav('files');
+      }
+      handleNavigate(path);
+    },
+    [handleSelectNav, handleNavigate]
+  );
+
+  const handleOpenEmptyTrash = useCallback(() => {
+    setPendingPurgeFiles(null);
+    setConfirmEmptyTrash(true);
+  }, []);
+
+  const handleOpenMoveFilesModal = useCallback((group: SelectedAccountGroup) => {
+    setMoveFilesModalGroup(group);
+  }, []);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleOpenClearSharePool = useCallback(() => {
+    const poolId = activePoolIdRef.current;
+    if (loadedTrashPoolIdRef.current !== poolId || trashStaleRef.current) {
+      void loadTrashFiles(poolId);
+    }
+    setIsClearSharePoolOpen(true);
+  }, [loadTrashFiles]);
+
+  const activeBatchFolderNameRef = useRef(activeBatchFolderName);
+  activeBatchFolderNameRef.current = activeBatchFolderName;
+
+  const handleCopyActiveShareLinks = useCallback(async () => {
+    if (!activeBatchFolderNameRef.current) return false;
+    return handleCopyBatchLinks(activeBatchFolderNameRef.current);
+  }, [handleCopyBatchLinks]);
+
+  const handleDropFilesToTable = useCallback((droppedFiles: File[]) => {
+    if (isModalActive()) return;
+    if (droppedFiles.length > 0) {
+      setStagedFiles(droppedFiles);
+      setStagedEmptyFolders([]);
+      setUploadTargetPath(undefined);
+      setIsUploadDrawerOpen(true);
+    }
+  }, []);
 
   return (
     <div
@@ -2370,43 +3987,31 @@ export function App() {
         onToggleAccountFilter={handleToggleAccountFilter}
         tsubasaUsedBytes={storage?.totalTsubasaUsedBytes ?? storage?.systemStorage?.systemBytesTotal ?? 0}
         poolHeadroomBytes={storage?.totalHeadroomBytes ?? 0}
-        totalLimitBytes={storage?.totalLimitBytes ?? 0}
         clusterTransfer={storage?.clusterTransfer}
         pools={pools}
         activePoolId={activePoolId}
         onSelectPool={handleSelectPool}
         onCreatePool={handleCreatePool}
-        onRenamePoolPrompt={
-          isSharePoolActive
-            ? undefined
-            : (pool) => setRenameModalItem({ kind: 'pool', id: String(pool.id), name: pool.name })
-        }
+        onRenamePoolPrompt={isSharePoolActive ? undefined : handleRenamePoolPrompt}
         onDeletePoolPrompt={isSharePoolActive ? undefined : handleDeletePool}
         onSwitchAccountPool={handleSwitchAccountPool}
-        onOpenMovePool={(acc) => setMovePoolTargetAccount(acc)}
+        onOpenMovePool={handleOpenMovePool}
         currentNav={currentNav}
-        onSelectNav={(nav) => setCurrentNav(nav)}
-        onAuthorizeAccount={handleAuthorizeAccount}
+        onSelectNav={handleSelectNav}
         onRefreshStorage={loadClusterData}
-        onOpenExternalChanges={
-          isSharePoolActive
-            ? undefined
-            : (accId) => {
-                setExternalChangesAccountId(accId);
-                setIsExternalChangesOpen(true);
-              }
-        }
+        onOpenExternalChanges={isSharePoolActive ? undefined : handleOpenExternalChanges}
         onImportOAuth={handleImportOAuth}
-        onDisableAccount={(acc) => handleDisableAccount(acc.id)}
+        onDisableAccount={handleDisableAccountItem}
         onEnableAccount={handleEnableAccount}
-        onRemoveAccount={(acc) => handleOpenDriveAction(acc, 'remove')}
+        onRemoveAccount={handleRemoveAccountItem}
         isImporting={isImporting}
         isSyncing={isSyncing}
         isMobileOpen={isMobileOpen}
-        onCloseMobile={() => setIsMobileOpen(false)}
-        onDropItemsToRoot={isSharePoolActive ? undefined : (items) => handleMoveItems(items, '/')}
+        isDimmed={isExternalChangesOpen}
+        onCloseMobile={handleCloseMobile}
+        onDropItemsToRoot={isSharePoolActive ? undefined : handleDropItemsToRoot}
         onDropItemsToTrash={handleTrashItems}
-        onDropExternalToRoot={isSharePoolActive ? undefined : (dt) => handleDropExternalToPath('/', dt)}
+        onDropExternalToRoot={isSharePoolActive ? undefined : handleDropExternalToRoot}
       />
 
       <DitherDivider orientation="vertical" isDark={effectiveTheme === 'dark'} />
@@ -2417,29 +4022,25 @@ export function App() {
           onSearchChange={setSearchQuery}
           theme={themeChoice}
           onThemeChange={handleThemeChange}
-          onToggleMobileMenu={() => setIsMobileOpen((o) => !o)}
+          onToggleMobileMenu={handleToggleMobileMenu}
+          isMobileMenuOpen={isMobileOpen}
         />
 
         <ActionPortal
           currentPath={currentPath}
-          onNavigatePath={(path) => {
-            setCurrentNav('files');
-            handleNavigate(path);
-          }}
+          onNavigatePath={handleNavigatePath}
           onUploadFiles={handleUploadFiles}
           onCreateFolderPrompt={handleOpenNewFolder}
           onSyncAll={handleSyncAll}
           isSyncing={isSyncing}
           isTrashView={currentNav === 'trash'}
           trashedCount={displayedTrashedFiles.length}
-          onEmptyTrash={() => setConfirmEmptyTrash(true)}
+          onEmptyTrash={handleOpenEmptyTrash}
           selectedCount={actionableSelectedCount}
           selectedTotalBytes={selectedTotalBytes}
           selectedAccountGroups={selectedAccountGroups}
-          onOpenMoveFilesModal={
-            isSharePoolActive ? undefined : (group) => setMoveFilesModalGroup(group)
-          }
-          onClearSelection={() => setSelectedIds(new Set())}
+          onOpenMoveFilesModal={isSharePoolActive ? undefined : handleOpenMoveFilesModal}
+          onClearSelection={handleClearSelection}
           onDeleteSelected={handleDeleteSelected}
           onRenamePrompt={isSharePoolActive ? undefined : handleOpenRenameSelected}
           onRestoreSelected={handleBatchRestore}
@@ -2448,203 +4049,293 @@ export function App() {
           clipboard={isSharePoolActive ? null : clipboard}
           onPaste={isSharePoolActive ? undefined : handlePaste}
           onMoveItemsToPath={isSharePoolActive ? undefined : handleMoveItems}
+          onCopyItemsToPath={isSharePoolActive ? undefined : handleCopyItems}
           onDropExternalToPath={isSharePoolActive ? undefined : handleDropExternalToPath}
           onShareSelected={isSharePoolActive ? undefined : handleShareSelected}
           isSharePoolActive={isSharePoolActive}
-          sharePoolItemCount={isSharePoolDataReady ? files.length + folders.length : 0}
-          onClearSharePool={
-            isSharePoolDataReady
-              ? () => setIsClearSharePoolOpen(true)
-              : undefined
-          }
+          sharePoolItemCount={isSharePoolDataReady ? sharePoolTotalItemCount : 0}
+          onClearSharePool={isSharePoolDataReady ? handleOpenClearSharePool : undefined}
           activeShareLinksCount={activeBatchLinks.length}
           onCopyActiveShareLinks={
-            activeBatchLinks.length > 0 && activeBatchFolderName
-              ? () => handleCopyBatchLinks(activeBatchFolderName)
-              : undefined
+            activeBatchLinks.length > 0 && activeBatchFolderName ? handleCopyActiveShareLinks : undefined
           }
           selectedShareBatches={selectedShareBatches}
           onCopyShareBatchLinks={handleCopyBatchLinks}
         />
 
-        <FileTable
-          files={currentNav === 'trash' ? displayedTrashedFiles : displayedFiles}
-          folders={currentNav === 'trash' ? [] : displayedFolders}
-          isLoading={isTableLoading}
-          currentPath={currentPath}
-          searchQuery={searchQuery}
-          selectedIds={selectedIds}
-          onSelect={handleSelect}
-          onSelectMultiple={handleSelectMultiple}
-          onClearSelection={() => setSelectedIds(new Set())}
-          onNavigate={(path) => {
-            if (currentNav === 'trash') setCurrentNav('files');
-            handleNavigate(path);
-          }}
-          onDownload={handleDownload}
-          onTrash={handleTrash}
-          onDeleteFolder={handleDeleteFolder}
-          isTrashView={currentNav === 'trash'}
-          onRestore={handleRestoreFile}
-          onPermanentDelete={handlePermanentDelete}
-          onDropFiles={
-            isSharePoolActive
-              ? undefined
-              : (droppedFiles) => {
-                  if (droppedFiles.length > 0) {
-                    setStagedFiles(droppedFiles);
-                    setStagedEmptyFolders([]);
-                    setIsUploadDrawerOpen(true);
-                  }
-                }
-          }
-          onStageDroppedUpload={isSharePoolActive ? undefined : handleStageDroppedUpload}
-          onMoveItems={isSharePoolActive ? undefined : handleMoveItems}
-          clipboard={isSharePoolActive ? null : clipboard}
-          accounts={accountItems}
-          onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
-          transferringFileId={transferringFileId}
-          onShareItem={isSharePoolActive ? undefined : handleShareItem}
-          isSharePoolActive={isSharePoolActive}
-          shareLinksByBatch={isShareLinksReady ? shareLinksByBatch : undefined}
-          onCopyShareLinks={isShareLinksReady ? handleCopyBatchLinks : undefined}
-        />
+        {workspaceError && (
+          <div {...stylex.props(styles.workspaceErrorRegion)}>
+            <div {...stylex.props(styles.workspaceErrorBanner)} role="alert">
+              <div {...stylex.props(styles.workspaceErrorContent)}>
+                <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
+                <span {...stylex.props(styles.workspaceErrorText)}>{workspaceError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWorkspaceError(null)}
+                aria-label="Dismiss error"
+                {...stylex.props(styles.workspaceErrorDismissBtn)}
+              >
+                <IconClose size={14} />
+                <span>Dismiss</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div {...stylex.props(styles.fileTableStage)}>
+          {hasVisitedFiles && (
+            <div
+              {...stylex.props(
+                styles.fileTablePane,
+                currentNav !== 'files' && styles.fileTablePaneHidden
+              )}
+              inert={currentNav !== 'files'}
+            >
+              <FileTable
+                files={displayedFiles}
+                folders={displayedFolders}
+                isLoading={isTableLoading && currentNav === 'files'}
+                currentPath={currentPath}
+                searchQuery={deferredSearchQuery}
+                selectedIds={currentNav === 'files' ? selectedIds : EMPTY_SELECTED_IDS}
+                onSelect={handleSelect}
+                onSelectMultiple={handleSelectMultiple}
+                onClearSelection={handleClearSelection}
+                onNavigate={handleNavigatePath}
+                onDownload={handleDownload}
+                onTrash={handleTrash}
+                onDeleteFolder={handleDeleteFolder}
+                isTrashView={false}
+                onRestore={handleRestoreFile}
+                onPermanentDelete={handlePermanentDelete}
+                onDropFiles={isSharePoolActive ? undefined : handleDropFilesToTable}
+                onStageDroppedUpload={isSharePoolActive ? undefined : handleStageDroppedUpload}
+                onMoveItems={isSharePoolActive ? undefined : handleMoveItems}
+                onCopyItems={isSharePoolActive ? undefined : handleCopyItems}
+                scrollRequest={scrollRequest}
+                clipboard={isSharePoolActive ? null : clipboard}
+                accounts={accountItems}
+                onTransferFile={isSharePoolActive ? undefined : handleTransferFile}
+                transferringFileIds={transferringFileIds}
+                onShareItem={isSharePoolActive ? undefined : handleShareItem}
+                isSharePoolActive={isSharePoolActive}
+                shareLinksByBatch={isShareLinksReady ? shareLinksByBatch : undefined}
+                onCopyShareLinks={isShareLinksReady ? handleCopyBatchLinks : undefined}
+              />
+            </div>
+          )}
+
+          {hasVisitedTrash && (
+            <div
+              {...stylex.props(
+                styles.fileTablePane,
+                currentNav !== 'trash' && styles.fileTablePaneHidden
+              )}
+              inert={currentNav !== 'trash'}
+            >
+              <FileTable
+                files={displayedTrashedFiles}
+                folders={[]}
+                isLoading={isTableLoading && currentNav === 'trash'}
+                currentPath={currentPath}
+                searchQuery={deferredSearchQuery}
+                selectedIds={currentNav === 'trash' ? selectedIds : EMPTY_SELECTED_IDS}
+                onSelect={handleSelect}
+                onSelectMultiple={handleSelectMultiple}
+                onClearSelection={handleClearSelection}
+                onNavigate={handleNavigatePath}
+                onDownload={handleDownload}
+                onTrash={handleTrash}
+                onDeleteFolder={handleDeleteFolder}
+                isTrashView={true}
+                onRestore={handleRestoreFile}
+                onPermanentDelete={handlePermanentDelete}
+                onDropFiles={undefined}
+                onStageDroppedUpload={undefined}
+                onMoveItems={undefined}
+                clipboard={null}
+                accounts={accountItems}
+                onTransferFile={undefined}
+                transferringFileIds={transferringFileIds}
+                onShareItem={undefined}
+                isSharePoolActive={isSharePoolActive}
+                shareLinksByBatch={undefined}
+                onCopyShareLinks={undefined}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
-      <UploadDrawer
-        isOpen={isUploadDrawerOpen}
-        onClose={() => {
-          setIsUploadDrawerOpen(false);
-          setStagedFiles([]);
-          setStagedEmptyFolders([]);
-        }}
-        stagedFiles={stagedFiles}
-        stagedEmptyFolders={stagedEmptyFolders}
-        currentPath={currentPath}
-        accounts={accountItems}
-        poolId={activePoolId}
-        onUploadComplete={async () => {
-          await Promise.all([loadClusterData(), loadFiles(currentPath)]);
-          showToast('Upload finished. Cluster updated.');
-        }}
-        onClearFiles={() => {
-          setStagedFiles([]);
-          setStagedEmptyFolders([]);
-        }}
-      />
+      <Suspense fallback={null}>
+        {isUploadDrawerOpen && (
+          <UploadDrawer
+            isOpen={isUploadDrawerOpen}
+            onClose={() => {
+              setIsUploadDrawerOpen(false);
+              setStagedFiles([]);
+              setStagedEmptyFolders([]);
+              setUploadTargetPath(undefined);
+            }}
+            stagedFiles={stagedFiles}
+            stagedEmptyFolders={stagedEmptyFolders}
+            currentPath={uploadTargetPath ?? currentPath}
+            accounts={accountItems}
+            poolId={activePoolId}
+            onUploadComplete={async () => {
+              invalidateShareInspectCache();
+              await Promise.all([loadClusterData(), loadFiles(currentPath)]);
+            }}
+            onClearFiles={() => {
+              setStagedFiles([]);
+              setStagedEmptyFolders([]);
+              setUploadTargetPath(undefined);
+            }}
+          />
+        )}
 
-      {isExternalChangesOpen && (
-        <ExternalChangesDrawer
-          isOpen={isExternalChangesOpen}
-          onClose={() => {
-            setIsExternalChangesOpen(false);
-            setExternalChangesAccountId(undefined);
-          }}
-          accounts={externalChangesAccounts}
-          initialAccountId={externalChangesAccountId}
-          onResolved={async (summary) => {
-            if (summary) {
-              setPendingDiscrepancies((prev) => ({
-                ...prev,
-                [summary.accountId]: summary.remainingCount > 0,
-              }));
-            }
-            await Promise.all([
-              loadClusterData(),
-              summary?.refreshFiles !== false ? loadFiles(currentPath) : Promise.resolve(),
-            ]);
-            showToast('Discrepancies updated.');
-          }}
-        />
-      )}
+        {isExternalChangesOpen && (
+          <ExternalChangesDrawer
+            isOpen={isExternalChangesOpen}
+            onClose={() => {
+              setIsExternalChangesOpen(false);
+              setExternalChangesAccountId(undefined);
+            }}
+            accounts={externalChangesAccounts}
+            initialAccountId={externalChangesAccountId}
+            isMobileSidebarOpen={isMobileViewport && isMobileOpen}
+            onResolved={async (summary) => {
+              invalidateShareInspectCache();
+              if (summary) {
+                setPendingDiscrepancies((prev) => ({
+                  ...prev,
+                  [summary.accountId]: summary.remainingCount > 0,
+                }));
+              }
+              await Promise.all([
+                loadClusterData(),
+                summary?.refreshFiles !== false ? loadFiles(currentPath) : Promise.resolve(),
+              ]);
+            }}
+          />
+        )}
 
-      <NewFolderModal
-        isOpen={isNewFolderOpen}
-        onClose={() => setIsNewFolderOpen(false)}
-        currentPath={currentPath}
-        onCreateFolder={handleCreateFolder}
-      />
+        {isNewFolderOpen && (
+          <NewFolderModal
+            isOpen={isNewFolderOpen}
+            onClose={() => setIsNewFolderOpen(false)}
+            currentPath={currentPath}
+            onCreateFolder={handleCreateFolder}
+          />
+        )}
 
-      <RenameModal
-        isOpen={renameModalItem !== null}
-        onClose={() => setRenameModalItem(null)}
-        item={renameModalItem}
-        onRename={handleRename}
-      />
+        {renameModalItem !== null && (
+          <RenameModal
+            isOpen={renameModalItem !== null}
+            onClose={() => setRenameModalItem(null)}
+            item={renameModalItem}
+            onRename={handleRename}
+          />
+        )}
 
-      <MovePoolModal
-        isOpen={movePoolTargetAccount !== null}
-        onClose={() => setMovePoolTargetAccount(null)}
-        account={movePoolTargetAccount}
-        pools={pools}
-        activePoolId={activePoolId}
-        onConfirm={handleSwitchAccountPool}
-      />
+        {movePoolTargetAccount !== null && (
+          <MovePoolModal
+            isOpen={movePoolTargetAccount !== null}
+            onClose={() => setMovePoolTargetAccount(null)}
+            account={movePoolTargetAccount}
+            pools={pools}
+            activePoolId={activePoolId}
+            onConfirm={handleSwitchAccountPool}
+          />
+        )}
 
-      <MoveFilesModal
-        isOpen={moveFilesModalGroup !== null}
-        onClose={() => setMoveFilesModalGroup(null)}
-        sourceAccount={accountItems.find((a) => a.id === moveFilesModalGroup?.accountId) ?? null}
-        files={modalFiles}
-        accounts={accountItems}
-        onConfirm={handleTransferBatch}
-      />
+        {moveFilesModalGroup !== null && (
+          <MoveFilesModal
+            isOpen={moveFilesModalGroup !== null}
+            onClose={() => setMoveFilesModalGroup(null)}
+            sourceAccount={accountItems.find((a) => a.id === moveFilesModalGroup?.accountId) ?? null}
+            files={modalFiles}
+            accounts={accountItems}
+            onConfirm={handleTransferBatch}
+          />
+        )}
 
-      <ConfirmPurgeModal
-        isOpen={confirmEmptyTrash && currentNav === 'trash'}
-        onClose={() => setConfirmEmptyTrash(false)}
-        onConfirm={handleEmptyTrashExecute}
-        itemCount={trashedFiles.length}
-        totalBytes={trashedTotalBytes}
-      />
+        {pendingMoveConflict !== null && (
+          <MoveConflictModal
+            isOpen={pendingMoveConflict !== null}
+            onClose={() => {
+              if (!isResolvingMoveConflict) {
+                setPendingMoveConflict(null);
+              }
+            }}
+            targetFolderPath={pendingMoveConflict.targetFolderPath}
+            conflicts={pendingMoveConflict.conflicts}
+            cleanCount={pendingMoveConflict.cleanCount}
+            onResolve={handleResolveMoveConflict}
+            isSubmitting={isResolvingMoveConflict}
+            errorMessage={pendingMoveConflict.errorMessage}
+          />
+        )}
 
-      <ShareModal
-        isOpen={shareModalState !== null && shareModalState.items.length > 0}
-        onClose={() => setShareModalState(null)}
-        items={shareModalState?.items ?? []}
-        sourcePoolId={shareModalState?.sourcePoolId ?? activePoolId}
-        onComplete={handleShareComplete}
-      />
+        {confirmEmptyTrash && currentNav === 'trash' && (
+          <ConfirmPurgeModal
+            isOpen={confirmEmptyTrash && currentNav === 'trash'}
+            onClose={() => setConfirmEmptyTrash(false)}
+            onConfirm={handleEmptyTrashExecute}
+            itemCount={trashedFiles.length}
+            totalBytes={trashedTotalBytes}
+          />
+        )}
 
-      <ConfirmPurgeModal
-        isOpen={isClearSharePoolOpen}
-        onClose={() => setIsClearSharePoolOpen(false)}
-        onConfirm={handleClearSharePoolConfirm}
-        itemCount={Math.max(activePool?.fileCount ?? 0, files.length + folders.length)}
-        totalBytes={activePool?.totalBytes ?? files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0)}
-        mode="share_pool"
-      />
+        {pendingPurgeFiles !== null && pendingPurgeFiles.length > 0 && currentNav === 'trash' && (
+          <ConfirmPurgeModal
+            isOpen={pendingPurgeFiles !== null && pendingPurgeFiles.length > 0 && currentNav === 'trash'}
+            onClose={() => setPendingPurgeFiles(null)}
+            onConfirm={handleConfirmPurgeFiles}
+            itemCount={pendingPurgeFiles.length}
+            totalBytes={pendingPurgeTotalBytes}
+          />
+        )}
 
-      <ConfirmDriveActionModal
-        isOpen={driveActionModal.isOpen}
-        onClose={() => {
-          if (!driveActionModal.isLoading) {
-            setDriveActionModal((prev) => ({ ...prev, isOpen: false }));
-          }
-        }}
-        onConfirm={handleExecuteDriveAction}
-        action={driveActionModal.action}
-        account={driveActionModal.account}
-        filesCount={driveFilesCount}
-        totalBytes={driveTotalBytes}
-        isLoading={driveActionModal.isLoading}
-        errorMessage={driveActionModal.errorMessage}
-      />
+        {Boolean(shareModalState && shareModalState.items.length > 0) && (
+          <ShareModal
+            isOpen={shareModalState !== null && shareModalState.items.length > 0}
+            onClose={() => setShareModalState(null)}
+            items={shareModalState?.items ?? []}
+            sourcePoolId={shareModalState?.sourcePoolId ?? activePoolId}
+            onComplete={handleShareComplete}
+          />
+        )}
 
-      {toastMessage && (
-        <div {...stylex.props(styles.statusToast)}>
-          {toastMessage}
-        </div>
-      )}
+        {isClearSharePoolOpen && (
+          <ConfirmPurgeModal
+            isOpen={isClearSharePoolOpen}
+            onClose={() => setIsClearSharePoolOpen(false)}
+            onConfirm={handleClearSharePoolConfirm}
+            itemCount={sharePoolTotalItemCount}
+            totalBytes={sharePoolTotalBytes}
+            mode="share_pool"
+          />
+        )}
 
-      {errorNotice && (
-        <div
-          {...stylex.props(styles.statusToast, styles.errorToast)}
-          onClick={() => setErrorNotice(null)}
-        >
-          Notice: {errorNotice}
-        </div>
-      )}
+        {driveActionModal.isOpen && (
+          <ConfirmDriveActionModal
+            isOpen={driveActionModal.isOpen}
+            onClose={() => {
+              if (!driveActionModal.isLoading) {
+                setDriveActionModal((prev) => ({ ...prev, isOpen: false }));
+              }
+            }}
+            onConfirm={handleExecuteDriveAction}
+            account={driveActionModal.account}
+            filesCount={driveFilesCount}
+            totalBytes={driveTotalBytes}
+            isLoading={driveActionModal.isLoading}
+            errorMessage={driveActionModal.errorMessage}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }
