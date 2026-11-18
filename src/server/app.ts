@@ -191,13 +191,6 @@ function getAccountPoolId(accountId: string): number | undefined {
   return acc?.poolId;
 }
 
-function getFilePoolId(fileId: string): number | undefined {
-  const fileRow = sqlite.prepare('SELECT pool_id as poolId FROM files WHERE id = ? LIMIT 1').get(fileId) as
-    | { poolId: number }
-    | undefined;
-  return fileRow?.poolId;
-}
-
 function isAccountInSharePool(accountId: string): boolean {
   const poolId = getAccountPoolId(accountId);
   return poolId !== undefined && isSharePoolId(poolId);
@@ -1292,9 +1285,6 @@ const routes = app
       if (poolId === null) {
         return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
       }
-      if (isSharePoolId(poolId)) {
-        return c.json(sharePoolReadOnlyError('Deleting folders inside Share Pool is disabled'), 403);
-      }
 
       const rawPath = query.virtualPath || query.path;
       let normalizedPath: string;
@@ -1650,10 +1640,6 @@ const routes = app
   })
   .post('/api/files/:id/trash', async (c) => {
     const fileId = c.req.param('id');
-    const filePoolId = getFilePoolId(fileId);
-    if (filePoolId !== undefined && isSharePoolId(filePoolId)) {
-      return c.json(sharePoolReadOnlyError('Trashing files inside Share Pool is disabled'), 403);
-    }
     try {
       const updated = await trashFile(fileId);
       return c.json(updated);
@@ -1663,10 +1649,6 @@ const routes = app
   })
   .post('/api/files/:id/restore', async (c) => {
     const fileId = c.req.param('id');
-    const filePoolId = getFilePoolId(fileId);
-    if (filePoolId !== undefined && isSharePoolId(filePoolId)) {
-      return c.json(sharePoolReadOnlyError('Restoring files inside Share Pool is disabled'), 403);
-    }
     try {
       const updated = await restoreFile(fileId);
       return c.json(updated);
@@ -1676,10 +1658,6 @@ const routes = app
   })
   .delete('/api/files/:id/permanent', async (c) => {
     const fileId = c.req.param('id');
-    const filePoolId = getFilePoolId(fileId);
-    if (filePoolId !== undefined && isSharePoolId(filePoolId)) {
-      return c.json(sharePoolReadOnlyError('Permanently deleting files inside Share Pool is disabled'), 403);
-    }
     try {
       const purged = await purgeFile(fileId);
       return c.json(purged);
@@ -1691,9 +1669,6 @@ const routes = app
     const poolId = parsePoolIdWithDefault(c.req.query('poolId'), 1);
     if (poolId === null) {
       return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
-    }
-    if (isSharePoolId(poolId)) {
-      return c.json(sharePoolReadOnlyError('Emptying trash inside Share Pool is disabled'), 403);
     }
     try {
       const report = await emptyTrash(poolId);
