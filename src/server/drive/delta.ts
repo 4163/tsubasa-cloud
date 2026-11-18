@@ -14,7 +14,12 @@ import {
   deleteFileStmt,
   trashFileStmt,
 } from './sync.js';
-import { evictRemoteFolderByDriveId, normalizeVirtualPath } from './mirror.js';
+import {
+  evictRemoteFolderByDriveId,
+  getCachedVirtualPathByDriveId,
+  normalizeVirtualPath,
+  setCachedRemoteFolder,
+} from './mirror.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 import { invalidateDiscrepancyCache } from './detector.js';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
@@ -162,6 +167,11 @@ async function executeIncrementalSync(accountId: string): Promise<DeltaSyncRepor
                 );
                 batchFolderPaths.add(folderPath);
                 folderPathCache.set(change.fileId, folderPath);
+                const cachedFolderPath = getCachedVirtualPathByDriveId(rootFolderId, change.fileId);
+                if (cachedFolderPath && cachedFolderPath !== folderPath) {
+                  evictRemoteFolderByDriveId(rootFolderId, change.fileId);
+                  setCachedRemoteFolder(rootFolderId, folderPath, change.fileId);
+                }
                 folderInsidePool = true;
                 break;
               }

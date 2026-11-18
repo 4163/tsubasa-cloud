@@ -142,13 +142,13 @@ function getUpsertPendingDriveSyncStmt() {
   if (!_upsertPendingDriveSyncStmt) {
     _upsertPendingDriveSyncStmt = sqlite.prepare(`
       INSERT INTO pending_drive_sync (account_id, drive_file_id, virtual_path, file_id, attempts, last_error, next_retry_at)
-      VALUES (?, ?, ?, ?, 0, NULL, 0)
+      VALUES (?, ?, ?, ?, 0, NULL, ?)
       ON CONFLICT(account_id, drive_file_id) DO UPDATE SET
         virtual_path = excluded.virtual_path,
         file_id = excluded.file_id,
         attempts = 0,
         last_error = NULL,
-        next_retry_at = 0
+        next_retry_at = excluded.next_retry_at
     `);
   }
   return _upsertPendingDriveSyncStmt as any;
@@ -276,7 +276,11 @@ function upsertIndexedFileInCurrentTx(params: CommitIndexedFileParams): string {
           poolId,
           opType: 'file_trash',
           driveFileId: replacedActiveFile.driveFileId,
-          payload: { fileId: replacedActiveFile.id, driveFileId: replacedActiveFile.driveFileId },
+          payload: {
+            fileId: replacedActiveFile.id,
+            driveFileId: replacedActiveFile.driveFileId,
+            clearAppProperties: true,
+          },
         },
       ]);
     }
@@ -344,7 +348,8 @@ function upsertIndexedFileInCurrentTx(params: CommitIndexedFileParams): string {
   );
 
   if (markPendingDriveSync) {
-    getUpsertPendingDriveSyncStmt().run(accountId, driveFileId, virtualPath, fileId);
+    // Grace window avoids racing the immediate background stampAcceptedAppProperties call.
+    getUpsertPendingDriveSyncStmt().run(accountId, driveFileId, virtualPath, fileId, Date.now() + 30_000);
   }
 
   return fileId;
@@ -435,7 +440,6 @@ export async function scanAccountDiscrepancies(
 
     const validFolderIds = folderTree.folderIds;
 
-    // Sync only missing remote folders into SQLite folders table
     if (folderTree.folders.length > 0) {
       const existingFolderRows = sqlite
         .prepare('SELECT virtual_path FROM folders WHERE pool_id = ?')
@@ -928,12 +932,14 @@ export async function acceptAllExternalFiles(
         markPendingDriveSync: true,
       });
 
-      pendingAppPropertyDriveIds.add(item.driveFileId);
       stamps.push({ driveFileId: item.driveFileId, virtualPath, fileId });
     }
   });
 
   applyAccept();
+  for (const stamp of stamps) {
+    pendingAppPropertyDriveIds.add(stamp.driveFileId);
+  }
 
   const cachedReport = getCachedDiscrepancyReport(accountId);
   if (cachedReport) {
@@ -1093,7 +1099,6 @@ export async function resolvePathConflict(
     };
   }
 
-  // replace_existing
   const existingActive = await db.query.files.findFirst({
     where: and(eq(files.poolId, poolId), eq(files.virtualPath, baseVirtualPath), eq(files.isTrashed, false)),
   });

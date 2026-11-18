@@ -371,7 +371,6 @@ async function selectPlacementFromCandidates(
     return baseBudget;
   };
 
-  // Filter candidates with sufficient effective headroom and daily transfer budget
   const eligible = candidates.filter((cand) => {
     if (cand.isOverCeiling) return false;
     const effectiveHeadroom = getEffectiveHeadroom(cand.id, cand.headroomBytes);
@@ -560,7 +559,6 @@ export async function simulateBatchPlacement(
   const tree = buildDirectoryTree(items);
 
   async function placeNode(node: TreeNode): Promise<void> {
-    // Collect all descendant files in this branch
     function collectFiles(n: TreeNode): PlacementItem[] {
       const list = [...n.files];
       for (const child of n.subdirs.values()) {
@@ -572,7 +570,6 @@ export async function simulateBatchPlacement(
     const branchFiles = collectFiles(node);
     if (branchFiles.length === 0) return;
 
-    // Check if entire branch fits into a single account's effective headroom and transfer budget
     const eligibleForBranch = candidates.filter((cand) => {
       if (cand.isOverCeiling) return false;
       const effectiveHeadroom = getEffectiveHeadroom(cand.id, cand.headroomBytes);
@@ -609,7 +606,6 @@ export async function simulateBatchPlacement(
         );
       }
 
-      // Assign all files in branch to targetAccount
       for (const f of branchFiles) {
         recordDecision(
           commitCandidateDecision(
@@ -632,7 +628,6 @@ export async function simulateBatchPlacement(
       await placeNode(child);
     }
 
-    // Place remaining direct files in this node individually against the same candidate set
     for (const f of node.files) {
       const decision = await selectPlacementFromCandidates(
         f,

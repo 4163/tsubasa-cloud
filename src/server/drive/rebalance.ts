@@ -315,7 +315,6 @@ export async function executeAutoRebalance(
     (a) => a.poolId === sourceAccount.poolId && a.id !== sourceAccountId && !a.isDisabled
   );
 
-  // Pre-fetch initial headroom and 24h transfer quotas for all target candidate accounts
   const transferStatsByAccount = await getTransferStatsByAccountMap(
     targetCandidates.map((cand) => cand.id)
   );
@@ -331,7 +330,6 @@ export async function executeAutoRebalance(
   for (const candidateFile of plan.candidateFiles) {
     if (remainingExcess <= 0) break;
 
-    // Filter candidate target accounts that have BOTH sufficient headroom AND daily transfer quota
     const eligibleTargets = targetStates.filter(
       (t) => t.headroomBytes >= candidateFile.sizeBytes && t.remainingDailyBytes >= candidateFile.sizeBytes
     );
@@ -343,7 +341,6 @@ export async function executeAutoRebalance(
       continue;
     }
 
-    // Pick target account with largest headroom among eligible
     eligibleTargets.sort((a, b) => b.headroomBytes - a.headroomBytes);
     const chosenTarget = eligibleTargets[0];
 
@@ -491,7 +488,6 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     );
   }
 
-  // Pre-flight simulation using Folder-Cohesion Best-Fit
   const simulatedHeadrooms = new Map<string, number>(
     targetStates.map((t) => [t.account.id, t.headroomBytes])
   );
@@ -558,7 +554,6 @@ export async function evacuateAccountFiles(sourceAccountId: string): Promise<Eva
     plan.push({ file, targetAccountId: chosenTarget.account.id });
   }
 
-  // Pre-flight passed: execute all transfers grouped by target account
   const groupedByTarget = new Map<string, string[]>();
   for (const step of plan) {
     const existing = groupedByTarget.get(step.targetAccountId);

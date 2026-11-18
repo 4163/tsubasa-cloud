@@ -1470,7 +1470,7 @@ const routes = app
       }
     }
   )
-  // Internal/unmounted resumable session initializer; client uploads stream directly via /api/files/upload.
+  // Unused by the client UI; client uploads stream directly via /api/files/upload.
   .post(
     '/api/files/upload/session',
     validator(
@@ -1791,7 +1791,7 @@ const routes = app
         bumpPoolRevision(record.poolId);
         return c.json(record);
       } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        return mapDomainErrorToResponse(c, err);
       }
     }
   )
@@ -1853,7 +1853,7 @@ const routes = app
         bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(result);
       } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        return mapDomainErrorToResponse(c, err);
       }
     }
   )
@@ -1937,7 +1937,7 @@ const routes = app
         bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(res);
       } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        return mapDomainErrorToResponse(c, err);
       }
     }
   )
@@ -2003,7 +2003,7 @@ const routes = app
         bumpPoolRevision(getAccountPoolId(accountId));
         return c.json(res);
       } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        return mapDomainErrorToResponse(c, err);
       }
     }
   )

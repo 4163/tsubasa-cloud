@@ -1259,7 +1259,6 @@ export async function moveItems(
             outboxEntries
           );
         } else {
-          // Folder merge: ensure destination tree, move active and trashed files, and prune emptied source folders.
           for (const destPath of op.destFolderPathsToEnsure) {
             assertFolderPathNotOccupiedByFile(destPath, poolId);
             ensureLocalFolderPath(destPath, poolId);
@@ -1322,7 +1321,7 @@ export async function moveItems(
             });
           }
 
-          // Delete source folders bottom-up only if zero files (active or trashed) remain under them.
+          // Delete source folders bottom-up only if zero active or trashed files remain under them.
           const sortedSourceFolders = [...op.sourceFolderIdsAndPaths].sort(
             (a, b) => b.oldPath.length - a.oldPath.length
           );
@@ -1514,7 +1513,6 @@ export async function copyItems(
     }
   }
 
-  // Prune items whose ancestor folder is already included in this batch.
   const copyFolderPaths: string[] = [];
   const copySeenIds = new Set<string>();
   const resolvedCopyKinds: Array<'file' | 'folder'> = new Array(items.length);

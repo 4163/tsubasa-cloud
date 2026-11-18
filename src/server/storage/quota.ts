@@ -345,7 +345,7 @@ export async function recordTransfer(
 }
 
 function getSystemStorageBreakdownSync(poolId = 1): SystemStorageBreakdown {
-  // Roadmaps classify snapshots, database mirrors, and manifests as system storage
+  // Snapshots, database mirrors, and manifests stored under /.tsubasa count as system storage.
   const { lower, upper } = buildDirectoryPrefixBounds('/.tsubasa');
   const systemFileRecords = db
     .select({

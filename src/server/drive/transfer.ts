@@ -468,6 +468,11 @@ export async function executeStreamingUpload(
     let uploadRes: Response;
     if (target.sizeBytes <= SMALL_UPLOAD_MULTIPART_BYTES) {
       const payloadBuffer = await readStreamToBuffer(countingStream);
+      if (payloadBuffer.byteLength !== target.sizeBytes) {
+        throw new UploadValidationError(
+          `Upload size mismatch for "${target.virtualPath}": expected ${target.sizeBytes} bytes, received ${payloadBuffer.byteLength}`
+        );
+      }
       const boundary = `tsubasa_${randomUUID().replace(/-/g, '')}`;
       const metadataPart =
         `--${boundary}\r\n` +

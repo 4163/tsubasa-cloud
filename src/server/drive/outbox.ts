@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { sqlite } from '../db/index.js';
 import {
+  CLEARED_TSUBASA_APP_PROPERTIES,
   getAccountRootFolderId,
   getDriveClient,
   getDriveErrorStatus,
@@ -45,6 +46,7 @@ export interface FileRenameOutboxPayload {
 export interface FileTrashOutboxPayload {
   fileId: string;
   driveFileId: string;
+  clearAppProperties?: boolean;
 }
 
 export interface FileRestoreOutboxPayload {
@@ -199,6 +201,8 @@ let cachedStmts: {
   deletePendingDriveSync: SqliteStmt;
   markPendingDriveSyncFailed: SqliteStmt;
   selectMinPendingDriveSyncRetryAt: SqliteStmt;
+  selectActiveFileByDriveId: SqliteStmt;
+  hasPendingOutboxForDriveFile: SqliteStmt;
 } | null = null;
 
 function getStmts() {
@@ -303,6 +307,18 @@ function getStmts() {
       `SELECT MIN(next_retry_at) AS min_retry
        FROM pending_drive_sync
        WHERE attempts < ? AND next_retry_at > 0`
+    ),
+    selectActiveFileByDriveId: sqlite.prepare(
+      `SELECT id, virtual_path
+       FROM files
+       WHERE account_id = ? AND drive_file_id = ?
+       LIMIT 1`
+    ),
+    hasPendingOutboxForDriveFile: sqlite.prepare(
+      `SELECT 1
+       FROM drive_outbox
+       WHERE account_id = ? AND drive_file_id = ? AND status IN ('pending', 'processing', 'failed')
+       LIMIT 1`
     ),
   };
 
@@ -596,6 +612,18 @@ async function drainPendingDriveSync(): Promise<void> {
   }
 
   await runBoundedConcurrency(dueRows, ITEM_BATCH_CONCURRENCY, async (row) => {
+    if (stmts.hasPendingOutboxForDriveFile.get(row.account_id, row.drive_file_id)) {
+      return;
+    }
+
+    const currentFile = stmts.selectActiveFileByDriveId.get(row.account_id, row.drive_file_id) as
+      | { id: string; virtual_path: string }
+      | undefined;
+    if (!currentFile) {
+      stmts.deletePendingDriveSync.run(row.account_id, row.drive_file_id);
+      return;
+    }
+
     try {
       const drive = getDriveClient(row.account_id);
       await withDriveRetry(() =>
@@ -604,8 +632,8 @@ async function drainPendingDriveSync(): Promise<void> {
           requestBody: {
             appProperties: {
               tsubasa_managed: 'true',
-              tsubasa_virtual_path: row.virtual_path,
-              tsubasa_virtual_id: row.file_id,
+              tsubasa_virtual_path: currentFile.virtual_path,
+              tsubasa_virtual_id: currentFile.id,
             },
           },
           supportsAllDrives: false,
@@ -655,6 +683,7 @@ async function runDrainCycle(): Promise<void> {
   }
 
   activeDrainPromise = (async () => {
+    let nextScheduledRetryAt: number | null = null;
     try {
       do {
         drainRequestedDuringRun = false;
@@ -681,11 +710,13 @@ async function runDrainCycle(): Promise<void> {
         (v): v is number => v !== null && v !== undefined
       );
       if (candidates.length > 0) {
-        const nextRetryAt = Math.min(...candidates);
-        scheduleOutboxDrain(Math.max(0, nextRetryAt - Date.now()));
+        nextScheduledRetryAt = Math.min(...candidates);
       }
     } finally {
       activeDrainPromise = null;
+      if (nextScheduledRetryAt !== null) {
+        scheduleOutboxDrain(Math.max(0, nextScheduledRetryAt - Date.now()));
+      }
     }
   })();
 
@@ -765,13 +796,19 @@ export async function deleteRemoteFileIgnoreNotFound(
 
 async function trashDriveFileIgnoreNotFound(
   drive: ReturnType<typeof getDriveClient>,
-  fileId: string
+  fileId: string,
+  clearAppProperties = false
 ): Promise<void> {
   try {
     await withDriveRetry(() =>
       drive.files.update({
         fileId,
-        requestBody: { trashed: true },
+        requestBody: {
+          trashed: true,
+          ...(clearAppProperties
+            ? { appProperties: CLEARED_TSUBASA_APP_PROPERTIES as unknown as Record<string, string> }
+            : {}),
+        },
         supportsAllDrives: false,
       })
     );
@@ -896,7 +933,7 @@ async function executeOutboxItem(row: OutboxRow): Promise<void> {
 
     case 'file_trash': {
       const p = payload as FileTrashOutboxPayload;
-      await trashDriveFileIgnoreNotFound(drive, p.driveFileId);
+      await trashDriveFileIgnoreNotFound(drive, p.driveFileId, Boolean(p.clearAppProperties));
       return;
     }
 

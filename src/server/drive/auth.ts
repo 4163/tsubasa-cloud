@@ -216,7 +216,8 @@ class AuthPool {
         this.watchDebounceTimer.unref?.();
       });
       this.watcher.unref?.();
-      this.watcher.on('error', () => {
+      this.watcher.on('error', (err) => {
+        console.warn('OAuth directory watcher error:', err);
         this.stopWatching();
       });
     } catch (err) {

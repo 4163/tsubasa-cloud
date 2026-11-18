@@ -3,7 +3,7 @@ import { serve } from '@hono/node-server';
 import app from './app.js';
 import { sqlite } from './db/index.js';
 import { initializeDatabase } from './db/init.js';
-import { authPool, hydratePool1Startup } from './drive/index.js';
+import { authPool, hydratePool1Startup, stopOutboxWorker } from './drive/index.js';
 
 initializeDatabase();
 
@@ -26,6 +26,7 @@ function shutdown(signal: string): void {
   console.log(`Received ${signal}, shutting down...`);
 
   authPool.stopWatching();
+  stopOutboxWorker();
 
   const forceExitTimer = setTimeout(() => {
     sqlite.close();
