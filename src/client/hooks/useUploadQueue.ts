@@ -492,11 +492,13 @@ export function useUploadQueue({
     hasUnallocatedFiles;
   const startUploadTitle =
     allActionableComplete && !hasPendingEmptyFolders
-      ? 'All staged files are already uploaded'
+      ? 'All files already uploaded'
       : allConflictsSkipped && !hasPendingEmptyFolders
-      ? 'All staged files already exist in the destination'
+      ? 'All conflicting files set to skip'
       : failedItems.length > 0 && unstartedActionableItems.length === 0 && !hasPendingEmptyFolders
-      ? 'Use Retry failed to re-attempt failed uploads'
+      ? 'Use Retry failed to re-upload'
+      : hasUnallocatedFiles && !isPlanning
+      ? 'Resolve unallocated files first'
       : undefined;
 
   return {

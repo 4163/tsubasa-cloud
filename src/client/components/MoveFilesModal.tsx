@@ -5,6 +5,7 @@ import { colors, layout, spacing, radius, typography, motion } from '../tokens.s
 import { IconFolder } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
 import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import { SelectField } from './SelectField.js';
@@ -297,7 +298,7 @@ export function MoveFilesModal({
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                       >
-                        <span {...stylex.props(styles.fileName)} title={displayPath}>
+                        <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                           {displayPath}
                         </span>
                         <span {...stylex.props(styles.fileSize)}>
@@ -330,14 +331,13 @@ export function MoveFilesModal({
                 </option>
               ) : (
                 candidateAccounts.map((acc) => {
-                  const { canHold, optionLabel, optionTitle } =
+                  const { canHold, optionLabel } =
                     evaluateAccountTransferCandidate(acc, effectiveTotalBytes);
                   return (
                     <option
                       key={acc.id}
                       value={acc.id}
                       disabled={!canHold}
-                      title={optionTitle}
                     >
                       {optionLabel}
                     </option>

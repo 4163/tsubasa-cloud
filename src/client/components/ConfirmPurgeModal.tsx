@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, typography } from '../tokens.stylex.js';
 import { IconTrash, IconAlertTriangle } from './Icons.js';
 import { formatBytes } from '../utils/format.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 
@@ -113,7 +114,7 @@ export function ConfirmPurgeModal({
       />
 
       <div {...stylex.props(modalChromeStyles.body)}>
-        <div {...stylex.props(styles.pathHint)}>
+        <div {...stylex.props(styles.pathHint)} onMouseEnter={syncOverflowTitle}>
           {isSharePool ? (
             <>
               Target: share pool (_Tsubasa~ Pool share) · {itemCount} {itemCount === 1 ? 'item' : 'items'}

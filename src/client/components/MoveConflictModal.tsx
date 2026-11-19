@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, layout, radius, spacing, typography } from '../tokens.stylex.js';
 import { IconAlertTriangle } from './Icons.js';
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
@@ -406,9 +407,20 @@ export function MoveConflictModal({
             >
               {conflicts.map((conflict) => {
                 const meta = getConflictMatchMeta(conflict);
+                const normalizedTarget = (targetFolderPath || '/').replace(/\/+$/, '') || '/';
+                const destDir = getDestinationDirectory(conflict.destPath, normalizedTarget);
+                const hasNestedSubpath = destDir !== normalizedTarget;
                 return (
                   <div key={conflict.sourceFileId} {...stylex.props(styles.conflictRow)}>
-                    <span {...stylex.props(styles.conflictName)} title={conflict.destPath}>
+                    <span
+                      {...stylex.props(styles.conflictName)}
+                      title={hasNestedSubpath ? conflict.destPath : undefined}
+                      onMouseEnter={
+                        hasNestedSubpath
+                          ? undefined
+                          : (e) => syncOverflowTitle(e, conflict.destPath)
+                      }
+                    >
                       {conflict.sourceName}
                     </span>
                     <span {...stylex.props(styles.conflictSizes)}>
@@ -422,7 +434,7 @@ export function MoveConflictModal({
                         styles.matchBadge,
                         meta.isIdentical ? styles.matchBadgeIdentical : styles.matchBadgeDiff
                       )}
-                      title={meta.label}
+                      title={meta.isIdentical ? 'Byte-for-byte identical' : meta.label}
                     >
                       {meta.isIdentical ? 'Identical' : 'Different'}
                     </span>
@@ -474,11 +486,6 @@ export function MoveConflictModal({
           {...stylex.props(modalChromeStyles.dangerBtn, styles.overwriteBtn)}
           onClick={() => handleChoose('overwrite')}
           disabled={isSubmitting || !hasOverwriteTarget}
-          title={
-            !hasOverwriteTarget
-              ? 'Overwrite is unavailable because there is no existing destination file to replace'
-              : undefined
-          }
         >
           {isSubmitting && activeMode === 'overwrite' ? 'Overwriting...' : 'Overwrite'}
         </button>

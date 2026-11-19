@@ -414,6 +414,7 @@ export function DrawerSheet({
             onClick={() => requestClose()}
             disabled={isLocked}
             aria-label={closeAriaLabel}
+            title="Close"
           >
             <IconClose size={16} />
           </button>

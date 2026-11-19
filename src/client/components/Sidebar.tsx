@@ -812,6 +812,7 @@ export function Sidebar({
                 <button
                   type="button"
                   aria-label="Dismiss sidebar error"
+                  title="Dismiss"
                   onClick={onDismissSidebarError}
                   {...stylex.props(styles.inlineErrorDismissBtn)}
                 >

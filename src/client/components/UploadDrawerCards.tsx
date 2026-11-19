@@ -4,6 +4,7 @@ import { colors, spacing, radius, typography, motion } from '../tokens.stylex.js
 import { FileTypeIcon, IconCheck, IconAlertTriangle, IconChevronDown, IconFolderFilled } from './Icons.js';
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { DrawerButton } from './DrawerPrimitives.js';
 import {
   CEILING_14_25_GB,
@@ -367,10 +368,10 @@ export const UploadFileCard = React.memo(function UploadFileCard({
         <div {...stylex.props(styles.fileInfoGroup)}>
           <FileTypeIcon name={item.file.name || item.virtualPath} size={16} {...stylex.props(styles.fileIcon)} />
           <div {...stylex.props(styles.fileTitleCol)}>
-            <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+            <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
               {item.file.name}
             </span>
-            <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+            <span {...stylex.props(styles.fileVirtualPath)} onMouseEnter={syncOverflowTitle}>
               {item.virtualPath}
             </span>
           </div>
@@ -385,7 +386,7 @@ export const UploadFileCard = React.memo(function UploadFileCard({
             <IconCheck size={12} /> Complete
           </span>
         ) : progress?.status === 'error' ? (
-          <span {...stylex.props(styles.badge, styles.badgeError)} title={progress.error}>
+          <span {...stylex.props(styles.badge, styles.badgeError)}>
             {progress.error === 'Cancelled' ? 'Cancelled' : 'Failed'}
           </span>
         ) : isSkipped && existingFile ? (
@@ -440,7 +441,7 @@ export const UploadFileCard = React.memo(function UploadFileCard({
                   ? !canHoldUpload
                   : false;
               const disabledReason = lacksCapacity
-                ? `No drive has enough headroom or 24h transfer quota for ${formatBytes(item.file.size)}`
+                ? `Insufficient headroom or 24h quota for ${formatBytes(item.file.size)}`
                 : undefined;
               return (
                 <DrawerButton
@@ -461,7 +462,7 @@ export const UploadFileCard = React.memo(function UploadFileCard({
               <div {...stylex.props(styles.selectWrapper)}>
                 <select
                   aria-label={`Select target drive for ${item.virtualPath}`}
-                  title={chosenAcc ? `${chosenAcc.displayName || chosenAcc.id} (${chosenAcc.email || chosenAcc.id})` : 'Select drive'}
+                  title={chosenAcc?.email || undefined}
                   value={chosenAccountId}
                   disabled={isUploading || isComplete}
                   {...stylex.props(styles.accountSelect)}
@@ -477,7 +478,7 @@ export const UploadFileCard = React.memo(function UploadFileCard({
                       effectiveConflictAction === 'replace' && existingFile && acc.id === existingFile.accountId
                         ? existingFile.sizeBytes
                         : 0;
-                    const { canHold, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
+                    const { canHold, optionLabel } = evaluateAccountTransferCandidate(
                       acc,
                       item.file.size,
                       {
@@ -488,7 +489,7 @@ export const UploadFileCard = React.memo(function UploadFileCard({
                     );
 
                     return (
-                      <option key={acc.id} value={acc.id} disabled={!canHold} title={optionTitle}>
+                      <option key={acc.id} value={acc.id} disabled={!canHold}>
                         {optionLabel}
                       </option>
                     );
@@ -586,10 +587,10 @@ export const UploadFolderCard = React.memo(function UploadFolderCard({
             <IconFolderFilled size={16} />
           </span>
           <div {...stylex.props(styles.fileTitleCol)}>
-            <span {...stylex.props(styles.fileName)} title={group.folderPath}>
+            <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
               {group.name}
             </span>
-            <span {...stylex.props(styles.fileVirtualPath)} title={group.folderPath}>
+            <span {...stylex.props(styles.fileVirtualPath)} onMouseEnter={syncOverflowTitle}>
               {group.folderPath}
             </span>
           </div>
@@ -692,7 +693,7 @@ export const UploadFolderCard = React.memo(function UploadFolderCard({
                 disabled={isUploading || lacksCapacity}
                 title={
                   lacksCapacity
-                    ? 'Insufficient pool headroom or 24h transfer quota for all conflicting files in this folder'
+                    ? 'Insufficient headroom or 24h quota for folder conflicts'
                     : undefined
                 }
                 onClick={() => onApplyFolderConflictAction(group.key, opt.value)}

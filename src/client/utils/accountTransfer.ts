@@ -24,7 +24,6 @@ export interface AccountTransferEvaluationResult {
   isMuted: boolean;
   labelSuffix: string;
   optionLabel: string;
-  optionTitle: string;
 }
 
 /** Formats a byte count in gibibytes with one decimal place. */
@@ -86,6 +85,5 @@ export function evaluateAccountTransferCandidate(
     isMuted,
     labelSuffix,
     optionLabel: `${name}${labelSuffix}`,
-    optionTitle: `${name} (${acc.email || acc.id})${labelSuffix}`,
   };
 }

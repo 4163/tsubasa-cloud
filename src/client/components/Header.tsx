@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
 import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub } from './Icons';
 import type { ThemeChoice } from '../utils/theme.js';
+import { useMediaQuery } from '../utils/useBeforeUnload.js';
 
 interface HeaderProps {
   searchQuery: string;
@@ -260,6 +261,8 @@ export function Header({
   isMobileMenuOpen = false,
   mobileMenuControlsId = 'mobile-sidebar-dialog',
 }: HeaderProps) {
+  const isGitHubIconOnly = useMediaQuery('(max-width: 600px)');
+
   return (
     <header {...stylex.props(styles.header)}>
       <div {...stylex.props(styles.leftGroup)}>
@@ -271,6 +274,7 @@ export function Header({
             aria-label="Toggle navigation drawer"
             aria-expanded={isMobileMenuOpen}
             aria-controls={mobileMenuControlsId}
+            title="Menu"
           >
             <IconMenu {...stylex.props(styles.iconSvg)} />
           </button>
@@ -292,6 +296,7 @@ export function Header({
               {...stylex.props(styles.clearBtn)}
               onClick={() => onSearchChange('')}
               aria-label="Clear search"
+              title="Clear search"
             >
               <IconClose size={12} />
             </button>
@@ -341,6 +346,7 @@ export function Header({
           rel="noopener noreferrer"
           {...stylex.props(styles.githubLink)}
           aria-label="GitHub repository"
+          title={isGitHubIconOnly ? 'GitHub' : undefined}
         >
           <IconGitHub size={14} />
           <span {...stylex.props(styles.githubText)}>GitHub</span>

@@ -311,6 +311,7 @@ export function ModalHeader({
           onClick={onClose}
           disabled={isBusy}
           aria-label={closeAriaLabel}
+          title="Close"
         >
           <IconClose size={closeIconSize} />
         </button>

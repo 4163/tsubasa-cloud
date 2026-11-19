@@ -577,7 +577,6 @@ export function ActionPortal({
         ) : (
           segments.map((segment, idx) => {
             const isLast = idx === segments.length - 1;
-            const fullPath = '/' + segments.slice(0, idx + 1).join('/');
             return (
               <React.Fragment key={segment + idx}>
                 <span {...stylex.props(styles.crumbSeparator)}>›</span>
@@ -594,7 +593,6 @@ export function ActionPortal({
                   onDragLeave={(e) => handleBreadcrumbDragLeave(e, idx)}
                   onDrop={(e) => handleBreadcrumbDrop(e, idx)}
                   aria-current={isLast ? 'page' : undefined}
-                  title={fullPath}
                 >
                   {segment}
                 </button>
@@ -741,7 +739,6 @@ export function ActionPortal({
                 onClick={onSyncAll}
                 disabled={isSyncing}
                 aria-label={isSyncing ? 'Fetching Drive changes' : 'Fetch Drive changes'}
-                title="Fetch external changes from Google Drive and scan .oauths/ credentials"
               >
                 <IconRefreshCw {...stylex.props(actionButtonStyles.btnIcon)} />
                 {isSyncing ? 'Fetching...' : 'Fetch Drive changes'}

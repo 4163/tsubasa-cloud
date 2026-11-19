@@ -5,6 +5,7 @@ import { AccountAvatar } from './AccountAvatar.js';
 import { AccountTransferGauge } from './AccountTransferGauge.js';
 import { IconFolder, IconFunnel, IconFunnelX } from './Icons.js';
 import { RedactedEmail } from './RedactedEmail.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 
 export interface SidebarAccountCardProps {
   account: AccountItem;
@@ -508,7 +509,7 @@ export function SidebarAccountCard({
             <div {...stylex.props(styles.accountNameRow)}>
               <span
                 {...stylex.props(styles.accountName)}
-                title={`${acc.displayName || acc.id} (${acc.email || acc.id})`}
+                onMouseEnter={syncOverflowTitle}
               >
                 {acc.displayName || acc.id}
               </span>
@@ -523,7 +524,7 @@ export function SidebarAccountCard({
                     e.stopPropagation();
                     onToggleAccountFilter?.(acc.id);
                   }}
-                  title={isFiltered ? 'Remove filter for this account' : 'Filter files on this account'}
+                  title={isFiltered ? 'Clear account filter' : 'Filter by account'}
                   aria-label={
                     isFiltered
                       ? `Remove filter for ${acc.displayName || acc.id}`
@@ -541,11 +542,11 @@ export function SidebarAccountCard({
 
         <div {...stylex.props(styles.accountStatusGroup)}>
           {acc.isDisabled ? (
-            <span {...stylex.props(styles.disabledPill)} title="Excluded from cluster storage pool">
+            <span {...stylex.props(styles.disabledPill)} title="Excluded from storage pool">
               Disabled
             </span>
           ) : isBreached ? (
-            <span {...stylex.props(styles.fullPill)} title="Usable limit breached">
+            <span {...stylex.props(styles.fullPill)} title="750 MB buffer breached">
               Full
             </span>
           ) : acc.authorized ? (
@@ -602,7 +603,6 @@ export function SidebarAccountCard({
                     type="button"
                     {...stylex.props(styles.miniDangerBtn)}
                     onClick={() => onRemoveAccount(acc)}
-                    title="Remove credential file"
                   >
                     Remove
                   </button>
@@ -623,7 +623,7 @@ export function SidebarAccountCard({
               </span>
               <span
                 {...stylex.props(styles.storageValueText)}
-                title={`${headroomGb} GB free headroom remaining (${driveUsedGb} GB total Drive usage)`}
+                title={`${headroomGb} GB free · ${driveUsedGb} GB total in Drive`}
               >
                 {tsubasaUsedGb} / {capacityGb} GB ({usedPct}%)
               </span>
@@ -657,7 +657,6 @@ export function SidebarAccountCard({
                   type="button"
                   {...stylex.props(styles.miniChangesBtnRed)}
                   onClick={() => onOpenExternalChanges(acc.id)}
-                  title="Resolve external modifications or over-ceiling usage"
                 >
                   Changes
                 </button>
@@ -678,6 +677,7 @@ export function SidebarAccountCard({
                   type="button"
                   {...stylex.props(styles.miniEnableBtn)}
                   onClick={() => onEnableAccount(acc.id)}
+                  title="Include in storage pool"
                 >
                   Enable
                 </button>
@@ -687,6 +687,7 @@ export function SidebarAccountCard({
                   type="button"
                   {...stylex.props(styles.miniSyncBtn)}
                   onClick={() => onDisableAccount(acc)}
+                  title="Exclude from storage pool"
                 >
                   Disable
                 </button>
@@ -696,7 +697,6 @@ export function SidebarAccountCard({
                   type="button"
                   {...stylex.props(styles.miniDangerBtn)}
                   onClick={() => onRemoveAccount(acc)}
-                  title="Permanently remove drive and credentials"
                 >
                   Remove
                 </button>

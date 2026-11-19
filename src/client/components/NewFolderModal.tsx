@@ -5,6 +5,7 @@ import { IconFolderPlus } from './Icons.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import { getItemNameError } from '../utils/virtualPath.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 
 interface NewFolderModalProps {
   isOpen: boolean;
@@ -103,7 +104,12 @@ export function NewFolderModal({
 
       <form onSubmit={handleSubmit}>
         <div {...stylex.props(modalChromeStyles.body)}>
-          <div {...stylex.props(styles.pathHint)}>
+          <div
+            {...stylex.props(styles.pathHint)}
+            onMouseEnter={
+              currentPath !== '/' ? (e) => syncOverflowTitle(e, currentPath) : undefined
+            }
+          >
             Location: {currentPath === '/' ? '/ (Root)' : currentPath}
           </div>
 

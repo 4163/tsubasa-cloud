@@ -1,5 +1,4 @@
 import type {
-  AccountItem,
   ClientFileRecord,
   ClientFolder,
   SortColumn,
@@ -102,12 +101,4 @@ export function getSessionSortDirection(fallback: SortDirection = 'asc'): SortDi
     // sessionStorage not accessible
   }
   return fallback;
-}
-
-export function getAccountTooltip(accountId: string, fileAcc?: AccountItem): string {
-  const email = fileAcc?.email || accountId;
-  if (fileAcc?.displayName && fileAcc.displayName !== email) {
-    return `${fileAcc.displayName} (${email})`;
-  }
-  return email;
 }

@@ -163,3 +163,21 @@ export function runWithViewTransition(update: () => void): void {
 export function isModalActive(): boolean {
   return typeof document !== 'undefined' && Boolean(document.querySelector('dialog[open], [role="dialog"]'));
 }
+
+/** Sets `title` only while single-line text overflows its element. */
+export function syncOverflowTitle(
+  e: { currentTarget: HTMLElement },
+  text?: string
+): void {
+  const el = e.currentTarget;
+  if (el.scrollWidth > el.clientWidth) {
+    const resolved = text !== undefined ? text : (el.textContent ?? '');
+    if (resolved && el.title !== resolved) {
+      el.title = resolved;
+    }
+    return;
+  }
+  if (el.hasAttribute('title')) {
+    el.removeAttribute('title');
+  }
+}

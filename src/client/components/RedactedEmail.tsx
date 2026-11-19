@@ -66,7 +66,6 @@ const styles = stylex.create({
 export interface RedactedEmailProps {
   email: string;
   prefix?: string;
-  tooltip?: string;
   style?: stylex.StyleXStyles;
   stopClickPropagation?: boolean;
 }
@@ -74,7 +73,6 @@ export interface RedactedEmailProps {
 export function RedactedEmail({
   email,
   prefix,
-  tooltip,
   style,
   stopClickPropagation = false,
 }: RedactedEmailProps) {
@@ -97,12 +95,10 @@ export function RedactedEmail({
   }, []);
 
   const isRevealed = isHovered || isSelected;
-  const resolvedTooltip = tooltip ?? (prefix ? `${prefix}${email}` : email);
 
   return (
     <span
       ref={spanRef}
-      title={resolvedTooltip}
       {...stylex.props(styles.redactedEmail, style, isRevealed && styles.redactedEmailRevealed)}
       onMouseEnter={() => {
         setIsHovered(true);

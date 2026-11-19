@@ -226,7 +226,7 @@ Native HTML `title` tooltips appear only on desktop pointer hover and never trig
 **Add `title` only for:**
 - **Hidden or icon-only labels.** Controls with no visible text, including icon-only table row buttons, sidebar icon buttons, and Action Portal controls whose labels drop in compact overflow mode. Set `title` only while the label is hidden.
 - **Overflowing text.** Single-line truncated strings (filenames, paths, breadcrumbs, account names, share batch names, error badges) only when the text actually overflows (`scrollWidth > clientWidth`).
-- **Non-obvious affordances and domain states.** Interactive elements that do not look clickable (such as the account selection pill that opens the Move Files modal), hidden context needed before acting (such as a trashed item's original path), and compact status pills whose meaning is specific to Tsubasa (`Full` at the 750 MB buffer, `Disabled` when excluded from the pool).
+- **Non-obvious function or state.** Elements whose text does not make their function or meaning obvious at a glance, such as a selection badge (`Alex · 3 selected · 1.2 GB`) that opens the Move Files modal, hidden context needed before acting (such as a target drive badge's email in a drawer), or compact status pills with Tsubasa-specific rules (`Full` at the 750 MB buffer, `Disabled` when excluded from the pool).
 - **Non-obvious disabled buttons.** Disabled buttons whose blocker is not visible next to the control (for example, `Start upload` blocked by a staged file that exceeds 14.25 GB or has no valid target account).
 
 **Never add `title` for:**
@@ -242,7 +242,7 @@ Native HTML `title` tooltips appear only on desktop pointer hover and never trig
 | :--- | :--- | :--- |
 | **Hidden or dropped label** | Exact label that was hidden. Sentence case, no period, no extra words. | `Upload file`, `Paste (2)`, `Download` |
 | **Overflowing text** | Exact raw string with no prefix or wrapper copy. | `/Projects/2026/archive.tar.gz` |
-| **Non-obvious affordance, domain pill, or disabled blocker** | One short fragment. No `"Click to..."` filler, no trailing period. | `Move selected files to another account`, `750 MB buffer reached`, `No account with enough headroom` |
+| **Non-obvious function, state, or disabled blocker** | One short fragment. No `"Click to..."` filler, no trailing period. | `Move selected files to another account`, `750 MB buffer breached`, `No account with enough headroom` |
 
 ---
 

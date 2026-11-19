@@ -106,33 +106,21 @@ const SORTABLE_COLUMNS: ReadonlyArray<{
   trashLabel?: string;
   sortSubject: string;
   trashSortSubject?: string;
-  ascTitleHint: string;
-  descTitleHint: string;
-  defaultTitleHint: string;
 }> = [
   {
     column: 'name',
     label: 'Name',
     sortSubject: 'Name',
-    ascTitleHint: '(Z to A)',
-    descTitleHint: '(A to Z)',
-    defaultTitleHint: '(A to Z)',
   },
   {
     column: 'account',
     label: 'Account',
     sortSubject: 'Account',
-    ascTitleHint: '(Z to A)',
-    descTitleHint: '(A to Z)',
-    defaultTitleHint: '(A to Z)',
   },
   {
     column: 'size',
     label: 'Size',
     sortSubject: 'Size',
-    ascTitleHint: '(largest first)',
-    descTitleHint: '(smallest first)',
-    defaultTitleHint: '(largest first)',
   },
   {
     column: 'date',
@@ -140,9 +128,6 @@ const SORTABLE_COLUMNS: ReadonlyArray<{
     trashLabel: 'Date trashed',
     sortSubject: 'Date modified',
     trashSortSubject: 'Date trashed',
-    ascTitleHint: '(newest first)',
-    descTitleHint: '(oldest first)',
-    defaultTitleHint: '(newest first)',
   },
 ];
 
@@ -997,11 +982,6 @@ export function FileTable({
           const isActive = currentSortColumn === col.column;
           const label = isTrashView && col.trashLabel ? col.trashLabel : col.label;
           const subject = isTrashView && col.trashSortSubject ? col.trashSortSubject : col.sortSubject;
-          const titleHint = isActive
-            ? currentSortDirection === 'asc'
-              ? col.ascTitleHint
-              : col.descTitleHint
-            : col.defaultTitleHint;
 
           return (
             <div
@@ -1015,7 +995,6 @@ export function FileTable({
                 {...stylex.props(styles.headerBtn, styles.headerBtnLeft, isActive && styles.headerBtnActive)}
                 onClick={() => handleSort(col.column)}
                 aria-label={`Sort by ${subject} in ${isActive && currentSortDirection === 'asc' ? 'descending' : 'ascending'} order`}
-                title={`Sort by ${subject} ${titleHint}`}
               >
                 <span>{label}</span>
                 <span {...stylex.props(styles.sortSlot)}>

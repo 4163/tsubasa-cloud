@@ -13,6 +13,7 @@ import {
   IconCheck,
 } from './Icons.js';
 import { formatBytes, COPY_FEEDBACK_DURATION_MS } from '../utils/format.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import type {
   ActionPortalClipboard,
   SelectedAccountGroup,
@@ -387,7 +388,7 @@ function ShareCopyButton({
           /* copy failed; leave button un-marked */
         }
       }}
-      title={isTruncatedBatch ? title : compact ? (isCopied ? copiedLabel : defaultLabel) : undefined}
+      title={!isTruncatedBatch && compact ? (isCopied ? copiedLabel : defaultLabel) : undefined}
       aria-label={title}
     >
       {isCopied ? (
@@ -400,7 +401,11 @@ function ShareCopyButton({
           <span data-badge-static="true" {...stylex.props(styles.badgeStaticText)}>
             {isCopied ? 'Copied\u00A0' : 'Copy\u00A0'}
           </span>
-          <span data-badge-truncate="true" {...stylex.props(styles.badgeTruncateText)}>
+          <span
+            data-badge-truncate="true"
+            {...stylex.props(styles.badgeTruncateText)}
+            onMouseEnter={syncOverflowTitle}
+          >
             {batchInfo.batchFolderName}
           </span>
           {!isCopied && batchInfo.linksCount > 1 && (
@@ -489,10 +494,14 @@ export function SelectionBatchBar({
                   !canTruncateName && styles.badgeNoShrink
                 )}
                 onClick={() => onOpenMoveFilesModal?.(group)}
-                title={`${group.accountName} · ${group.fileIds.length} selected · ${formatBytes(group.totalBytes)}. Click to move selected files to another account`}
+                title="Move selected files to another account"
               >
                 {canTruncateName ? (
-                  <span data-badge-truncate="true" {...stylex.props(styles.badgeTruncateText)}>
+                  <span
+                    data-badge-truncate="true"
+                    {...stylex.props(styles.badgeTruncateText)}
+                    onMouseEnter={syncOverflowTitle}
+                  >
                     {group.accountName}
                   </span>
                 ) : (
@@ -720,7 +729,6 @@ export function SelectionBatchBar({
           {...stylex.props(styles.clearBtn, actionButtonStyles.focusRing)}
           onClick={onClearSelection}
           aria-label="Deselect all"
-          title="Deselect all (Esc)"
         >
           Clear
         </button>
@@ -829,7 +837,6 @@ export function SharePoolBar({
           {...stylex.props(styles.emptyTrashBtn, actionButtonStyles.focusRing)}
           onClick={onClearSharePool}
           aria-label="Clear share pool"
-          title="Permanently delete all copied files and folders in Share Pool"
         >
           <IconTrash {...stylex.props(actionButtonStyles.btnIcon)} />
           Clear share pool

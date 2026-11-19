@@ -5,6 +5,7 @@ import { colors, spacing, radius, layout, typography, motion } from '../tokens.s
 import { IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolderFilled } from './Icons.js';
 import { DrawerSheet, DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
 import { formatBytes } from '../utils/format.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { useExternalChanges } from '../hooks/useExternalChanges.js';
 import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 import type {
@@ -518,7 +519,6 @@ export function ExternalChangesDrawer({
     setShowIndividualFiles,
     confirmingEject,
     setConfirmingEject,
-    currentAccount,
     showRebalance,
     isLocked,
     exactDuplicates,
@@ -694,12 +694,12 @@ export function ExternalChangesDrawer({
                   <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                 </span>
                 <div {...stylex.props(styles.fileTitleCol)}>
-                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                     {item.name}
                   </span>
                   <span
                     {...stylex.props(styles.fileVirtualPath)}
-                    title={item.virtualPath}
+                    onMouseEnter={syncOverflowTitle}
                   >
                     {item.virtualPath}
                   </span>
@@ -773,10 +773,10 @@ export function ExternalChangesDrawer({
                   <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                 </span>
                 <div {...stylex.props(styles.fileTitleCol)}>
-                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                     {item.name}
                   </span>
-                  <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileVirtualPath)} onMouseEnter={syncOverflowTitle}>
                     {item.virtualPath}
                   </span>
                 </div>
@@ -795,7 +795,7 @@ export function ExternalChangesDrawer({
                 <span {...stylex.props(styles.conflictOriginTag)}>In pool</span>
                 <span
                   {...stylex.props(styles.conflictAccountEmail)}
-                  title={item.existingFile.accountEmail}
+                  onMouseEnter={syncOverflowTitle}
                 >
                   {item.existingFile.accountEmail}
                 </span>
@@ -805,7 +805,7 @@ export function ExternalChangesDrawer({
               </div>
               <div {...stylex.props(styles.conflictCompareRow)}>
                 <span {...stylex.props(styles.conflictOriginTag)}>This drive</span>
-                <span {...stylex.props(styles.conflictAccountEmail)} title={item.accountEmail}>
+                <span {...stylex.props(styles.conflictAccountEmail)} onMouseEnter={syncOverflowTitle}>
                   {item.accountEmail}
                 </span>
                 <span {...stylex.props(styles.conflictSizeText)}>{formatBytes(item.sizeBytes)}</span>
@@ -840,6 +840,7 @@ export function ExternalChangesDrawer({
                     variant="secondary"
                     onClick={() => handleResolveConflict(item, 'eject')}
                     disabled={isLocked}
+                    title="Move to Drive root"
                   >
                     Eject
                   </DrawerButton>
@@ -871,6 +872,7 @@ export function ExternalChangesDrawer({
                     variant="secondary"
                     onClick={() => handleResolveConflict(item, 'eject')}
                     disabled={isLocked}
+                    title="Move to Drive root"
                   >
                     Eject
                   </DrawerButton>
@@ -897,7 +899,7 @@ export function ExternalChangesDrawer({
                   <IconFolderFilled size={16} />
                 </span>
                 <div {...stylex.props(styles.fileTitleCol)}>
-                  <span {...stylex.props(styles.fileName)} title={report.poolFolderName}>
+                  <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                     {report.poolFolderName}
                   </span>
                   <span {...stylex.props(styles.fileVirtualPath)}>{poolSummaryParts.join(' · ')}</span>
@@ -978,12 +980,12 @@ export function ExternalChangesDrawer({
                   <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                 </span>
                 <div {...stylex.props(styles.fileTitleCol)}>
-                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                     {item.name}
                   </span>
                   <span
                     {...stylex.props(styles.fileVirtualPath)}
-                    title={item.virtualPath}
+                    onMouseEnter={syncOverflowTitle}
                   >
                     {item.virtualPath}
                   </span>
@@ -1028,12 +1030,12 @@ export function ExternalChangesDrawer({
                   <FileTypeIcon name={item.name || item.virtualPath} size={16} />
                 </span>
                 <div {...stylex.props(styles.fileTitleCol)}>
-                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                     {item.name}
                   </span>
                   <span
                     {...stylex.props(styles.fileVirtualPath)}
-                    title={item.virtualPath}
+                    onMouseEnter={syncOverflowTitle}
                   >
                     {item.virtualPath}
                   </span>
@@ -1081,10 +1083,10 @@ export function ExternalChangesDrawer({
                   <FileTypeIcon name={item.virtualPath} size={16} />
                 </span>
                 <div {...stylex.props(styles.fileTitleCol)}>
-                  <span {...stylex.props(styles.fileName)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                     {baseName}
                   </span>
-                  <span {...stylex.props(styles.fileVirtualPath)} title={item.virtualPath}>
+                  <span {...stylex.props(styles.fileVirtualPath)} onMouseEnter={syncOverflowTitle}>
                     {item.virtualPath}
                   </span>
                 </div>
@@ -1143,11 +1145,6 @@ export function ExternalChangesDrawer({
         <div {...stylex.props(styles.selectWrapper)}>
           <select
             aria-label="Select connected account"
-            title={
-              currentAccount
-                ? `${currentAccount.displayName || currentAccount.id} (${currentAccount.email || currentAccount.id})`
-                : 'Select connected account'
-            }
             {...stylex.props(styles.select)}
             value={selectedAccount}
             onChange={(e) => setSelectedAccount(e.target.value)}

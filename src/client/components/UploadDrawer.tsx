@@ -11,6 +11,7 @@ import {
   IconRotateCcw,
 } from './Icons.js';
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { DrawerSectionHeader, DrawerButton, DrawerSheet } from './DrawerPrimitives.js';
 import { useUploadQueue } from '../hooks/useUploadQueue.js';
 import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
@@ -547,10 +548,10 @@ export function UploadDrawer({
                 <IconFolderFilled size={16} />
               </span>
               <div {...stylex.props(styles.fileTitleCol)}>
-                <span {...stylex.props(styles.fileName)} title={row.folderPath}>
+                <span {...stylex.props(styles.fileName)} onMouseEnter={syncOverflowTitle}>
                   {row.name}
                 </span>
-                <span {...stylex.props(styles.fileVirtualPath)} title={row.folderPath}>
+                <span {...stylex.props(styles.fileVirtualPath)} onMouseEnter={syncOverflowTitle}>
                   {row.folderPath}
                 </span>
               </div>
@@ -607,9 +608,9 @@ export function UploadDrawer({
         <div {...stylex.props(styles.summaryMainRow)}>
           <div {...stylex.props(styles.destinationGroup)}>
             <span {...stylex.props(styles.destinationLabel)}>Destination:</span>
-            <span {...stylex.props(styles.destinationPath)} title={currentPath}>
+            <span {...stylex.props(styles.destinationPath)}>
               <IconFolder size={12} {...stylex.props(styles.destinationIcon)} />
-              <span {...stylex.props(styles.destinationPathText)}>
+              <span {...stylex.props(styles.destinationPathText)} onMouseEnter={syncOverflowTitle}>
                 {currentPath === '/' ? 'Root (/)' : currentPath}
               </span>
             </span>
@@ -673,7 +674,7 @@ export function UploadDrawer({
                   aria-pressed={active}
                   title={
                     lacksCapacity
-                      ? 'Insufficient pool headroom or 24h transfer quota for all conflicting files'
+                      ? 'Insufficient headroom or 24h quota'
                       : undefined
                   }
                   onClick={() => handleApplyBatchConflictAction(opt.value)}

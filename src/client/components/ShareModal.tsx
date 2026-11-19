@@ -17,6 +17,7 @@ import {
   COPY_FEEDBACK_DURATION_MS,
 } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import type { ShareTargetItem, ShareExecuteResult } from '../types.js';
@@ -886,8 +887,12 @@ export function ShareModal({
                             <div {...stylex.props(styles.linkRow, isLast && styles.rowLast)}>
                               <div {...stylex.props(styles.linkRowTop)}>
                                 <div {...stylex.props(styles.linkAccountCol)}>
-                                  <span {...stylex.props(styles.linkAccountName)}>{displayName}</span>
-                                  <span {...stylex.props(styles.linkAccountEmail)}>{link.accountEmail}</span>
+                                  <span {...stylex.props(styles.linkAccountName)} onMouseEnter={syncOverflowTitle}>
+                                    {displayName}
+                                  </span>
+                                  <span {...stylex.props(styles.linkAccountEmail)} onMouseEnter={syncOverflowTitle}>
+                                    {link.accountEmail}
+                                  </span>
                                 </div>
                                 <span {...stylex.props(styles.coverageText)}>
                                   {link.filesCount} {link.filesCount === 1 ? 'file' : 'files'} ·{' '}
@@ -959,7 +964,7 @@ export function ShareModal({
                     ) : null}
                   </span>
                   <div {...stylex.props(styles.summaryTextCol)}>
-                    <span {...stylex.props(styles.summaryTitle)} title={summaryTitle}>
+                    <span {...stylex.props(styles.summaryTitle)} onMouseEnter={syncOverflowTitle}>
                       {summaryTitle}
                     </span>
                     <span {...stylex.props(styles.summaryMeta)}>
@@ -1117,17 +1122,19 @@ export function ShareModal({
                               </span>
                               <div {...stylex.props(styles.driveInfoCol)}>
                                 <div {...stylex.props(styles.driveTopLine)}>
-                                  <span {...stylex.props(styles.driveName)}>
+                                  <span {...stylex.props(styles.driveName)} onMouseEnter={syncOverflowTitle}>
                                     {getAccountLabel(acc.displayName, acc.email, acc.id)}
                                   </span>
                                 </div>
                                 <div {...stylex.props(styles.driveSubLine)}>
-                                  <span {...stylex.props(styles.driveEmail)}>{acc.email}</span>
+                                  <span {...stylex.props(styles.driveEmail)} onMouseEnter={syncOverflowTitle}>
+                                    {acc.email}
+                                  </span>
                                   <span {...stylex.props(styles.driveMetaSep)} aria-hidden="true">
                                     ·
                                   </span>
                                   {!acc.currentPoolIsShare && (
-                                    <span {...stylex.props(styles.drivePoolMeta)}>
+                                    <span {...stylex.props(styles.drivePoolMeta)} onMouseEnter={syncOverflowTitle}>
                                       {acc.currentPoolName}
                                     </span>
                                   )}

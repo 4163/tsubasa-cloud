@@ -21,8 +21,9 @@ import {
   parseInternalDropItems,
 } from '../utils/virtualPath.js';
 import { isInternalItemDrag } from '../utils/dataTransfer.js';
-import { formatDate, getAccountTooltip } from '../utils/fileTableSort.js';
+import { formatDate } from '../utils/fileTableSort.js';
 import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
+import { syncOverflowTitle } from '../utils/workspaceHelpers.js';
 import { RedactedEmail } from './RedactedEmail.js';
 import type { AccountItem, ClientFileRecord, ClientFolder } from '../types.js';
 
@@ -491,7 +492,7 @@ export const MemoParentRow = React.memo(function MemoParentRow({
         }}
       >
         <div role="gridcell" {...stylex.props(rowStyles.checkboxCell)} />
-        <div role="gridcell" {...stylex.props(rowStyles.nameCell)} title={path}>
+        <div role="gridcell" {...stylex.props(rowStyles.nameCell)}>
           <IconFolderFilled {...stylex.props(rowStyles.itemIcon, rowStyles.folderIcon)} />
           <span {...stylex.props(rowStyles.itemLabel)}>.. (Parent directory)</span>
         </div>
@@ -505,6 +506,7 @@ export const MemoParentRow = React.memo(function MemoParentRow({
             type="button"
             {...stylex.props(rowStyles.rowBtn)}
             aria-label="Open parent folder"
+            title="Open parent folder"
             onClick={(e) => {
               e.stopPropagation();
               onNavigate(path);
@@ -668,9 +670,9 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
           </button>
         </div>
 
-        <div role="gridcell" {...stylex.props(rowStyles.nameCell)} title={folder.virtualPath}>
+        <div role="gridcell" {...stylex.props(rowStyles.nameCell)}>
           <IconFolderFilled {...stylex.props(rowStyles.itemIcon, rowStyles.folderIcon)} />
-          <span {...stylex.props(rowStyles.itemLabel)}>
+          <span {...stylex.props(rowStyles.itemLabel)} onMouseEnter={syncOverflowTitle}>
             {isSearching ? folder.virtualPath : folder.name}
           </span>
         </div>
@@ -682,7 +684,6 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
         <div
           role="gridcell"
           {...stylex.props(rowStyles.tabularCell)}
-          title={folderSize > 0 ? `${formatBytes(folderSize)} across descendant files` : 'Empty folder'}
         >
           {folderSize > 0 ? formatBytes(folderSize) : '—'}
         </div>
@@ -695,6 +696,7 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
               type="button"
               {...stylex.props(rowStyles.rowBtn)}
               aria-label={`Share folder ${folder.name}`}
+              title="Share"
               onClick={(e) => {
                 e.stopPropagation();
                 onShareItem({
@@ -718,9 +720,11 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
               )}
               aria-label={`Copy share link for ${folder.name}`}
               title={
-                folderBatchLinks.length === 1
-                  ? `Copy share link: ${folderBatchLinks[0].webViewLink}`
-                  : `Copy ${folderBatchLinks.length} share links (across ${folderBatchLinks.length} drives)`
+                isCopiedBatch
+                  ? 'Copied'
+                  : folderBatchLinks.length === 1
+                    ? 'Copy share link'
+                    : `Copy share links (${folderBatchLinks.length})`
               }
               onClick={(e) => {
                 e.stopPropagation();
@@ -740,6 +744,7 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
               type="button"
               {...stylex.props(rowStyles.rowBtn, rowStyles.rowBtnDanger)}
               aria-label="Delete folder"
+              title="Delete"
               onClick={(e) => {
                 e.stopPropagation();
                 onDeleteFolder(folder);
@@ -752,6 +757,7 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
             type="button"
             {...stylex.props(rowStyles.rowBtn)}
             aria-label="Open folder"
+            title="Open folder"
             onClick={(e) => {
               e.stopPropagation();
               onNavigate(folder.virtualPath);
@@ -894,11 +900,11 @@ export const MemoFileRow = React.memo(function MemoFileRow({
           </button>
         </div>
 
-        <div role="gridcell" {...stylex.props(rowStyles.nameCell)} title={file.virtualPath}>
+        <div role="gridcell" {...stylex.props(rowStyles.nameCell)}>
           <FileTypeIcon name={file.name || file.virtualPath} {...stylex.props(rowStyles.itemIcon)} />
           <span
             {...stylex.props(rowStyles.itemLabel)}
-            title={isTrashItem ? `Original location: ${file.virtualPath}` : undefined}
+            onMouseEnter={syncOverflowTitle}
           >
             {isTrashItem ? file.virtualPath : isSearching ? file.virtualPath : file.name}
           </span>
@@ -909,7 +915,6 @@ export const MemoFileRow = React.memo(function MemoFileRow({
             <div {...stylex.props(rowStyles.selectWrapper)}>
               <select
                 aria-label={`Transfer ${file.name} to another account`}
-                title={fileAcc ? `${fileAcc.displayName || file.accountId} (${fileAcc.email || file.accountId})` : file.accountId}
                 value={file.accountId}
                 disabled={isTransferring}
                 {...stylex.props(
@@ -932,14 +937,14 @@ export const MemoFileRow = React.memo(function MemoFileRow({
                   </option>
                 )}
                 {accounts.map((acc) => {
-                  const { isMuted, optionTitle, optionLabel } = evaluateAccountTransferCandidate(
+                  const { isMuted, optionLabel } = evaluateAccountTransferCandidate(
                     acc,
                     file.sizeBytes,
                     { isCurrent: acc.id === file.accountId }
                   );
 
                   return (
-                    <option key={acc.id} value={acc.id} disabled={isMuted} title={optionTitle}>
+                    <option key={acc.id} value={acc.id} disabled={isMuted}>
                       {optionLabel}
                     </option>
                   );
@@ -952,7 +957,6 @@ export const MemoFileRow = React.memo(function MemoFileRow({
           ) : (
             <RedactedEmail
               email={fileAcc?.email || file.accountId}
-              tooltip={getAccountTooltip(file.accountId, fileAcc)}
               style={rowStyles.accountPill}
             />
           )}
@@ -974,6 +978,7 @@ export const MemoFileRow = React.memo(function MemoFileRow({
                   type="button"
                   {...stylex.props(rowStyles.rowBtn)}
                   aria-label="Restore to original location"
+                  title="Restore"
                   onClick={(e) => {
                     e.stopPropagation();
                     onRestore(file);
@@ -987,6 +992,7 @@ export const MemoFileRow = React.memo(function MemoFileRow({
                   type="button"
                   {...stylex.props(rowStyles.rowBtn, rowStyles.rowBtnDanger)}
                   aria-label="Delete permanently from Google Drive"
+                  title="Purge"
                   onClick={(e) => {
                     e.stopPropagation();
                     onPermanentDelete(file);
@@ -1003,6 +1009,7 @@ export const MemoFileRow = React.memo(function MemoFileRow({
                   type="button"
                   {...stylex.props(rowStyles.rowBtn)}
                   aria-label={`Share file ${file.name}`}
+                  title="Share"
                   onClick={(e) => {
                     e.stopPropagation();
                     onShareItem({
@@ -1021,6 +1028,7 @@ export const MemoFileRow = React.memo(function MemoFileRow({
                 type="button"
                 {...stylex.props(rowStyles.rowBtn)}
                 aria-label="Download file"
+                title="Download"
                 onClick={(e) => {
                   e.stopPropagation();
                   onDownload(file);
@@ -1032,6 +1040,7 @@ export const MemoFileRow = React.memo(function MemoFileRow({
                 type="button"
                 {...stylex.props(rowStyles.rowBtn)}
                 aria-label="Move to trash"
+                title="Delete"
                 onClick={(e) => {
                   e.stopPropagation();
                   onTrash(file);
