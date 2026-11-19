@@ -63,6 +63,10 @@ export const rowStyles = stylex.create({
     transition: motion.transitionFast,
     '@media (pointer: coarse)': {
       height: '44px',
+      ':has([data-row="true"]:active)': {
+        backgroundColor: colors.rowHover,
+        transition: motion.transitionTap,
+      },
     },
     '@media (max-width: 768px)': {
       height: layout.mobileRowHeight,
@@ -101,22 +105,12 @@ export const rowStyles = stylex.create({
     transition: motion.transitionFast,
     '@media (pointer: coarse)': {
       gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 120px',
-      ':active': {
-        backgroundColor: colors.rowHover,
-        transition: motion.transitionTap,
-      },
     },
     '@media (max-width: 768px)': {
       gridTemplateColumns: '36px minmax(0, 1fr) auto',
       paddingLeft: spacing.space2,
       paddingRight: spacing.space3,
     },
-  },
-  rowSelected: {
-    backgroundColor: colors.selectionBg,
-  },
-  rowDragOver: {
-    backgroundColor: colors.brandAccentSurface,
   },
   rowCutMuted: {
     opacity: 0.5,
@@ -449,11 +443,7 @@ export const MemoParentRow = React.memo(function MemoParentRow({
       />
       <div
         data-row="true"
-        {...stylex.props(
-          rowStyles.rowMain,
-          isSelected && rowStyles.rowSelected,
-          isDragOver && rowStyles.rowDragOver
-        )}
+        {...stylex.props(rowStyles.rowMain)}
         onClick={(e) => {
           e.stopPropagation();
           onItemClick('__parent__', e);
@@ -653,8 +643,6 @@ export const MemoFolderRow = React.memo(function MemoFolderRow({
         }}
         {...stylex.props(
           rowStyles.rowMain,
-          isSelected && rowStyles.rowSelected,
-          isDragOver && rowStyles.rowDragOver,
           isCut && rowStyles.rowCutMuted
         )}
         onClick={(e) => {
@@ -881,7 +869,6 @@ export const MemoFileRow = React.memo(function MemoFileRow({
         }
         {...stylex.props(
           rowStyles.rowMain,
-          isSelected && rowStyles.rowSelected,
           !isTrashItem && isCut && rowStyles.rowCutMuted
         )}
         onClick={(e) => {
