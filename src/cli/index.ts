@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import {
+  computeDbFingerprint,
+  resolveTsubasaPaths,
+  setTsubasaHomeOverride,
+} from '../server/paths.js';
+import {
   parseGlobalArgs,
   type CliContext,
   type CommandHandler,
   type GlobalFlags,
 } from './context.js';
-import { createCliTransport } from './transport.js';
+import { createCliTransport, type CliTransport } from './transport.js';
 import { CliError, EXIT_CODES, formatCliError } from './lib/errors.js';
 import { CLI_HELP_SCHEMA, serializeHelpSchema } from './lib/helpSchema.js';
 import {
@@ -30,6 +35,8 @@ import {
   handleDb,
 } from './commands/ops.js';
 import { runAuthCommand } from './commands/auth.js';
+import { handleExport } from './commands/export.js';
+import { handleExt } from './commands/ext.js';
 
 const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   status: handleStatus,
@@ -40,6 +47,8 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   mv: handleMv,
   cp: handleCp,
   rm: handleRm,
+  export: handleExport,
+  ext: handleExt,
   pool: handlePool,
   account: handleAccount,
   trash: handleTrash,
@@ -155,6 +164,70 @@ function renderHumanHelp(commandName?: string): string {
   return `${lines.join('\n')}\n`;
 }
 
+async function createProbeOnlyTransport(flags: GlobalFlags): Promise<CliTransport> {
+  if (flags.home) {
+    setTsubasaHomeOverride(flags.home);
+  }
+  const paths = resolveTsubasaPaths(flags.home);
+  const dbFingerprint = computeDbFingerprint(paths.dbPath);
+
+  const rawExplicitServer = flags.server?.trim() || process.env.TSUBASA_API_URL?.trim() || '';
+  if (rawExplicitServer && flags.local) {
+    throw new CliError(
+      'USAGE_ERROR',
+      'Cannot combine --server / TSUBASA_API_URL with --local.',
+      { exitCode: EXIT_CODES.USAGE }
+    );
+  }
+
+  let mode: 'http' | 'local' = 'local';
+  let serverUrl: string | null = null;
+
+  if (rawExplicitServer) {
+    mode = 'http';
+    serverUrl = rawExplicitServer.replace(/\/+$/, '');
+  } else if (!flags.local) {
+    const defaultUrl = `http://127.0.0.1:${process.env.PORT?.trim() || '3000'}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 250);
+    try {
+      const res = await fetch(`${defaultUrl}/api/health`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { service?: unknown; dbFingerprint?: unknown };
+        if (body.service === 'tsubasa-backend' && body.dbFingerprint === dbFingerprint) {
+          mode = 'http';
+          serverUrl = defaultUrl;
+        }
+      }
+    } catch {
+      // Fall back to local mode for extension child env.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const unsupported = async (): Promise<never> => {
+    throw new CliError('RUNTIME_ERROR', 'Probe-only transport does not execute API requests.', {
+      exitCode: EXIT_CODES.RUNTIME,
+    });
+  };
+
+  return {
+    mode,
+    serverUrl,
+    homeDir: paths.homeDir,
+    dbPath: paths.dbPath,
+    dbFingerprint,
+    request: unsupported,
+    requestJson: unsupported,
+    async close(): Promise<void> {},
+  };
+}
+
 async function main(): Promise<void> {
   let flagsForErrors: { json: boolean; showEmails: boolean } = {
     json: false,
@@ -187,14 +260,16 @@ async function main(): Promise<void> {
       );
     }
 
-    const write = isWriteCommand(command, subArgs, flags);
-    const transport = await createCliTransport({
-      homeDir: flags.home,
-      server: flags.server,
-      local: flags.local,
-      write,
-      noWaitOutbox: flags.noWaitOutbox,
-    });
+    const transport =
+      command === 'ext'
+        ? await createProbeOnlyTransport(flags)
+        : await createCliTransport({
+            homeDir: flags.home,
+            server: flags.server,
+            local: flags.local,
+            write: isWriteCommand(command, subArgs, flags),
+            noWaitOutbox: flags.noWaitOutbox,
+          });
 
     const ctx: CliContext = {
       flags,

@@ -28,3 +28,7 @@ venv/
 
 .agents/frontend-audit/**/*.png
 .agents/frontend-audit/*.json
+
+# Local CLI extensions
+extensions/*
+!extensions/README.md
