@@ -12,10 +12,11 @@ The orchestrator analyzes the scope, decides how to tackle the work, splits it i
 
 ## Guardrails
 
-1. **Do not load the `swarm` skill.** Use the `swarm` tool only to spawn, message, and stop workers. Follow this workflow instead, and do not add `narrator`, `monitor`, or verifier workers.
+1. **Do not load the `swarm` skill.** Use `swarm` to spawn and check workers, and `post_message` to message them. Follow this workflow instead, and do not add `narrator`, `monitor`, or verifier workers.
 2. **Do not edit code during implementation.** Let subagents own all source changes while they run their slices.
 3. **Keep updates brief.** Report task dispatches, test results, blockers, and status changes without repeating subagent diffs in chat.
 4. **Do not poll.** End the turn after dispatching work, or call `swarm_wait` instead of polling `read_board` in a loop.
+5. **Do not kill finished workers.** Leave completed workers `waiting` on the board so they keep their slice context for follow-up fixes via `post_message`. Waiting workers cost nothing. Only call `swarm{action:"kill"}` if the user explicitly asks to shut down the swarm.
 
 ## Workflow
 
@@ -43,9 +44,9 @@ Once all slices finish and pass their local checks, verify the integrated change
 
 ### 4. Audit the diff
 
-After runtime checks pass, kill active slice workers with `swarm{action:"kill"}` and inspect the working tree with `git diff` and `git status`.
+After runtime checks pass, leave the slice workers `waiting` on the board and inspect the working tree with `git diff` and `git status`.
 
 1. Check that the changes match the initial scope and the planned approach.
 2. Look for rule violations, unintended behavior changes, stray files, dead code, or leftover debug output.
-3. **Surgical cleanup.** During this final audit only, you may make small direct edits such as deleting a stray file, fixing an import, or tidying a comment without spinning up another worker. If a deeper logic issue turns up, assign the fix to a worker and re-verify.
+3. **Surgical cleanup.** During this final audit only, you may make small direct edits such as deleting a stray file, fixing an import, or tidying a comment without spinning up another worker. If a deeper logic issue turns up, message the responsible worker with `post_message` (`@<name>`) to fix it and re-verify.
 4. Present a concise summary of the verified changes and audit findings to the user.
