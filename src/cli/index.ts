@@ -40,6 +40,7 @@ import { handleExt } from './commands/ext.js';
 import { handleDownload } from './commands/download.js';
 import { handleUpload, handlePlanUpload } from './commands/upload.js';
 import { handleJob } from './commands/jobs.js';
+import { handleImport, handlePlanImportDrive } from './commands/import.js';
 
 async function handlePlan(ctx: CliContext, args: string[]): Promise<void> {
   const sub = args[0];
@@ -53,9 +54,8 @@ async function handlePlan(ctx: CliContext, args: string[]): Promise<void> {
     return;
   }
   if (sub === 'import-drive') {
-    throw new CliError('USAGE_ERROR', 'plan import-drive is not wired yet.', {
-      exitCode: EXIT_CODES.USAGE,
-    });
+    await handlePlanImportDrive(ctx, args.slice(1));
+    return;
   }
   throw new CliError('USAGE_ERROR', `Unknown plan subcommand '${sub}'. Expected: upload, import-drive.`, {
     exitCode: EXIT_CODES.USAGE,
@@ -76,6 +76,7 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   export: handleExport,
   ext: handleExt,
   job: handleJob,
+  import: handleImport,
   plan: handlePlan,
   pool: handlePool,
   account: handleAccount,
@@ -146,6 +147,12 @@ function isWriteCommand(command: string, subArgs: readonly string[], flags: Glob
 
     case 'db':
       return sub !== 'backup';
+
+    case 'import':
+      if (sub === 'tokens' && subArgs[1] === 'list') {
+        return false;
+      }
+      return true;
 
     default:
       return false;

@@ -230,7 +230,8 @@ export const CLI_HELP_SCHEMA: CliHelpSchema = {
       usage: 'tsubasa import <action>',
       description: 'Adopt existing remote cloud files into the virtual filesystem index.',
       subcommands: [
-        { name: 'drive', usage: 'tsubasa import drive <account-id> [remote-folder-id]', description: 'Index pre-existing Google Drive files into a virtual mount path.' },
+        { name: 'drive', usage: 'tsubasa import drive <folder-id-or-url>', description: 'Import an external Google Drive folder tree into a storage pool.' },
+        { name: 'tokens', usage: 'tsubasa import tokens <list|clear>', description: 'List or clear cached external source OAuth tokens.' },
       ],
     },
     {
