@@ -110,8 +110,6 @@ export function AccountAvatar({
     setImgError(false);
   }, [avatarUrl]);
 
-  const isCustomPfp = Boolean(avatarUrl && !avatarUrl.includes('default-user'));
-
   const color = useMemo(
     () => getAaaAvatarColor(index, email || displayName || undefined),
     [index, email, displayName]
@@ -119,11 +117,11 @@ export function AccountAvatar({
 
   const initial = (displayName?.[0] || email?.[0] || '?').toUpperCase();
 
-  if (isCustomPfp && !imgError) {
+  if (avatarUrl && !imgError) {
     return (
       <div {...stylex.props(styles.avatarPill)}>
         <img
-          src={avatarUrl!}
+          src={avatarUrl}
           alt={displayName || email || 'Account avatar'}
           {...stylex.props(styles.avatarImg)}
           draggable={false}
