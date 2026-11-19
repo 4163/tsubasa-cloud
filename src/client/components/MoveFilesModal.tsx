@@ -8,6 +8,7 @@ import { evaluateAccountTransferCandidate } from '../utils/accountTransfer.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
 import { SelectField } from './SelectField.js';
+import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 import type { AccountItem, MoveFileItem } from '../types.js';
 
 export interface MoveFilesModalProps {
@@ -79,6 +80,13 @@ const styles = stylex.create({
     padding: spacing.space1,
     position: 'relative',
     boxSizing: 'border-box',
+    outline: 'none',
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
+    },
   },
   virtualTrack: {
     width: '100%',
@@ -173,6 +181,11 @@ export function MoveFilesModal({
     overscan: 5,
   });
 
+  useScrollableKeyboardNav({
+    scrollRef: fileListRef,
+    enabled: isOpen && files.length > 0,
+  });
+
   useEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
@@ -260,7 +273,13 @@ export function MoveFilesModal({
               <span {...stylex.props(styles.fileListLabel)}>
                 Files to move ({files.length})
               </span>
-              <div ref={fileListRef} {...stylex.props(styles.fileListContainer)}>
+              <div
+                ref={fileListRef}
+                role="region"
+                aria-label="Files to move"
+                tabIndex={0}
+                {...stylex.props(styles.fileListContainer)}
+              >
                 <div
                   {...stylex.props(styles.virtualTrack)}
                   style={{ height: `${virtualizer.getTotalSize()}px` }}

@@ -25,6 +25,7 @@ import {
   isDriveSelectable,
   type EmptyShareAccount,
 } from '../hooks/useShareWizard.js';
+import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 
 export interface ShareModalProps {
   isOpen: boolean;
@@ -578,6 +579,7 @@ const styles = stylex.create({
     overflowY: 'auto',
     position: 'relative',
     paddingRight: spacing.space2,
+    outline: 'none',
   },
   virtualRowItem: {
     position: 'absolute',
@@ -656,10 +658,12 @@ export function ShareModal({
     setCopiedKey(null);
   }, [isOpen, items, sourcePoolId]);
 
+  const driveRowHeight = isCoarsePointer ? 58 : 50;
+
   const driveVirtualizer = useVirtualizer({
     count: emptyAccounts.length,
     getScrollElement: () => driveListRef.current,
-    estimateSize: () => (isCoarsePointer ? 58 : 50),
+    estimateSize: () => driveRowHeight,
     overscan: 5,
   });
 
@@ -689,6 +693,31 @@ export function ShareModal({
   };
 
   const effectiveOpen = isOpen && items.length > 0;
+  const showDriveSelectionList =
+    effectiveOpen &&
+    !executeResult &&
+    Boolean(
+      inspectData &&
+        !hasOverCeiling &&
+        !inspectData.sharePoolFitsWithoutExpansion &&
+        emptyAccounts.length > 0
+    );
+  const showResultLinksList =
+    effectiveOpen && Boolean(executeResult && executeResult.links.length > 0);
+
+  useScrollableKeyboardNav({
+    scrollRef: driveListRef,
+    enabled: showDriveSelectionList,
+  });
+
+  useScrollableKeyboardNav({
+    scrollRef: linksListRef,
+    enabled: showResultLinksList,
+    onScrollToEnd:
+      executeResult && executeResult.links.length > 0
+        ? () => linksVirtualizer.scrollToIndex(executeResult.links.length - 1, { align: 'end' })
+        : undefined,
+  });
 
   const firstItem = items[0];
   const summaryTitle = !firstItem
@@ -708,6 +737,12 @@ export function ShareModal({
 
   const handleDriveListboxKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (emptyAccounts.length === 0) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+
+    const pageStep = Math.max(
+      1,
+      Math.floor((driveListRef.current?.clientHeight ?? 0) / driveRowHeight) || 4
+    );
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -717,6 +752,16 @@ export function ShareModal({
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       const nextIdx = Math.max(0, activeDriveIndex - 1);
+      setActiveDriveIndex(nextIdx);
+      driveVirtualizer.scrollToIndex(nextIdx, { align: 'auto' });
+    } else if (e.key === 'PageDown') {
+      e.preventDefault();
+      const nextIdx = Math.min(emptyAccounts.length - 1, activeDriveIndex + pageStep);
+      setActiveDriveIndex(nextIdx);
+      driveVirtualizer.scrollToIndex(nextIdx, { align: 'auto' });
+    } else if (e.key === 'PageUp') {
+      e.preventDefault();
+      const nextIdx = Math.max(0, activeDriveIndex - pageStep);
       setActiveDriveIndex(nextIdx);
       driveVirtualizer.scrollToIndex(nextIdx, { align: 'auto' });
     } else if (e.key === 'Home') {
@@ -810,7 +855,7 @@ export function ShareModal({
                     )}
                   </div>
 
-                  <div ref={linksListRef} {...stylex.props(styles.resultListContainer)}>
+                  <div ref={linksListRef} tabIndex={-1} {...stylex.props(styles.resultListContainer)}>
                     <div
                       {...stylex.props(styles.virtualTrack)}
                       style={{ height: `${linksVirtualizer.getTotalSize()}px` }}

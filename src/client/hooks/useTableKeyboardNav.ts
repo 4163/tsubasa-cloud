@@ -66,6 +66,9 @@ export function useTableKeyboardNav({
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) {
+        return;
+      }
       if (parentRef.current?.closest('[inert]')) {
         return;
       }

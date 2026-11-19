@@ -13,6 +13,7 @@ import {
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { DrawerSectionHeader, DrawerButton, DrawerSheet } from './DrawerPrimitives.js';
 import { useUploadQueue } from '../hooks/useUploadQueue.js';
+import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 import type { UploadDisplayRow } from '../utils/uploadQueueModel.js';
 import { UploadFileCard, UploadFolderCard } from './UploadDrawerCards.js';
 import type { AccountItem, StagedItem } from '../types.js';
@@ -121,6 +122,7 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
+    outline: 'none',
   },
   fileCard: {
     position: 'relative',
@@ -490,6 +492,15 @@ export function UploadDrawer({
     overscan: 6,
   });
 
+  useScrollableKeyboardNav({
+    scrollRef: fileListRef,
+    enabled: isOpen,
+    onScrollToEnd:
+      shouldVirtualize && displayRows.length > 0
+        ? () => rowVirtualizer.scrollToIndex(displayRows.length - 1, { align: 'end' })
+        : undefined,
+  });
+
   const handleClearAndClose = useCallback(() => {
     clearActiveXhrs();
     if (requestCloseRef.current) {
@@ -673,7 +684,7 @@ export function UploadDrawer({
         </div>
       )}
 
-      <div ref={fileListRef} {...stylex.props(styles.fileList)}>
+      <div ref={fileListRef} tabIndex={-1} {...stylex.props(styles.fileList)}>
         {planError && (
           <div {...stylex.props(styles.planErrorBanner)}>
             <span {...stylex.props(styles.planErrorNotice)}>{planError}</span>

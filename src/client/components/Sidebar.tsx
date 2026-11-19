@@ -6,6 +6,7 @@ import { RedactedEmail } from './RedactedEmail.js';
 import { SidebarAccountCard } from './SidebarAccountCard.js';
 import { SidebarPoolSection } from './SidebarPoolSection.js';
 import { useDialogLifecycle } from '../hooks/useDialogLifecycle.js';
+import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 import { sortPools } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
 import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
@@ -444,6 +445,7 @@ const styles = stylex.create({
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
+    outline: 'none',
   },
   accountsList: {
     display: 'flex',
@@ -569,8 +571,15 @@ export function Sidebar({
   onDismissSidebarError,
 }: SidebarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const accountsScrollRef = useRef<HTMLDivElement>(null);
   const [dragOverNav, setDragOverNav] = useState<'files' | 'trash' | null>(null);
   const isMobileViewport = useMediaQuery('(max-width: 768px)');
+
+  useScrollableKeyboardNav({
+    scrollRef: accountsScrollRef,
+    enabled: !isMobileViewport || isMobileOpen,
+    scope: isMobileViewport ? 'dialog' : 'container',
+  });
   const handleMobileDialogCloseCallback = useCallback(() => {
     onCloseMobile?.();
   }, [onCloseMobile]);
@@ -752,7 +761,7 @@ export function Sidebar({
           </button>
         </nav>
 
-        <div {...stylex.props(styles.accountsScrollArea)}>
+        <div ref={accountsScrollRef} tabIndex={-1} {...stylex.props(styles.accountsScrollArea)}>
           <div {...stylex.props(styles.sectionHeading)}>
             Connected accounts ({authorizedCount})
           </div>

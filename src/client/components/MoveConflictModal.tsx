@@ -5,6 +5,7 @@ import { IconAlertTriangle } from './Icons.js';
 import { formatBytes, formatSignedBytes } from '../utils/format.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
+import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 import type {
   MoveConflictItem,
   MoveConflictResolutionMode,
@@ -122,6 +123,13 @@ const styles = stylex.create({
     flexDirection: 'column',
     gap: spacing.space1,
     boxSizing: 'border-box',
+    outline: 'none',
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '-2px',
+    },
   },
   conflictRow: {
     display: 'grid',
@@ -249,6 +257,7 @@ export function MoveConflictModal({
   const [activeMode, setActiveMode] = useState<MoveConflictResolutionMode | null>(null);
   const submittingRef = useRef(false);
   const keepBothBtnRef = useRef<HTMLButtonElement | null>(null);
+  const conflictListRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
 
   useEffect(() => {
@@ -260,6 +269,11 @@ export function MoveConflictModal({
 
   const effectiveOpen = isOpen && conflicts.length > 0;
   const singleConflict = conflicts.length === 1 ? conflicts[0] : null;
+
+  useScrollableKeyboardNav({
+    scrollRef: conflictListRef,
+    enabled: effectiveOpen && !singleConflict,
+  });
 
   const handleChoose = (mode: MoveConflictResolutionMode) => {
     if (submittingRef.current || isSubmitting) return;
@@ -383,7 +397,13 @@ export function MoveConflictModal({
                 ? ` · ${cleanCount} other ${cleanCount === 1 ? 'item' : 'items'} will move with no conflicts`
                 : ''}
             </p>
-            <div {...stylex.props(styles.conflictList)}>
+            <div
+              ref={conflictListRef}
+              role="region"
+              aria-label="Conflicting files"
+              tabIndex={0}
+              {...stylex.props(styles.conflictList)}
+            >
               {conflicts.map((conflict) => {
                 const meta = getConflictMatchMeta(conflict);
                 return (

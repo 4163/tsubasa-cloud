@@ -6,6 +6,7 @@ import { IconAlertTriangle, FileTypeIcon, IconCheck, IconChevronDown, IconFolder
 import { DrawerSheet, DrawerSectionHeader, DrawerButton } from './DrawerPrimitives.js';
 import { formatBytes } from '../utils/format.js';
 import { useExternalChanges } from '../hooks/useExternalChanges.js';
+import { useScrollableKeyboardNav } from '../hooks/useScrollableKeyboardNav.js';
 import type {
   ExternalDiscrepancyItem,
   PathConflictItem,
@@ -152,6 +153,7 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
+    outline: 'none',
   },
   sectionSubBar: {
     paddingTop: spacing.space2,
@@ -651,6 +653,15 @@ export function ExternalChangesDrawer({
     estimateSize: () => 96,
     getItemKey: (index) => displayRows[index]?.key ?? index,
     overscan: 6,
+  });
+
+  useScrollableKeyboardNav({
+    scrollRef: contentScrollRef,
+    enabled: isOpen,
+    onScrollToEnd:
+      shouldVirtualize && displayRows.length > 0
+        ? () => rowVirtualizer.scrollToIndex(displayRows.length - 1, { align: 'end' })
+        : undefined,
   });
 
   const renderDisplayRow = (row: ExternalChangesDisplayRow): React.ReactNode => {
@@ -1175,7 +1186,7 @@ export function ExternalChangesDrawer({
         </div>
       )}
 
-      <div ref={contentScrollRef} {...stylex.props(styles.contentScroll)}>
+      <div ref={contentScrollRef} tabIndex={-1} {...stylex.props(styles.contentScroll)}>
         {shouldVirtualize ? (
           <div
             {...stylex.props(styles.virtualListInner)}
