@@ -304,6 +304,11 @@ const styles = stylex.create({
       cursor: 'not-allowed',
     },
   },
+  addAccountButtonDragOver: {
+    backgroundColor: colors.brandAccentSurface,
+    borderColor: colors.accentGold,
+    borderStyle: 'dashed',
+  },
   inlineErrorWrapper: {
     paddingLeft: spacing.space4,
     paddingRight: spacing.space4,
@@ -411,6 +416,10 @@ const styles = stylex.create({
     flexShrink: 0,
     color: colors.primaryText,
     transition: motion.transitionFast,
+  },
+  addAccountIconCircleDragOver: {
+    borderColor: colors.accentGold,
+    color: colors.accentGold,
   },
   addAccountTextCol: {
     display: 'flex',
@@ -575,6 +584,7 @@ export function Sidebar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const accountsScrollRef = useRef<HTMLDivElement>(null);
   const [dragOverNav, setDragOverNav] = useState<'files' | 'trash' | null>(null);
+  const [isDragOverOAuth, setIsDragOverOAuth] = useState(false);
   const isMobileViewport = useMediaQuery('(max-width: 768px)');
 
   useScrollableKeyboardNav({
@@ -600,7 +610,10 @@ export function Sidebar({
   });
 
   useEffect(() => {
-    const handleDragEnd = () => setDragOverNav(null);
+    const handleDragEnd = () => {
+      setDragOverNav(null);
+      setIsDragOverOAuth(false);
+    };
     const handleWindowDragLeave = (e: DragEvent) => {
       if (
         !e.relatedTarget ||
@@ -610,6 +623,7 @@ export function Sidebar({
         e.clientY >= window.innerHeight
       ) {
         setDragOverNav(null);
+        setIsDragOverOAuth(false);
       }
     };
     window.addEventListener('dragend', handleDragEnd);
@@ -619,6 +633,40 @@ export function Sidebar({
       window.removeEventListener('dragleave', handleWindowDragLeave);
     };
   }, []);
+
+  const handleSidebarDragOver = (e: React.DragEvent<HTMLElement>) => {
+    if (!onImportOAuth) return;
+    if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = isImporting ? 'none' : 'copy';
+    if (!isImporting) {
+      setIsDragOverOAuth(true);
+    }
+  };
+
+  const handleSidebarDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOverOAuth(false);
+    }
+  };
+
+  const handleSidebarDrop = (e: React.DragEvent<HTMLElement>) => {
+    if (!onImportOAuth) return;
+    if (e.dataTransfer?.types?.includes('application/x-tsubasa-items')) return;
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    markDropHandled(e);
+    setIsDragOverOAuth(false);
+    if (isImporting) return;
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      onDismissSidebarError?.();
+      onImportOAuth(file);
+    }
+  };
 
   const handleImportClick = () => {
     onDismissSidebarError?.();
@@ -693,6 +741,7 @@ export function Sidebar({
                 e.stopPropagation();
                 e.dataTransfer.dropEffect = hasItems ? 'move' : 'copy';
                 setDragOverNav('files');
+                setIsDragOverOAuth(false);
               }
             }}
             onDragLeave={(e) => {
@@ -772,12 +821,20 @@ export function Sidebar({
           <div {...stylex.props(styles.addAccountWrapper)}>
             <button
               type="button"
-              {...stylex.props(styles.addAccountButton)}
+              {...stylex.props(
+                styles.addAccountButton,
+                isDragOverOAuth && styles.addAccountButtonDragOver
+              )}
               onClick={handleImportClick}
               disabled={isImporting}
               aria-label="Add account"
             >
-              <div {...stylex.props(styles.addAccountIconCircle)}>
+              <div
+                {...stylex.props(
+                  styles.addAccountIconCircle,
+                  isDragOverOAuth && styles.addAccountIconCircleDragOver
+                )}
+              >
                 <IconPlus size={14} strokeWidth={2.5} />
               </div>
               <div {...stylex.props(styles.addAccountTextCol)}>
@@ -785,7 +842,7 @@ export function Sidebar({
                   {isImporting ? 'Inspecting credential...' : 'Add account'}
                 </span>
                 <span {...stylex.props(styles.addAccountSub)}>
-                  Import OAuth credentials
+                  {isDragOverOAuth ? 'Drop OAuth credentials to import' : 'Import OAuth credentials'}
                 </span>
               </div>
             </button>
@@ -893,7 +950,12 @@ export function Sidebar({
         onPointerUp={handleMobileDialogPointerUp}
         {...stylex.props(styles.mobileDialog)}
       >
-        <aside {...stylex.props(styles.mobileDialogAside)}>
+        <aside
+          onDragOver={handleSidebarDragOver}
+          onDragLeave={handleSidebarDragLeave}
+          onDrop={handleSidebarDrop}
+          {...stylex.props(styles.mobileDialogAside)}
+        >
           {sidebarContent}
         </aside>
         {isDimmed && <div aria-hidden="true" {...stylex.props(styles.mobileDimScrim)} />}
@@ -902,7 +964,12 @@ export function Sidebar({
   }
 
   return (
-    <aside {...stylex.props(styles.sidebar)}>
+    <aside
+      onDragOver={handleSidebarDragOver}
+      onDragLeave={handleSidebarDragLeave}
+      onDrop={handleSidebarDrop}
+      {...stylex.props(styles.sidebar)}
+    >
       {sidebarContent}
     </aside>
   );
