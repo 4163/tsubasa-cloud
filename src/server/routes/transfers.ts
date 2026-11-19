@@ -14,6 +14,15 @@ import {
   type CrossPoolMoveTarget,
 } from '../drive/crossPoolMove.js';
 import {
+  cancelImportDriveJob,
+  planImportDrive,
+  resumeImportDriveJob,
+  startImportDrive,
+  type ImportDriveConflictMode,
+  type ImportDriveMode,
+} from '../drive/importDrive.js';
+import { clearSourceTokens, listCachedSourceTokens } from '../drive/sourceAuth.js';
+import {
   cancelUploadJob,
   initChunkedResumableUpload,
   LocalFileChangedError,
@@ -46,6 +55,14 @@ const RESUMABLE_CONFLICT_MODES: readonly ResumableUploadConflictMode[] = [
   'replace',
   'keep_both',
   'skip',
+];
+
+const IMPORT_DRIVE_MODES: readonly ImportDriveMode[] = ['copy', 'stream'];
+const IMPORT_CONFLICT_MODES: readonly ImportDriveConflictMode[] = [
+  'skip',
+  'reject',
+  'replace',
+  'keep_both',
 ];
 
 function mapTransferError(c: Parameters<typeof mapDomainErrorToResponse>[0], err: unknown) {
@@ -363,6 +380,178 @@ const router = new Hono()
       return mapTransferError(c, err);
     }
   })
+  .post('/api/transfers/import-drive/plan', async (c) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: 'Invalid JSON request body', code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const folderIdOrUrl =
+      typeof body.folderIdOrUrl === 'string'
+        ? body.folderIdOrUrl.trim()
+        : typeof body.source === 'string'
+          ? body.source.trim()
+          : '';
+    const sourceAuthPath =
+      typeof body.sourceAuthPath === 'string'
+        ? body.sourceAuthPath.trim()
+        : typeof body.sourceAuth === 'string'
+          ? body.sourceAuth.trim()
+          : '';
+
+    if (!folderIdOrUrl || !sourceAuthPath) {
+      return c.json(
+        { error: 'folderIdOrUrl and sourceAuthPath are required', code: 'VALIDATION_ERROR' },
+        400
+      );
+    }
+
+    const parsedPool = parseOptionalPoolId(body.poolId);
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR, code: 'VALIDATION_ERROR' }, 400);
+    }
+    const poolId = parsedPool.poolId ?? 1;
+    if (isSharePoolId(poolId)) {
+      return c.json(sharePoolReadOnlyError('Importing directly into Share Pool is disabled'), 403);
+    }
+
+    const parsedMode = parseConflictMode(
+      body.mode,
+      IMPORT_DRIVE_MODES,
+      'Invalid mode: must be copy or stream'
+    );
+    if (!parsedMode.ok) {
+      return c.json({ error: parsedMode.error, code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const parsedConflict = parseConflictMode(
+      body.conflictMode ?? body.conflict,
+      IMPORT_CONFLICT_MODES,
+      'Invalid conflictMode: must be skip, reject, replace, or keep_both'
+    );
+    if (!parsedConflict.ok) {
+      return c.json({ error: parsedConflict.error, code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    try {
+      const summary = await planImportDrive({
+        folderIdOrUrl,
+        destPath: typeof body.destPath === 'string' ? body.destPath : undefined,
+        poolId,
+        sourceAuthPath,
+        mode: parsedMode.value,
+        conflictMode: parsedConflict.value,
+        noBrowser: body.noBrowser === true,
+      });
+      return c.json(summary, 200);
+    } catch (err) {
+      return mapTransferError(c, err);
+    }
+  })
+  .post('/api/transfers/import-drive', async (c) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: 'Invalid JSON request body', code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const folderIdOrUrl =
+      typeof body.folderIdOrUrl === 'string'
+        ? body.folderIdOrUrl.trim()
+        : typeof body.source === 'string'
+          ? body.source.trim()
+          : '';
+    const sourceAuthPath =
+      typeof body.sourceAuthPath === 'string'
+        ? body.sourceAuthPath.trim()
+        : typeof body.sourceAuth === 'string'
+          ? body.sourceAuth.trim()
+          : '';
+
+    if (!folderIdOrUrl || !sourceAuthPath) {
+      return c.json(
+        { error: 'folderIdOrUrl and sourceAuthPath are required', code: 'VALIDATION_ERROR' },
+        400
+      );
+    }
+
+    const parsedPool = parseOptionalPoolId(body.poolId);
+    if (!parsedPool.ok) {
+      return c.json({ error: INVALID_POOL_ID_ERROR, code: 'VALIDATION_ERROR' }, 400);
+    }
+    const poolId = parsedPool.poolId ?? 1;
+    if (isSharePoolId(poolId)) {
+      return c.json(sharePoolReadOnlyError('Importing directly into Share Pool is disabled'), 403);
+    }
+
+    const parsedMode = parseConflictMode(
+      body.mode,
+      IMPORT_DRIVE_MODES,
+      'Invalid mode: must be copy or stream'
+    );
+    if (!parsedMode.ok) {
+      return c.json({ error: parsedMode.error, code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const parsedConflict = parseConflictMode(
+      body.conflictMode ?? body.conflict,
+      IMPORT_CONFLICT_MODES,
+      'Invalid conflictMode: must be skip, reject, replace, or keep_both'
+    );
+    if (!parsedConflict.ok) {
+      return c.json({ error: parsedConflict.error, code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const wait = body.detach === true ? false : body.wait !== false;
+
+    try {
+      const result = await startImportDrive({
+        folderIdOrUrl,
+        destPath: typeof body.destPath === 'string' ? body.destPath : undefined,
+        poolId,
+        sourceAuthPath,
+        mode: parsedMode.value,
+        conflictMode: parsedConflict.value,
+        noBrowser: body.noBrowser === true,
+        wait,
+      });
+      return c.json(result, result.queued ? 202 : 200);
+    } catch (err) {
+      return mapTransferError(c, err);
+    }
+  })
+  .get('/api/transfers/source-tokens', (c) => {
+    const tokens = listCachedSourceTokens();
+    return c.json({ tokens });
+  })
+  .delete('/api/transfers/source-tokens', (c) => {
+    const cacheKey = c.req.query('cacheKey')?.trim() || undefined;
+    const emailFilter = c.req.query('email')?.trim().toLowerCase() || undefined;
+    const clientId = c.req.query('clientId')?.trim() || undefined;
+
+    if (emailFilter) {
+      const matching = listCachedSourceTokens().filter(
+        (t) =>
+          (t.email?.toLowerCase() === emailFilter) &&
+          (!cacheKey || t.cacheKey === cacheKey) &&
+          (!clientId || t.clientId === clientId)
+      );
+      let removedCount = 0;
+      const deletedKeys: string[] = [];
+      for (const token of matching) {
+        const res = clearSourceTokens({ cacheKey: token.cacheKey });
+        removedCount += res.deletedCount;
+        deletedKeys.push(...res.deletedKeys);
+      }
+      return c.json({ removedCount, deletedKeys });
+    }
+
+    const res = clearSourceTokens({ cacheKey, clientId });
+    return c.json({ removedCount: res.deletedCount, deletedKeys: res.deletedKeys });
+  })
   .get('/api/jobs', (c) => {
     const kindFilter = c.req.query('kind')?.trim() || undefined;
     const statusFilter = c.req.query('status')?.trim() || undefined;
@@ -596,8 +785,11 @@ const router = new Hono()
         const result = await cancelAccountEvacuationJob(jobId);
         return c.json(result, 200);
       }
+      if (row.kind === 'import_drive') {
+        const result = await cancelImportDriveJob(jobId);
+        return c.json(result, 200);
+      }
 
-      // Generic fallback for import_drive or future kinds: revoke shares and mark cancelled.
       const shareRevoke = await revokeJobShares(jobId);
       sqlite.transaction(() => {
         sqlite
@@ -656,6 +848,10 @@ const router = new Hono()
       }
       if (row.kind === 'account_evacuate') {
         const result = await resumeAccountEvacuationJob(jobId, wait);
+        return c.json(result, result.queued ? 202 : 200);
+      }
+      if (row.kind === 'import_drive') {
+        const result = await resumeImportDriveJob(jobId, wait);
         return c.json(result, result.queued ? 202 : 200);
       }
 
