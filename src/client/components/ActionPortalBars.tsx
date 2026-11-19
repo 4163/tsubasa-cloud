@@ -228,6 +228,9 @@ const styles = stylex.create({
     ':active': {
       transform: 'scale(0.98)',
     },
+    ':focus-visible': {
+      outlineColor: colors.accentGoldText,
+    },
     '@media (pointer: coarse)': {
       height: 'auto',
       minHeight: '44px',
@@ -481,8 +484,8 @@ export function SelectionBatchBar({
                 type="button"
                 data-badge-btn={canTruncateName ? 'true' : undefined}
                 {...stylex.props(
-                  styles.selectionBadgeBtn,
                   actionButtonStyles.focusRing,
+                  styles.selectionBadgeBtn,
                   !canTruncateName && styles.badgeNoShrink
                 )}
                 onClick={() => onOpenMoveFilesModal?.(group)}

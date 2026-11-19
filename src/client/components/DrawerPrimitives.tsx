@@ -111,7 +111,7 @@ const styles = stylex.create({
       outlineWidth: '2px',
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
+      outlineOffset: '1px',
     },
     ':disabled': {
       opacity: 0.35,

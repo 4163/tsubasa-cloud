@@ -60,10 +60,11 @@ const styles = stylex.create({
       color: colors.primaryText,
     },
     ':focus-visible': {
+      borderColor: colors.focusRing,
       outlineWidth: '2px',
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
-      outlineOffset: '1px',
+      outlineOffset: '-2px',
     },
     '@media (pointer: coarse)': {
       minHeight: '36px',
@@ -113,14 +114,14 @@ const styles = stylex.create({
       outlineWidth: '2px',
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
+      outlineOffset: '-2px',
     },
     ':focus-visible': {
       borderColor: colors.focusRing,
       outlineWidth: '2px',
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
-      outlineOffset: '-1px',
+      outlineOffset: '-2px',
     },
   },
   poolSelectChevron: {
