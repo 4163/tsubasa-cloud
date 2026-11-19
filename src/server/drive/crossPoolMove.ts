@@ -593,6 +593,9 @@ async function executeCrossPoolMoveJobInternal(jobId: string): Promise<CrossPool
   const shareSetupPairs = new Set<string>();
   let fatalError: string | null = null;
 
+  // Crash recovery: revoke any orphaned unrevoked shares from an interrupted previous run before starting.
+  await revokeJobShares(jobId);
+
   try {
     // Establish folder-level temporary reader shares once per (sourceAccountId, targetAccountId) pair.
     for (const item of pendingItems) {

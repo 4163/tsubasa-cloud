@@ -280,6 +280,9 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
   let fatalError: string | null = null;
   let removed = false;
 
+  // Crash recovery: revoke any orphaned unrevoked shares from an interrupted previous run before starting.
+  await revokeJobShares(jobId);
+
   try {
     if (sourceAccountRow && pendingItems.length > 0) {
       let sourceRootFolderId: string | null = sourceAccountRow.rootFolderId;
