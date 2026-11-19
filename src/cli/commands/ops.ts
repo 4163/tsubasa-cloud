@@ -950,9 +950,12 @@ export async function handleAudit(ctx: CliContext, args: string[]): Promise<void
   const summaryRows = reports.map((r) => ({
     accountRef: r.accountRef,
     email: ctx.flags.showEmails ? r.accountId : maskEmail(r.accountId),
-    missingCount: Array.isArray(r.report.missingFiles) ? r.report.missingFiles.length : 0,
-    externalCount: Array.isArray(r.report.externalFiles) ? r.report.externalFiles.length : 0,
-    conflictCount: Array.isArray(r.report.pathConflicts) ? r.report.pathConflicts.length : 0,
+    scannedCount: typeof r.report.scannedFiles === 'number' ? r.report.scannedFiles : 0,
+    missingCount: Array.isArray(r.report.missingRemote) ? r.report.missingRemote.length : 0,
+    unindexedCount: Array.isArray(r.report.unindexed) ? r.report.unindexed.length : 0,
+    modifiedCount: Array.isArray(r.report.modified) ? r.report.modified.length : 0,
+    overCeilingCount: Array.isArray(r.report.overCeiling) ? r.report.overCeiling.length : 0,
+    conflictCount: Array.isArray(r.report.conflicts) ? r.report.conflicts.length : 0,
   }));
 
   const table = renderTable(
@@ -960,8 +963,11 @@ export async function handleAudit(ctx: CliContext, args: string[]): Promise<void
     [
       { key: 'accountRef', header: 'REF' },
       { key: 'email', header: 'EMAIL' },
+      { key: 'scannedCount', header: 'SCANNED', align: 'right' },
       { key: 'missingCount', header: 'MISSING', align: 'right' },
-      { key: 'externalCount', header: 'EXTERNAL', align: 'right' },
+      { key: 'unindexedCount', header: 'UNINDEXED', align: 'right' },
+      { key: 'modifiedCount', header: 'MODIFIED', align: 'right' },
+      { key: 'overCeilingCount', header: 'OVER CEILING', align: 'right' },
       { key: 'conflictCount', header: 'CONFLICTS', align: 'right' },
     ],
     { emptyMessage: 'No authorized standard-pool accounts to scan.' }

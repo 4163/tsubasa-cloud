@@ -1027,7 +1027,9 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
       return;
     }
 
-    const results = await ctx.transport.requestJson<Array<{ success?: boolean; skipped?: boolean; newPath?: string }>>(
+    const results = await ctx.transport.requestJson<
+      Array<{ success?: boolean; skipped?: boolean; newPath?: string; name?: string }>
+    >(
       '/api/items/move',
       {
         method: 'POST',
@@ -1042,7 +1044,11 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
     );
 
     if (needsRenameAfterMove && !results[0]?.skipped) {
-      await ctx.transport.requestJson('/api/items/rename', {
+      const renamed = await ctx.transport.requestJson<{
+        success: boolean;
+        oldPath: string;
+        newPath: string;
+      }>('/api/items/rename', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1052,6 +1058,13 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
           poolId: pool.id,
         }),
       });
+      if (results[0]) {
+        results[0] = {
+          ...results[0],
+          newPath: renamed.newPath ?? destPath,
+          ...(results[0].name !== undefined ? { name: destBasename } : {}),
+        };
+      }
     }
 
     emitSuccess(

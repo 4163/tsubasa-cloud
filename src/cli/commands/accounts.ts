@@ -8,7 +8,7 @@ import {
 } from '../context.js';
 import { CliError, EXIT_CODES } from '../lib/errors.js';
 import { formatBytes, renderTable } from '../lib/format.js';
-import { maskEmail, scrubEmailsInString, toAccountRef } from '../lib/redact.js';
+import { maskEmail, toAccountRef } from '../lib/redact.js';
 import { resolveAccountSelector, type AccountCandidate } from '../lib/selectors.js';
 
 interface AccountListItem {
@@ -551,11 +551,6 @@ export async function handleAccountEvacuate(ctx: CliContext, args: string[]): Pr
   const payload = {
     accountRef: acc.accountRef,
     ...res,
-    sourceAccountId: ctx.flags.showEmails ? res.sourceAccountId : maskEmail(res.sourceAccountId),
-    lastError:
-      res.lastError && !ctx.flags.showEmails
-        ? scrubEmailsInString(res.lastError)
-        : res.lastError,
   };
 
   emitSuccess(
@@ -657,7 +652,6 @@ export async function handleAccountRemove(ctx: CliContext, args: string[]): Prom
   const payload = {
     accountRef: acc.accountRef,
     ...res,
-    sourceAccountId: ctx.flags.showEmails ? res.sourceAccountId : maskEmail(res.sourceAccountId),
   };
 
   if (res.queued) {
@@ -788,16 +782,7 @@ export async function handleAccountMovePool(ctx: CliContext, args: string[]): Pr
       accountRef: acc.accountRef,
       accountId: acc.accountId,
       toPoolSlug: targetPool.slug,
-      ...(evacuation
-        ? {
-            evacuation: {
-              ...evacuation,
-              sourceAccountId: ctx.flags.showEmails
-                ? evacuation.sourceAccountId
-                : maskEmail(evacuation.sourceAccountId),
-            },
-          }
-        : {}),
+      ...(evacuation ? { evacuation } : {}),
       ...res,
     },
     `Moved account ${acc.accountRef} (${masked}) to pool "${targetPool.name}" (${targetPool.slug}, id=${targetPool.id})${evacuation ? ` after evacuating ${evacuation.filesMoved} file(s)` : ''}.`
