@@ -4,6 +4,7 @@ import { google } from 'googleapis';
 import type { OAuth2Client, Credentials } from 'google-auth-library';
 import dotenv from 'dotenv';
 import { renameAccountInDb } from '../db/index.js';
+import { resolveOAuthsDir } from '../paths.js';
 
 export function safeRenameFile(srcPath: string, destPath: string): void {
   const resolvedSrc = path.resolve(srcPath);
@@ -79,19 +80,48 @@ class AuthPool {
   private pool = new Map<string, AccountAuthRecord>();
   private preferredPools = new Map<string, number>();
   private fileCache = new Map<string, { signature: string; accountId: string }>();
-  private oauthDir: string;
+  private explicitOauthDir: string | null;
   private hasScanned = false;
+  private readOnlyMode = false;
+  private skipAutoScan = false;
   private watcher: fs.FSWatcher | null = null;
   private watchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private tokenWriteQueues = new WeakMap<AccountAuthRecord, Promise<void>>();
   private handlingCallbackRecords = new WeakSet<AccountAuthRecord>();
 
-  constructor(oauthDir = path.resolve(process.cwd(), '.oauths')) {
-    this.oauthDir = oauthDir;
+  constructor(oauthDir?: string) {
+    this.explicitOauthDir = oauthDir ? path.resolve(oauthDir) : null;
+  }
+
+  private get oauthDir(): string {
+    return this.explicitOauthDir ?? resolveOAuthsDir();
   }
 
   public getDirectory(): string {
     return this.oauthDir;
+  }
+
+  public setReadOnlyMode(enabled: boolean): void {
+    this.readOnlyMode = enabled;
+    if (enabled) {
+      this.stopWatching();
+    }
+  }
+
+  public isReadOnlyMode(): boolean {
+    return this.readOnlyMode;
+  }
+
+  public setSkipAutoScan(enabled: boolean): void {
+    this.skipAutoScan = enabled;
+  }
+
+  public isAutoScanSkipped(): boolean {
+    return this.skipAutoScan;
+  }
+
+  public isWatching(): boolean {
+    return this.watcher !== null;
   }
 
   private getTokenFileSignature(baseName: string): string {
@@ -147,6 +177,10 @@ class AuthPool {
     merged: Credentials,
     recordRef?: AccountAuthRecord
   ): Promise<void> {
+    if (this.readOnlyMode) {
+      return Promise.resolve();
+    }
+
     const record = recordRef ?? this.pool.get(accountId);
     if (!record) {
       return Promise.resolve();
@@ -182,15 +216,18 @@ class AuthPool {
     return next;
   }
 
-  public ensureScanned(): Map<string, AccountAuthRecord> {
+  public ensureScanned(options?: { readOnly?: boolean }): Map<string, AccountAuthRecord> {
+    if (this.skipAutoScan) {
+      return this.pool;
+    }
     if (!this.hasScanned) {
-      return this.scan();
+      return this.scan(options);
     }
     return this.pool;
   }
 
   public startWatching(): void {
-    if (this.watcher) {
+    if (this.watcher || this.readOnlyMode || this.skipAutoScan) {
       return;
     }
 
@@ -236,7 +273,8 @@ class AuthPool {
     }
   }
 
-  public scan(): Map<string, AccountAuthRecord> {
+  public scan(options?: { readOnly?: boolean }): Map<string, AccountAuthRecord> {
+    const isReadOnly = options?.readOnly ?? this.readOnlyMode;
     this.hasScanned = true;
     if (!fs.existsSync(this.oauthDir)) {
       this.fileCache.clear();
@@ -280,7 +318,7 @@ class AuthPool {
       }
       parsed.mtimeMs = stat.mtimeMs;
 
-      if (parsed.tokens?.id_token) {
+      if (!isReadOnly && parsed.tokens?.id_token) {
         const email = extractEmailFromIdToken(parsed.tokens.id_token);
         if (email && email.toLowerCase() !== parsed.accountId.toLowerCase()) {
           const oldId = parsed.accountId;

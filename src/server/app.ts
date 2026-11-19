@@ -15,31 +15,47 @@ import storageRouter from './routes/storage.js';
 import syncRouter from './routes/sync.js';
 import trashRouter from './routes/trash.js';
 
-const app = new Hono();
-const httpLogger = logger();
+export interface CreateAppOptions {
+  enableHttpLogger?: boolean;
+  enableCompress?: boolean;
+}
 
-app.use('*', compress());
-app.use('*', async (c, next) => {
-  if (c.req.path === '/api/instance/heartbeat' || c.req.path === '/api/health') {
-    return next();
+export function createApp(options: CreateAppOptions = {}) {
+  const { enableHttpLogger = true, enableCompress = true } = options;
+  const app = new Hono();
+
+  if (enableCompress) {
+    app.use('*', compress());
   }
-  return httpLogger(c, next);
-});
-app.use('*', cors());
 
-const routes = app
-  .route('/', instanceRouter)
-  .route('/', poolsRouter)
-  .route('/', storageRouter)
-  .route('/', accountsRouter)
-  .route('/', syncRouter)
-  .route('/', foldersRouter)
-  .route('/', filesRouter)
-  .route('/', itemsRouter)
-  .route('/', trashRouter)
-  .route('/', discrepanciesRouter)
-  .route('/', rebalanceRouter)
-  .route('/', shareRouter);
+  if (enableHttpLogger) {
+    const httpLogger = logger();
+    app.use('*', async (c, next) => {
+      if (c.req.path === '/api/instance/heartbeat' || c.req.path === '/api/health') {
+        return next();
+      }
+      return httpLogger(c, next);
+    });
+  }
+
+  app.use('*', cors());
+
+  return app
+    .route('/', instanceRouter)
+    .route('/', poolsRouter)
+    .route('/', storageRouter)
+    .route('/', accountsRouter)
+    .route('/', syncRouter)
+    .route('/', foldersRouter)
+    .route('/', filesRouter)
+    .route('/', itemsRouter)
+    .route('/', trashRouter)
+    .route('/', discrepanciesRouter)
+    .route('/', rebalanceRouter)
+    .route('/', shareRouter);
+}
+
+const routes = createApp();
 
 export type AppType = typeof routes;
 export default routes;
