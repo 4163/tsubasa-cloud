@@ -59,6 +59,8 @@ const styles = stylex.create({
   },
   bodyScroll: {
     overflowY: 'auto',
+    scrollPaddingTop: spacing.space2,
+    scrollPaddingBottom: spacing.space2,
     flex: 1,
     minHeight: 0,
   },
@@ -578,6 +580,8 @@ const styles = stylex.create({
   resultListContainer: {
     maxHeight: layout.shareResultListMaxHeight,
     overflowY: 'auto',
+    scrollPaddingTop: spacing.space2,
+    scrollPaddingBottom: spacing.space2,
     position: 'relative',
     paddingRight: spacing.space2,
     outline: 'none',

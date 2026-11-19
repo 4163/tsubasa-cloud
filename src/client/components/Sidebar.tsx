@@ -442,6 +442,8 @@ const styles = stylex.create({
   accountsScrollArea: {
     flex: 1,
     overflowY: 'auto',
+    scrollPaddingTop: spacing.space2,
+    scrollPaddingBottom: spacing.space2,
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',

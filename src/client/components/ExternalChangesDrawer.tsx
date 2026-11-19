@@ -146,6 +146,8 @@ const styles = stylex.create({
   contentScroll: {
     flex: 1,
     overflowY: 'auto',
+    scrollPaddingTop: spacing.space2,
+    scrollPaddingBottom: spacing.space2,
     paddingTop: 0,
     paddingBottom: 0,
     paddingLeft: 0,

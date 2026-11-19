@@ -115,6 +115,8 @@ const styles = stylex.create({
   fileList: {
     flex: 1,
     overflowY: 'auto',
+    scrollPaddingTop: spacing.space2,
+    scrollPaddingBottom: spacing.space2,
     paddingTop: 0,
     paddingBottom: 0,
     paddingLeft: 0,
