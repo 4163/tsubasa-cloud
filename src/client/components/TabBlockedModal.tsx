@@ -1,8 +1,8 @@
 import { useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors, spacing, radius, typography } from '../tokens.stylex.js';
-import { IconAlertTriangle } from './Icons.js';
-import type { TabOwnerKind } from '../utils/useTabLock.js';
+import { IconAlertTriangle, IconCheck } from './Icons.js';
+import type { AuthCompletedPayload, TabOwnerKind } from '../utils/useTabLock.js';
 import { useResolvedTheme } from '../hooks/useResolvedTheme.js';
 import { GhostWorkspaceBackdrop } from './GhostWorkspaceBackdrop.js';
 import { ModalDialog } from './ModalDialog.js';
@@ -27,6 +27,13 @@ const styles = stylex.create({
     justifyContent: 'center',
     flexShrink: 0,
   },
+  iconSuccessWrap: {
+    color: colors.success,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   noticeBox: {
     padding: spacing.space4,
     borderRadius: radius.compact,
@@ -38,11 +45,15 @@ const styles = stylex.create({
     flexDirection: 'column',
     gap: spacing.space2,
   },
+  noticeBoxSuccess: {
+    backgroundColor: colors.successSurface,
+  },
   leadText: {
     fontSize: typography.fontSizeBody,
     fontWeight: typography.fontWeightTitle,
     lineHeight: typography.lineHeightBody,
     color: colors.primaryText,
+    overflowWrap: 'anywhere',
     margin: 0,
   },
   bodyText: {
@@ -63,15 +74,39 @@ const styles = stylex.create({
 
 interface TabBlockedModalProps {
   ownerKind: TabOwnerKind;
+  authCompleted?: AuthCompletedPayload | null;
 }
 
 /**
  * Static blocking dialog shown over a blurred workspace placeholder when another instance holds the lock.
  */
-export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
+export function TabBlockedModal({ ownerKind, authCompleted }: TabBlockedModalProps) {
   const effectiveTheme = useResolvedTheme();
   const isElectronOwner = ownerKind === 'electron';
+  const isAuthSuccess = authCompleted != null;
   const titleId = useId();
+
+  const modalTitle = isAuthSuccess ? 'Account linked' : 'Tsubasa~ Cloud is already open';
+
+  const leadMessage = isAuthSuccess
+    ? authCompleted.account
+      ? `${authCompleted.account} is linked to Tsubasa~ Cloud.`
+      : 'Your Google account is linked to Tsubasa~ Cloud.'
+    : isElectronOwner
+      ? 'The Tsubasa~ Cloud desktop app is already running.'
+      : 'Another Tsubasa~ Cloud tab is already open.';
+
+  const bodyMessage = isAuthSuccess
+    ? isElectronOwner
+      ? 'The desktop app is already running and will pick up the new account. You can close this tab and return to the app.'
+      : 'Your active Tsubasa~ Cloud tab is already open and will pick up the new account. You can close this tab and switch back.'
+    : 'This tab is blocked so it cannot conflict with active uploads, syncs, or database writes.';
+
+  const instructionMessage = isAuthSuccess
+    ? isElectronOwner
+      ? 'If the desktop app is no longer open, reload this page to continue here.'
+      : 'If you closed the other tab, reload this page to continue here.'
+    : 'Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.';
 
   return (
     <div
@@ -92,29 +127,24 @@ export function TabBlockedModal({ ownerKind }: TabBlockedModalProps) {
       >
         <ModalHeader
           titleId={titleId}
-          title="Tsubasa~ Cloud is already open"
+          title={modalTitle}
           icon={
-            <span {...stylex.props(styles.iconWrap)} aria-hidden="true">
-              <IconAlertTriangle size={16} />
+            <span
+              {...stylex.props(isAuthSuccess ? styles.iconSuccessWrap : styles.iconWrap)}
+              aria-hidden="true"
+            >
+              {isAuthSuccess ? <IconCheck size={16} /> : <IconAlertTriangle size={16} />}
             </span>
           }
         />
 
         <div {...stylex.props(modalChromeStyles.body, modalChromeStyles.bodySpaced)}>
-          <div {...stylex.props(styles.noticeBox)}>
-            <p {...stylex.props(styles.leadText)}>
-              {isElectronOwner
-                ? 'The Tsubasa~ Cloud desktop app is already running.'
-                : 'Another Tsubasa~ Cloud tab is already open.'}
-            </p>
-            <p {...stylex.props(styles.bodyText)}>
-              This tab is blocked so it cannot conflict with active uploads, syncs, or database writes.
-            </p>
+          <div {...stylex.props(styles.noticeBox, isAuthSuccess && styles.noticeBoxSuccess)}>
+            <p {...stylex.props(styles.leadText)}>{leadMessage}</p>
+            <p {...stylex.props(styles.bodyText)}>{bodyMessage}</p>
           </div>
 
-          <p {...stylex.props(styles.instructionText)}>
-            Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.
-          </p>
+          <p {...stylex.props(styles.instructionText)}>{instructionMessage}</p>
         </div>
       </ModalDialog>
     </div>

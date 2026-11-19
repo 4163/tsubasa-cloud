@@ -7,6 +7,7 @@ export type TabOwnerKind = 'browser' | 'electron';
 export interface TabLockState {
   status: TabLockStatus;
   ownerKind: TabOwnerKind;
+  authCompleted: AuthCompletedPayload | null;
 }
 
 export interface AuthCompletedPayload {
@@ -99,10 +100,10 @@ function releaseStoredLease(instanceId: string): void {
   }
 }
 
-function notifyAuthCompletedIfNeeded(): void {
-  if (typeof window === 'undefined') return;
+function notifyAuthCompletedIfNeeded(): AuthCompletedPayload | null {
+  if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
-  if (params.get('auth') !== 'success') return;
+  if (params.get('auth') !== 'success') return null;
 
   const account = params.get('account') || undefined;
   const rawPoolId = Number(params.get('poolId'));
@@ -127,6 +128,7 @@ function notifyAuthCompletedIfNeeded(): void {
   }
 
   window.history.replaceState({}, '', window.location.pathname);
+  return { account, poolId, conflicts };
 }
 
 function getSingleton(): TabLockSingleton {
@@ -134,7 +136,7 @@ function getSingleton(): TabLockSingleton {
   let singleton = host[SINGLETON_KEY];
   if (!singleton) {
     singleton = {
-      state: { status: 'checking', ownerKind: 'browser' },
+      state: { status: 'checking', ownerKind: 'browser', authCompleted: null },
       started: false,
       listeners: new Set(),
       authListeners: new Set(),
@@ -145,7 +147,11 @@ function getSingleton(): TabLockSingleton {
 }
 
 function publishState(singleton: TabLockSingleton, next: TabLockState): void {
-  if (singleton.state.status === next.status && singleton.state.ownerKind === next.ownerKind) {
+  if (
+    singleton.state.status === next.status &&
+    singleton.state.ownerKind === next.ownerKind &&
+    singleton.state.authCompleted === next.authCompleted
+  ) {
     return;
   }
   singleton.state = next;
@@ -255,8 +261,8 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
   const transitionToBlocked = (ownerKind: TabOwnerKind = 'browser') => {
     clearTimers();
     releaseSameBrowserLock();
-    notifyAuthCompletedIfNeeded();
-    publishState(singleton, { status: 'blocked', ownerKind });
+    const authCompleted = notifyAuthCompletedIfNeeded() ?? singleton.state.authCompleted;
+    publishState(singleton, { status: 'blocked', ownerKind, authCompleted });
   };
 
   const openActiveChannel = () => {
@@ -366,7 +372,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
 
     openActiveChannel();
     startServerHeartbeat();
-    publishState(singleton, { status: 'active', ownerKind: 'browser' });
+    publishState(singleton, { status: 'active', ownerKind: 'browser', authCompleted: null });
   };
 
   const acquireLockAndLease = () => {

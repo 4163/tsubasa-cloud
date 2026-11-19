@@ -30,7 +30,7 @@ function CheckingShell() {
 }
 
 function TabLockGate() {
-  const { status, ownerKind } = useTabLock();
+  const { status, ownerKind, authCompleted } = useTabLock();
 
   if (status === 'checking') {
     return <CheckingShell />;
@@ -38,7 +38,11 @@ function TabLockGate() {
 
   return (
     <React.Suspense fallback={<CheckingShell />}>
-      {status === 'blocked' ? <TabBlockedModal ownerKind={ownerKind} /> : <App />}
+      {status === 'blocked' ? (
+        <TabBlockedModal ownerKind={ownerKind} authCompleted={authCompleted} />
+      ) : (
+        <App />
+      )}
     </React.Suspense>
   );
 }
