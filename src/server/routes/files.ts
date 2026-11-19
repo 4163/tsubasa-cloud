@@ -250,29 +250,52 @@ const router = new Hono()
     }
     try {
       // Handle 0-byte active files directly with HTTP 200 and an empty body so Drive never returns HTTP 416.
-      const zeroByteCandidate = (
+      // Query strictly on indexed columns (id PK, then virtual_path) to avoid full-table scans.
+      let zeroByteCandidate = (
         parsedPool.poolId !== undefined
           ? sqlite
               .prepare(
                 `SELECT id, name, size_bytes as sizeBytes, mime_type as mimeType, hash
                  FROM files
-                 WHERE (id = ? OR virtual_path = ? OR drive_file_id = ?)
-                   AND is_trashed = 0 AND pool_id = ?
+                 WHERE id = ? AND is_trashed = 0 AND pool_id = ?
                  LIMIT 1`
               )
-              .get(fileId, fileId, fileId, parsedPool.poolId)
+              .get(fileId, parsedPool.poolId)
           : sqlite
               .prepare(
                 `SELECT id, name, size_bytes as sizeBytes, mime_type as mimeType, hash
                  FROM files
-                 WHERE (id = ? OR virtual_path = ? OR drive_file_id = ?)
-                   AND is_trashed = 0
+                 WHERE id = ? AND is_trashed = 0
                  LIMIT 1`
               )
-              .get(fileId, fileId, fileId)
+              .get(fileId)
       ) as
         | { id: string; name: string; sizeBytes: number; mimeType: string; hash: string | null }
         | undefined;
+
+      if (!zeroByteCandidate && fileId.startsWith('/')) {
+        zeroByteCandidate = (
+          parsedPool.poolId !== undefined
+            ? sqlite
+                .prepare(
+                  `SELECT id, name, size_bytes as sizeBytes, mime_type as mimeType, hash
+                   FROM files
+                   WHERE pool_id = ? AND virtual_path = ? AND is_trashed = 0
+                   LIMIT 1`
+                )
+                .get(parsedPool.poolId, fileId)
+            : sqlite
+                .prepare(
+                  `SELECT id, name, size_bytes as sizeBytes, mime_type as mimeType, hash
+                   FROM files
+                   WHERE virtual_path = ? AND is_trashed = 0
+                   LIMIT 1`
+                )
+                .get(fileId)
+        ) as
+          | { id: string; name: string; sizeBytes: number; mimeType: string; hash: string | null }
+          | undefined;
+      }
 
       if (zeroByteCandidate && zeroByteCandidate.sizeBytes === 0) {
         const headers: Record<string, string> = {
@@ -376,36 +399,73 @@ const router = new Hono()
     }> = [];
 
     if (rawBy === 'hash') {
-      const dupeHashes = sqlite
-        .prepare(
-          `SELECT hash, COUNT(*) as cnt
-           FROM files
-           WHERE is_trashed = 0 AND hash IS NOT NULL AND hash != '' ${poolClause}
-           GROUP BY hash
-           HAVING COUNT(*) > 1
-           ORDER BY SUM(size_bytes) DESC, hash ASC`
-        )
-        .all(...poolParams) as Array<{ hash: string; cnt: number }>;
+      const dupeHashes = (
+        poolId !== undefined
+          ? sqlite
+              .prepare(
+                `SELECT hash, COUNT(*) as cnt
+                 FROM files
+                 WHERE pool_id = ? AND is_trashed = 0 AND hash IS NOT NULL AND hash != ''
+                 GROUP BY hash
+                 HAVING COUNT(*) > 1
+                 ORDER BY SUM(size_bytes) DESC, hash ASC`
+              )
+              .all(poolId)
+          : sqlite
+              .prepare(
+                `SELECT hash, COUNT(*) as cnt
+                 FROM files
+                 WHERE is_trashed = 0 AND hash IS NOT NULL AND hash != ''
+                 GROUP BY hash
+                 HAVING COUNT(*) > 1
+                 ORDER BY SUM(size_bytes) DESC, hash ASC`
+              )
+              .all()
+      ) as Array<{ hash: string; cnt: number }>;
 
-      const membersStmt = sqlite.prepare(
-        `SELECT
-           id,
-           pool_id as poolId,
-           virtual_path as virtualPath,
-           name,
-           size_bytes as sizeBytes,
-           mime_type as mimeType,
-           hash,
-           account_id as accountId,
-           folder_id as folderId,
-           updated_at as updatedAt
-         FROM files
-         WHERE is_trashed = 0 AND hash = ? ${poolClause}
-         ORDER BY pool_id ASC, virtual_path ASC`
-      );
+      // Omit ORDER BY in SQL so SQLite uses files_pool_trashed_hash_idx directly, then sort small groups in JS.
+      const membersStmt =
+        poolId !== undefined
+          ? sqlite.prepare(
+              `SELECT
+                 id,
+                 pool_id as poolId,
+                 virtual_path as virtualPath,
+                 name,
+                 size_bytes as sizeBytes,
+                 mime_type as mimeType,
+                 hash,
+                 account_id as accountId,
+                 folder_id as folderId,
+                 updated_at as updatedAt
+               FROM files
+               WHERE pool_id = ? AND is_trashed = 0 AND hash = ?`
+            )
+          : sqlite.prepare(
+              `SELECT
+                 id,
+                 pool_id as poolId,
+                 virtual_path as virtualPath,
+                 name,
+                 size_bytes as sizeBytes,
+                 mime_type as mimeType,
+                 hash,
+                 account_id as accountId,
+                 folder_id as folderId,
+                 updated_at as updatedAt
+               FROM files
+               WHERE is_trashed = 0 AND hash = ?`
+            );
 
       for (const row of dupeHashes) {
-        const members = membersStmt.all(row.hash, ...poolParams) as DupeFileRow[];
+        const members = (
+          poolId !== undefined
+            ? membersStmt.all(poolId, row.hash)
+            : membersStmt.all(row.hash)
+        ) as DupeFileRow[];
+        members.sort((a, b) =>
+          a.poolId !== b.poolId ? a.poolId - b.poolId : a.virtualPath.localeCompare(b.virtualPath)
+        );
         const sizeBytes = members[0]?.sizeBytes ?? 0;
         const wastedBytes = Math.max(0, (members.length - 1) * sizeBytes);
         groups.push({
@@ -720,14 +780,14 @@ const router = new Hono()
       updatedAt: number;
     };
 
-    let folderRows: Array<{
+    type FolderFindRow = {
       id: string;
       poolId: number;
       virtualPath: string;
       name: string;
       updatedAt: number;
-    }>;
-    let fileRows: Array<{
+    };
+    type FileFindRow = {
       id: string;
       poolId: number;
       virtualPath: string;
@@ -736,89 +796,107 @@ const router = new Hono()
       mimeType: string;
       accountId: string;
       updatedAt: number;
-    }>;
+    };
+
+    const hasTextFilter = Boolean(qLower || globRegex);
+    const sqlLimit = hasTextFilter ? null : limit + 1;
+    const limitClause = sqlLimit !== null ? ' LIMIT ?' : '';
+
+    let folderStmt: ReturnType<typeof sqlite.prepare<unknown[], FolderFindRow>>;
+    let folderParams: unknown[];
+    let fileStmt: ReturnType<typeof sqlite.prepare<unknown[], FileFindRow>>;
+    let fileParams: unknown[];
 
     if (!recursive) {
       const targetFolderId = normPath === '/' ? null : formatFolderId(poolId, normPath);
-      folderRows = sqlite
-        .prepare(
-          `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, updated_at as updatedAt
-           FROM folders
-           WHERE pool_id = ? AND ${targetFolderId === null ? 'parent_folder_id IS NULL' : 'parent_folder_id = ?'}
-             ${afterPath ? 'AND virtual_path > ?' : ''}
-           ORDER BY virtual_path ASC`
-        )
-        .all(
-          ...(targetFolderId === null
-            ? afterPath
-              ? [poolId, afterPath]
-              : [poolId]
-            : afterPath
-              ? [poolId, targetFolderId, afterPath]
-              : [poolId, targetFolderId])
-        ) as typeof folderRows;
+      folderStmt = sqlite.prepare<unknown[], FolderFindRow>(
+        `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, updated_at as updatedAt
+         FROM folders
+         WHERE pool_id = ? AND ${targetFolderId === null ? 'parent_folder_id IS NULL' : 'parent_folder_id = ?'}
+           ${afterPath ? 'AND virtual_path > ?' : ''}
+         ORDER BY virtual_path ASC${limitClause}`
+      );
+      folderParams = [
+        poolId,
+        ...(targetFolderId !== null ? [targetFolderId] : []),
+        ...(afterPath ? [afterPath] : []),
+        ...(sqlLimit !== null ? [sqlLimit] : []),
+      ];
 
-      fileRows = sqlite
-        .prepare(
-          `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
-           FROM files
-           WHERE pool_id = ? AND is_trashed = 0 AND ${targetFolderId === null ? 'folder_id IS NULL' : 'folder_id = ?'}
-             ${afterPath ? 'AND virtual_path > ?' : ''}
-           ORDER BY virtual_path ASC`
-        )
-        .all(
-          ...(targetFolderId === null
-            ? afterPath
-              ? [poolId, afterPath]
-              : [poolId]
-            : afterPath
-              ? [poolId, targetFolderId, afterPath]
-              : [poolId, targetFolderId])
-        ) as typeof fileRows;
+      // Use files_folder_idx directly when listing a non-root directory (+pool_id prevents
+      // SQLite from scanning the entire pool via files_pool_trashed_path_idx to avoid a small sort).
+      fileStmt = sqlite.prepare<unknown[], FileFindRow>(
+        targetFolderId !== null
+          ? `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
+             FROM files
+             WHERE folder_id = ? AND +pool_id = ? AND is_trashed = 0
+               ${afterPath ? 'AND virtual_path > ?' : ''}
+             ORDER BY virtual_path ASC${limitClause}`
+          : `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
+             FROM files
+             WHERE pool_id = ? AND is_trashed = 0 AND folder_id IS NULL
+               ${afterPath ? 'AND virtual_path > ?' : ''}
+             ORDER BY virtual_path ASC${limitClause}`
+      );
+      fileParams =
+        targetFolderId !== null
+          ? [
+              targetFolderId,
+              poolId,
+              ...(afterPath ? [afterPath] : []),
+              ...(sqlLimit !== null ? [sqlLimit] : []),
+            ]
+          : [
+              poolId,
+              ...(afterPath ? [afterPath] : []),
+              ...(sqlLimit !== null ? [sqlLimit] : []),
+            ];
     } else if (normPath !== '/') {
       const { lower, upper } = buildDirectoryPrefixBounds(normPath);
       const effectiveLower = afterPath && afterPath > lower ? afterPath : lower;
       const cmp = afterPath && afterPath >= lower ? '>' : '>=';
 
-      folderRows = sqlite
-        .prepare(
-          `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, updated_at as updatedAt
-           FROM folders
-           WHERE pool_id = ? AND virtual_path ${cmp} ? AND virtual_path < ?
-           ORDER BY virtual_path ASC`
-        )
-        .all(poolId, effectiveLower, upper) as typeof folderRows;
+      folderStmt = sqlite.prepare<unknown[], FolderFindRow>(
+        `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, updated_at as updatedAt
+         FROM folders
+         WHERE pool_id = ? AND virtual_path ${cmp} ? AND virtual_path < ?
+         ORDER BY virtual_path ASC${limitClause}`
+      );
+      folderParams = [poolId, effectiveLower, upper, ...(sqlLimit !== null ? [sqlLimit] : [])];
 
-      fileRows = sqlite
-        .prepare(
-          `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
-           FROM files
-           WHERE pool_id = ? AND is_trashed = 0 AND virtual_path ${cmp} ? AND virtual_path < ?
-           ORDER BY virtual_path ASC`
-        )
-        .all(poolId, effectiveLower, upper) as typeof fileRows;
+      fileStmt = sqlite.prepare<unknown[], FileFindRow>(
+        `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
+         FROM files
+         WHERE pool_id = ? AND is_trashed = 0 AND virtual_path ${cmp} ? AND virtual_path < ?
+         ORDER BY virtual_path ASC${limitClause}`
+      );
+      fileParams = [poolId, effectiveLower, upper, ...(sqlLimit !== null ? [sqlLimit] : [])];
     } else {
-      folderRows = sqlite
-        .prepare(
-          `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, updated_at as updatedAt
-           FROM folders
-           WHERE pool_id = ? ${afterPath ? 'AND virtual_path > ?' : ''}
-           ORDER BY virtual_path ASC`
-        )
-        .all(...(afterPath ? [poolId, afterPath] : [poolId])) as typeof folderRows;
+      folderStmt = sqlite.prepare<unknown[], FolderFindRow>(
+        `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, updated_at as updatedAt
+         FROM folders
+         WHERE pool_id = ? ${afterPath ? 'AND virtual_path > ?' : ''}
+         ORDER BY virtual_path ASC${limitClause}`
+      );
+      folderParams = [poolId, ...(afterPath ? [afterPath] : []), ...(sqlLimit !== null ? [sqlLimit] : [])];
 
-      fileRows = sqlite
-        .prepare(
-          `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
-           FROM files
-           WHERE pool_id = ? AND is_trashed = 0 ${afterPath ? 'AND virtual_path > ?' : ''}
-           ORDER BY virtual_path ASC`
-        )
-        .all(...(afterPath ? [poolId, afterPath] : [poolId])) as typeof fileRows;
+      fileStmt = sqlite.prepare<unknown[], FileFindRow>(
+        `SELECT id, pool_id as poolId, virtual_path as virtualPath, name, size_bytes as sizeBytes, mime_type as mimeType, account_id as accountId, updated_at as updatedAt
+         FROM files
+         WHERE pool_id = ? AND is_trashed = 0 ${afterPath ? 'AND virtual_path > ?' : ''}
+         ORDER BY virtual_path ASC${limitClause}`
+      );
+      fileParams = [poolId, ...(afterPath ? [afterPath] : []), ...(sqlLimit !== null ? [sqlLimit] : [])];
     }
 
     const merged: FindItem[] = [];
-    for (const f of folderRows) {
+    const maxCollect = limit + 1;
+
+    // Stream both sorted iterators and collect at most limit + 1 matching items per table
+    // so large catalogs are never materialized in memory.
+    let folderMatches = 0;
+    for (const raw of folderStmt.iterate(...folderParams)) {
+      const f = raw as FolderFindRow;
       if (matchesFilter(f.name, f.virtualPath)) {
         merged.push({
           kind: 'folder',
@@ -831,9 +909,14 @@ const router = new Hono()
           accountId: null,
           updatedAt: f.updatedAt,
         });
+        folderMatches += 1;
+        if (folderMatches >= maxCollect) break;
       }
     }
-    for (const f of fileRows) {
+
+    let fileMatches = 0;
+    for (const raw of fileStmt.iterate(...fileParams)) {
+      const f = raw as FileFindRow;
       if (matchesFilter(f.name, f.virtualPath)) {
         merged.push({
           kind: 'file',
@@ -846,6 +929,8 @@ const router = new Hono()
           accountId: f.accountId,
           updatedAt: f.updatedAt,
         });
+        fileMatches += 1;
+        if (fileMatches >= maxCollect) break;
       }
     }
 

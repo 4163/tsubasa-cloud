@@ -7,31 +7,36 @@ import {
   InsufficientStorageError,
   invalidatePooledStorageOverview,
   recordTransferSync,
+  reserveAccountCapacity,
   simulateBatchPlacement,
+  validateTargetPlacement,
 } from '../storage/index.js';
 import { buildTsubasaAppProperties } from './appProperties.js';
 import { authPool } from './auth.js';
 import { getDriveClient } from './client.js';
-import { copyDriveFileCrossAccount } from './crossAccountCopy.js';
-import {
-  copyDriveFileWithAclRetry,
-  ensureFolderShareForJob,
-  revokeJobShares,
-} from './crossPoolMove.js';
 import { invalidateDiscrepancyCache } from './discrepancyCache.js';
 import {
-  isDriveNotFoundError,
   ItemNotFoundError,
   runBoundedConcurrency,
   withDriveRetry,
 } from './errors.js';
+import {
+  copyInternalFileWithFallbackAndVerify,
+  deleteDriveFileWithOutboxFallback,
+  ensureFolderShareForJob,
+  incrementTransferJobProgress,
+  normalizeMd5,
+  reconcileTransferJobCounters,
+  revokeJobShares,
+} from './jobHelpers.js';
 import { clearRemoteFolderCache, ensureRemoteFolderHierarchy } from './mirror.js';
 import { enqueueDriveOutbox } from './outbox.js';
-import { deleteRemoteFileIgnoreNotFound } from './outboxExecutors.js';
+import { drainOutboxForAccount } from './outboxQueue.js';
 import { getAccountRootFolderId } from './remoteTree.js';
+import { UploadJobStateError } from './resumableUpload.js';
 
-const MD5_HEX_RE = /^[a-f0-9]{32}$/i;
 const EVACUATE_CONCURRENCY = 4;
+const OUTBOX_DRAIN_BEFORE_REMOVE_MS = 30_000;
 
 const activeEvacuationJobs = new Map<string, Promise<AccountEvacuationResult>>();
 const cancelledEvacuationJobs = new Set<string>();
@@ -72,12 +77,6 @@ interface EvacuationJobMetadata {
   removeAfterEvacuate: boolean;
 }
 
-function normalizeMd5(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim().toLowerCase();
-  return MD5_HEX_RE.test(trimmed) ? trimmed : null;
-}
-
 export function findActiveAccountEvacuationJob(accountId: string): { id: string; status: string } | null {
   const row = sqlite
     .prepare(
@@ -91,15 +90,51 @@ export function findActiveAccountEvacuationJob(accountId: string): { id: string;
   return row ?? null;
 }
 
-function removeEmptyAccountFromSystem(accountId: string, poolId: number, rootFolderId: string | null): void {
+async function drainAndRemoveEmptyAccountFromSystem(
+  accountId: string,
+  poolId: number,
+  rootFolderId: string | null
+): Promise<void> {
+  // Drain any queued drive_outbox operations (e.g., fallback source file_delete rows)
+  // before deleting the account row, because ON DELETE CASCADE would otherwise wipe them
+  // and orphan files on the removed Drive account.
+  const pendingBefore = sqlite
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM drive_outbox
+       WHERE account_id = ? AND status IN ('pending', 'processing', 'failed', 'dead')`
+    )
+    .get(accountId) as { cnt: number } | undefined;
+
+  if (Number(pendingBefore?.cnt ?? 0) > 0) {
+    try {
+      await drainOutboxForAccount(accountId, OUTBOX_DRAIN_BEFORE_REMOVE_MS);
+    } catch {
+      // Checked authoritatively below against drive_outbox state.
+    }
+  }
+
   sqlite.transaction(() => {
-    const remaining = sqlite
+    const remainingFiles = sqlite
       .prepare('SELECT COUNT(*) as cnt FROM files WHERE account_id = ?')
       .get(accountId) as { cnt: number } | undefined;
-    const cnt = Number(remaining?.cnt ?? 0);
-    if (cnt > 0) {
-      throw new Error(`Cannot remove account ${accountId}: ${cnt} file(s) still remain on account`);
+    const fileCnt = Number(remainingFiles?.cnt ?? 0);
+    if (fileCnt > 0) {
+      throw new Error(`Cannot remove account ${accountId}: ${fileCnt} file(s) still remain on account`);
     }
+
+    const remainingOutbox = sqlite
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM drive_outbox
+         WHERE account_id = ? AND status IN ('pending', 'processing', 'failed', 'dead')`
+      )
+      .get(accountId) as { cnt: number } | undefined;
+    const outboxCnt = Number(remainingOutbox?.cnt ?? 0);
+    if (outboxCnt > 0) {
+      throw new Error(
+        `Cannot remove account ${accountId}: ${outboxCnt} pending/failed/dead drive_outbox item(s) remain. Retry or clear outbox before removing this account.`
+      );
+    }
+
     sqlite.prepare('DELETE FROM accounts WHERE id = ?').run(accountId);
   }).immediate();
 
@@ -110,51 +145,6 @@ function removeEmptyAccountFromSystem(accountId: string, poolId: number, rootFol
     clearRemoteFolderCache(rootFolderId);
   }
   authPool.removeAccount(accountId);
-}
-
-function syncEvacuationCounters(jobId: string): {
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-  transferredBytes: number;
-} {
-  const rows = sqlite
-    .prepare(
-      `SELECT status, COUNT(*) as cnt, COALESCE(SUM(transferred_bytes), 0) as bytes
-       FROM transfer_job_items
-       WHERE job_id = ?
-       GROUP BY status`
-    )
-    .all(jobId) as Array<{ status: string; cnt: number; bytes: number }>;
-
-  const counts = {
-    pending: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-    transferredBytes: 0,
-  };
-
-  for (const r of rows) {
-    const cnt = Number(r.cnt);
-    if (r.status === 'pending') counts.pending = cnt;
-    else if (r.status === 'running') counts.running = cnt;
-    else if (r.status === 'completed') {
-      counts.completed = cnt;
-      counts.transferredBytes += Number(r.bytes);
-    } else if (r.status === 'failed') counts.failed = cnt;
-  }
-
-  sqlite
-    .prepare(
-      `UPDATE transfer_jobs
-       SET completed_items = ?, failed_items = ?, transferred_bytes = ?, updated_at = unixepoch()
-       WHERE id = ?`
-    )
-    .run(counts.completed, counts.failed, counts.transferredBytes, jobId);
-
-  return counts;
 }
 
 function readEvacuationJobResult(jobId: string, queued = false, removed = false): AccountEvacuationResult {
@@ -334,6 +324,8 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
         .prepare(`UPDATE transfer_job_items SET status = 'running', attempts = attempts + 1, updated_at = unixepoch() WHERE id = ?`)
         .run(item.id);
 
+      let releaseCapacity: () => void = () => {};
+
       try {
         const currentFile = sqlite
           .prepare(
@@ -359,15 +351,23 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
 
         if (!currentFile || currentFile.accountId !== sourceAccountId) {
           // File was already moved or removed before resume.
-          sqlite
-            .prepare(
-              `UPDATE transfer_job_items
-               SET status = 'completed', transferred_bytes = ?, updated_at = unixepoch()
-               WHERE id = ?`
-            )
-            .run(item.sizeBytes, item.id);
+          sqlite.transaction(() => {
+            sqlite
+              .prepare(
+                `UPDATE transfer_job_items
+                 SET status = 'completed', transferred_bytes = ?, updated_at = unixepoch()
+                 WHERE id = ?`
+              )
+              .run(item.sizeBytes, item.id);
+            incrementTransferJobProgress(jobId, { completedDelta: 1, bytesDelta: item.sizeBytes });
+          }).immediate();
           return;
         }
+
+        // Re-verify live headroom (750 MB reserve), 24h cap, and disabled status right before copy,
+        // and reserve target capacity in-flight until commit finishes.
+        await validateTargetPlacement(item.targetAccountId, currentFile.sizeBytes, Date.now(), poolId);
+        releaseCapacity = reserveAccountCapacity(item.targetAccountId, currentFile.sizeBytes);
 
         const driveSource = getDriveClient(sourceAccountId);
         const driveTarget = getDriveClient(item.targetAccountId);
@@ -386,67 +386,23 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
           includeChecksum: true,
         });
 
-        let copied: { id: string; size: number | null; md5Checksum: string | null };
-        try {
-          copied = await copyDriveFileWithAclRetry({
-            driveTarget,
-            sourceDriveFileId: currentFile.driveFileId,
-            targetRemoteFolderId,
-            destFileName: currentFile.name,
-            appProperties,
-          });
-        } catch (copyErr) {
-          if (isDriveNotFoundError(copyErr)) {
-            const targetEmail = accountEmailMap.get(item.targetAccountId);
-            const fallbackId = await copyDriveFileCrossAccount({
-              sourceAccountId,
-              sourceDriveFileId: currentFile.driveFileId,
-              targetAccountId: item.targetAccountId,
-              targetAccountEmail: targetEmail,
-              targetRemoteFolderId,
-              destFileName: currentFile.name,
-              appProperties,
-              fields: 'id, name, size, md5Checksum',
-            });
-            const metaRes = await withDriveRetry(() =>
-              driveTarget.files.get({
-                fileId: fallbackId,
-                fields: 'id, size, md5Checksum',
-                supportsAllDrives: false,
-              })
-            );
-            copied = {
-              id: fallbackId,
-              size: metaRes.data.size !== undefined && metaRes.data.size !== null ? Number(metaRes.data.size) : null,
-              md5Checksum: metaRes.data.md5Checksum ? metaRes.data.md5Checksum.toLowerCase() : null,
-            };
-          } else {
-            throw copyErr;
-          }
-        }
+        const copied = await copyInternalFileWithFallbackAndVerify({
+          sourceAccountId,
+          sourceDriveFileId: currentFile.driveFileId,
+          sourceFileId: currentFile.id,
+          expectedSizeBytes: currentFile.sizeBytes,
+          expectedHash: currentFile.hash ?? item.expectedHash,
+          targetAccountId: item.targetAccountId,
+          targetAccountEmail: accountEmailMap.get(item.targetAccountId),
+          targetPoolId: poolId,
+          targetRemoteFolderId,
+          destFileName: currentFile.name,
+          destVirtualPath: currentFile.virtualPath,
+          appProperties,
+          contextLabel: 'Evacuation',
+        });
 
         const expectedMd5 = normalizeMd5(currentFile.hash ?? item.expectedHash);
-        if (
-          (expectedMd5 && copied.md5Checksum && copied.md5Checksum !== expectedMd5) ||
-          (copied.size !== null && copied.size !== currentFile.sizeBytes)
-        ) {
-          try {
-            await deleteRemoteFileIgnoreNotFound(driveTarget, copied.id);
-          } catch {
-            enqueueDriveOutbox([
-              {
-                accountId: item.targetAccountId,
-                poolId,
-                opType: 'file_delete',
-                driveFileId: copied.id,
-                payload: { fileId: currentFile.id, driveFileId: copied.id },
-              },
-            ]);
-          }
-          throw new Error(
-            `Evacuation verification failed for "${currentFile.virtualPath}": expected md5=${expectedMd5} size=${currentFile.sizeBytes}, got md5=${copied.md5Checksum} size=${copied.size}`
-          );
-        }
 
         if (Boolean(currentFile.isTrashed)) {
           try {
@@ -505,33 +461,30 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
                WHERE id = ?`
             )
             .run(copied.id, copied.md5Checksum ?? expectedMd5, currentFile.sizeBytes, item.id);
+
+          incrementTransferJobProgress(jobId, { completedDelta: 1, bytesDelta: currentFile.sizeBytes });
         }).immediate();
 
         touchedAccounts.add(item.targetAccountId);
 
-        try {
-          await deleteRemoteFileIgnoreNotFound(driveSource, currentFile.driveFileId);
-        } catch (delErr) {
-          console.warn(`Failed to delete source Drive file ${currentFile.driveFileId} during evacuation:`, delErr);
-          enqueueDriveOutbox([
-            {
-              accountId: sourceAccountId,
-              poolId,
-              opType: 'file_delete',
-              driveFileId: currentFile.driveFileId,
-              payload: { fileId: currentFile.id, driveFileId: currentFile.driveFileId },
-            },
-          ]);
-        }
-
-        syncEvacuationCounters(jobId);
+        await deleteDriveFileWithOutboxFallback(driveSource, {
+          accountId: sourceAccountId,
+          poolId,
+          fileId: currentFile.id,
+          driveFileId: currentFile.driveFileId,
+          contextLabel: 'evacuation source cleanup',
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         fatalError = fatalError ?? msg;
-        sqlite
-          .prepare(`UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`)
-          .run(msg, item.id);
-        syncEvacuationCounters(jobId);
+        sqlite.transaction(() => {
+          sqlite
+            .prepare(`UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`)
+            .run(msg, item.id);
+          incrementTransferJobProgress(jobId, { failedDelta: 1 });
+        }).immediate();
+      } finally {
+        releaseCapacity();
       }
     });
   } finally {
@@ -543,7 +496,7 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
     }
   }
 
-  const finalCounts = syncEvacuationCounters(jobId);
+  const finalCounts = reconcileTransferJobCounters(jobId);
 
   if (cancelledEvacuationJobs.has(jobId)) {
     cancelledEvacuationJobs.delete(jobId);
@@ -565,7 +518,11 @@ async function executeAccountEvacuationJobInternal(jobId: string): Promise<Accou
   } else {
     if (meta.removeAfterEvacuate) {
       try {
-        removeEmptyAccountFromSystem(sourceAccountId, poolId, sourceAccountRow?.rootFolderId ?? null);
+        await drainAndRemoveEmptyAccountFromSystem(
+          sourceAccountId,
+          poolId,
+          sourceAccountRow?.rootFolderId ?? null
+        );
         removed = true;
       } catch (rmErr) {
         const msg = rmErr instanceof Error ? rmErr.message : String(rmErr);
@@ -648,7 +605,7 @@ export async function startAccountEvacuation(
 
   if (accountFiles.length === 0) {
     if (removeAfterEvacuate) {
-      removeEmptyAccountFromSystem(accountId, account.poolId, account.rootFolderId);
+      await drainAndRemoveEmptyAccountFromSystem(accountId, account.poolId, account.rootFolderId);
     } else if (!account.isDisabled) {
       sqlite
         .prepare('UPDATE accounts SET is_disabled = 1, updated_at = unixepoch() WHERE id = ?')
@@ -787,6 +744,9 @@ export async function resumeAccountEvacuationJob(
   if (!job) {
     throw new ItemNotFoundError(`Account evacuation job '${jobId}' not found`);
   }
+  if (job.status === 'cancelled') {
+    throw new UploadJobStateError(`Account evacuation job '${jobId}' was cancelled and cannot be resumed`);
+  }
   if (job.status === 'completed') {
     return readEvacuationJobResult(jobId, false, false);
   }
@@ -799,6 +759,7 @@ export async function resumeAccountEvacuationJob(
          WHERE job_id = ? AND status IN ('failed', 'paused', 'running')`
       )
       .run(jobId);
+    reconcileTransferJobCounters(jobId);
     sqlite
       .prepare(
         `UPDATE transfer_jobs SET status = 'running', pause_reason = NULL, last_error = NULL, updated_at = unixepoch()

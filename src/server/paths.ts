@@ -63,10 +63,6 @@ export function setTsubasaHomeOverride(homeDir: string | null | undefined): void
   explicitHomeOverride = trimmed ? path.resolve(trimmed) : null;
 }
 
-export function getTsubasaHomeOverride(): string | null {
-  return explicitHomeOverride;
-}
-
 export function resolveTsubasaHome(homeOverride?: string): string {
   const explicitArg = homeOverride?.trim();
   if (explicitArg) {

@@ -1,10 +1,7 @@
-import { bumpPoolRevision, db, sqlite } from '../db/index.js';
+import { db, sqlite } from '../db/index.js';
 import { accounts } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { authPool } from './auth.js';
-import { invalidateDiscrepancyCache } from './discrepancyCache.js';
-import { clearRemoteFolderCache } from './mirror.js';
-import { evacuateAccountFiles, type EvacuationResult } from './rebalance.js';
 
 export async function disableDriveAccount(accountId: string): Promise<{ success: boolean; accountId: string }> {
   const account = await db.query.accounts.findFirst({
@@ -44,60 +41,6 @@ export async function enableDriveAccount(accountId: string): Promise<{ success: 
     .where(eq(accounts.id, accountId));
 
   return { success: true, accountId };
-}
-
-export async function removeDriveAccount(
-  accountId: string
-): Promise<EvacuationResult & { removed: boolean }> {
-  const account = await db.query.accounts.findFirst({
-    where: eq(accounts.id, accountId),
-  });
-
-  let evacuationResult: EvacuationResult = {
-    sourceAccountId: accountId,
-    filesMoved: 0,
-    bytesMoved: 0,
-    transfers: [],
-  };
-
-  if (account) {
-    if (!account.isDisabled) {
-      await db
-        .update(accounts)
-        .set({
-          isDisabled: true,
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, accountId));
-    }
-
-    evacuationResult = await evacuateAccountFiles(accountId);
-
-    const deleteAccountIfEmpty = sqlite.transaction(() => {
-      const row = sqlite
-        .prepare<[string], { cnt: number }>('SELECT COUNT(*) AS cnt FROM files WHERE account_id = ?')
-        .get(accountId);
-      const cnt = row?.cnt ?? 0;
-      if (cnt > 0) {
-        throw new Error(`Cannot remove account ${accountId}: ${cnt} file(s) still remain on account`);
-      }
-      sqlite.prepare<[string]>('DELETE FROM accounts WHERE id = ?').run(accountId);
-    });
-    deleteAccountIfEmpty.immediate();
-
-    bumpPoolRevision(account.poolId);
-    invalidateDiscrepancyCache(accountId);
-    if (account.rootFolderId) {
-      clearRemoteFolderCache(account.rootFolderId);
-    }
-  }
-
-  authPool.removeAccount(accountId);
-
-  return {
-    ...evacuationResult,
-    removed: true,
-  };
 }
 
 export async function getAccountsList(poolId?: number) {

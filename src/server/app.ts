@@ -57,7 +57,4 @@ export function createApp(options: CreateAppOptions = {}) {
     .route('/', transfersRouter);
 }
 
-const routes = createApp();
-
-export type AppType = typeof routes;
-export default routes;
+export type AppType = ReturnType<typeof createApp>;

@@ -83,7 +83,6 @@ class AuthPool {
   private explicitOauthDir: string | null;
   private hasScanned = false;
   private readOnlyMode = false;
-  private skipAutoScan = false;
   private watcher: fs.FSWatcher | null = null;
   private watchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private tokenWriteQueues = new WeakMap<AccountAuthRecord, Promise<void>>();
@@ -106,22 +105,6 @@ class AuthPool {
     if (enabled) {
       this.stopWatching();
     }
-  }
-
-  public isReadOnlyMode(): boolean {
-    return this.readOnlyMode;
-  }
-
-  public setSkipAutoScan(enabled: boolean): void {
-    this.skipAutoScan = enabled;
-  }
-
-  public isAutoScanSkipped(): boolean {
-    return this.skipAutoScan;
-  }
-
-  public isWatching(): boolean {
-    return this.watcher !== null;
   }
 
   private getTokenFileSignature(baseName: string): string {
@@ -217,9 +200,6 @@ class AuthPool {
   }
 
   public ensureScanned(options?: { readOnly?: boolean }): Map<string, AccountAuthRecord> {
-    if (this.skipAutoScan) {
-      return this.pool;
-    }
     if (!this.hasScanned) {
       return this.scan(options);
     }
@@ -227,7 +207,7 @@ class AuthPool {
   }
 
   public startWatching(): void {
-    if (this.watcher || this.readOnlyMode || this.skipAutoScan) {
+    if (this.watcher || this.readOnlyMode) {
       return;
     }
 

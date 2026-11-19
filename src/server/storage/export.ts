@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { sqlite, buildDirectoryPrefixBounds } from '../db/index.js';
 import { normalizeVirtualPath } from '../virtualPath.js';
 import {
@@ -7,6 +6,13 @@ import {
   getPooledStorageOverview,
   getTransferStatsByAccountMap,
 } from './quota.js';
+import {
+  AmbiguousAccountSelectorError,
+  maskEmail,
+  resolveAccountSelector,
+  scrubEmailsInString,
+  toAccountRef,
+} from './redact.js';
 
 export const EXPORT_SCHEMA_VERSION = 1;
 
@@ -35,7 +41,6 @@ export const ALL_EXPORT_ENTITIES: readonly ExportEntityName[] = [
 
 const BASE_ENTITIES: readonly ExportEntityName[] = ['pools', 'accounts', 'folders', 'files'];
 const VALID_ENTITY_SET = new Set<string>(ALL_EXPORT_ENTITIES);
-const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 export interface ExportOptions {
   preset?: ExportPreset;
@@ -63,40 +68,9 @@ export function isExportEntityName(value: string): value is ExportEntityName {
   return VALID_ENTITY_SET.has(value);
 }
 
-function toAccountRef(accountId: string): string {
-  const normalized = accountId.trim().toLowerCase();
-  const digest = createHash('sha256').update(normalized).digest('hex');
-  return `acc_${digest.slice(0, 8)}`;
-}
-
-function maskLocalPart(local: string): string {
-  if (local.length <= 1) return '*';
-  if (local.length === 2) return `${local[0]}*`;
-  return `${local[0]}***${local[local.length - 1]}`;
-}
-
-function maskDomainLabel(label: string): string {
-  if (label.length <= 1) return '*';
-  return `${label[0]}***`;
-}
-
-function maskEmail(email: string): string {
-  const atIndex = email.lastIndexOf('@');
-  if (atIndex === -1) return email;
-  const local = email.slice(0, atIndex);
-  const domain = email.slice(atIndex + 1);
-  const maskedLocal = maskLocalPart(local);
-  const labels = domain.split('.');
-  if (labels.length <= 1) {
-    return `${maskedLocal}@${maskDomainLabel(domain)}`;
-  }
-  const [firstLabel = '', ...rest] = labels;
-  return `${maskedLocal}@${maskDomainLabel(firstLabel)}.${rest.join('.')}`;
-}
-
 function scrubEmails(text: string | null, redacted: boolean): string | null {
   if (text === null || !redacted) return text;
-  return text.replace(EMAIL_PATTERN, (match) => maskEmail(match));
+  return scrubEmailsInString(text);
 }
 
 function secondsToMs(sec: number | null | undefined): number | null {
@@ -159,35 +133,20 @@ function resolveAccountFilter(rawAccount?: string): string | null {
   if (!rawAccount || !rawAccount.trim()) {
     return null;
   }
-  const query = rawAccount.trim().toLowerCase();
   const rows = sqlite
     .prepare('SELECT id, email FROM accounts ORDER BY id ASC')
     .all() as Array<{ id: string; email: string }>;
 
-  for (const row of rows) {
-    if (toAccountRef(row.id) === query) {
-      return row.id;
+  try {
+    const matched = resolveAccountSelector(rawAccount, rows);
+    if (matched) {
+      return matched.id;
     }
-  }
-  for (const row of rows) {
-    if (row.id.toLowerCase() === query || row.email.toLowerCase() === query) {
-      return row.id;
+  } catch (err) {
+    if (err instanceof AmbiguousAccountSelectorError) {
+      throw new ExportValidationError('AMBIGUOUS_ACCOUNT_SELECTOR', err.message, 400);
     }
-  }
-
-  const prefixMatches = rows.filter((row) => row.email.toLowerCase().startsWith(query));
-  if (prefixMatches.length === 1) {
-    return prefixMatches[0].id;
-  }
-  if (prefixMatches.length > 1) {
-    const candidates = prefixMatches
-      .map((r) => `${toAccountRef(r.id)} (${maskEmail(r.email)})`)
-      .join(', ');
-    throw new ExportValidationError(
-      'AMBIGUOUS_ACCOUNT_SELECTOR',
-      `Ambiguous account filter '${rawAccount}' matches: ${candidates}`,
-      400
-    );
+    throw err;
   }
 
   throw new ExportValidationError('ACCOUNT_NOT_FOUND', `Account '${rawAccount}' not found`, 404);

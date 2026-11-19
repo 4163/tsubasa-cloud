@@ -1,6 +1,8 @@
 import crypto, { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
-import type { drive_v3 } from 'googleapis';
+import { google, type drive_v3 } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
 import { bumpPoolRevision, sqlite } from '../db/index.js';
 import {
   getEligibleAccounts,
@@ -13,6 +15,7 @@ import {
 } from '../storage/index.js';
 import { normalizeVirtualPath } from '../virtualPath.js';
 import { buildTsubasaAppProperties } from './appProperties.js';
+import { authPool } from './auth.js';
 import { getAccessToken, getDriveClient } from './client.js';
 import { invalidateDiscrepancyCache } from './discrepancyCache.js';
 import {
@@ -21,16 +24,26 @@ import {
   ItemNotFoundError,
   withDriveRetry,
 } from './errors.js';
+import {
+  deleteDriveFileWithOutboxFallback,
+  incrementTransferJobProgress,
+  normalizeMd5,
+  reconcileTransferJobCounters,
+  revokeJobShares,
+  sleepMs,
+} from './jobHelpers.js';
 import { ensureRemoteFolderHierarchy } from './mirror.js';
 import { allocateUniqueVirtualPath, displaceTrashedFileAtPath } from './operationsDb.js';
 import { enqueueDriveOutbox } from './outbox.js';
-import { deleteRemoteFileIgnoreNotFound } from './outboxExecutors.js';
 import { isSharePoolId } from './poolRegistry.js';
 import { getAccountRootFolderId } from './remoteTree.js';
+import { UploadJobStateError } from './resumableUpload.js';
 import {
   acquireSourceOAuthClient,
-  listCachedSourceTokens,
+  getSourceTokenPath,
+  parseSourceCredentialFile,
   type AcquiredSourceDriveClient,
+  type CachedSourceTokenRecord,
   type SourceAuthScopeMode,
 } from './sourceAuth.js';
 import { ensureLocalParentFolders, formatFolderId } from './sync.js';
@@ -144,19 +157,62 @@ interface ImportDriveJobMetadata {
 
 const ACL_PROPAGATION_BACKOFF_MS = [300, 800, 1_500, 2_500, 4_000];
 const RAW_DRIVE_ID_RE = /^[a-zA-Z0-9_-]{3,200}$/;
-const MD5_HEX_RE = /^[a-f0-9]{32}$/i;
 
 const activeImportJobs = new Map<string, Promise<ImportDriveJobResult>>();
 const cancelledImportJobs = new Set<string>();
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+/**
+ * Loads a cached external Drive client strictly from disk without ever launching
+ * interactive browser OAuth or stdin prompts. Used on job cancellation and startup recovery.
+ */
+function tryLoadCachedSourceDriveNonInteractive(
+  credPath: string | undefined,
+  scopeMode: SourceAuthScopeMode = 'drive',
+  homeDir?: string
+): { drive: drive_v3.Drive | null; reason?: string } {
+  if (!credPath) {
+    return { drive: null, reason: 'missing source credential path in job metadata' };
+  }
 
-function normalizeMd5(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim().toLowerCase();
-  return MD5_HEX_RE.test(trimmed) ? trimmed : null;
+  let config: ReturnType<typeof parseSourceCredentialFile>;
+  try {
+    config = parseSourceCredentialFile(credPath);
+  } catch (err) {
+    return {
+      drive: null,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  const tokenPath = getSourceTokenPath(config.clientId, scopeMode, homeDir);
+  if (!fs.existsSync(tokenPath)) {
+    return { drive: null, reason: 'no cached source OAuth token on disk' };
+  }
+
+  let record: Partial<CachedSourceTokenRecord>;
+  try {
+    record = JSON.parse(fs.readFileSync(tokenPath, 'utf8')) as Partial<CachedSourceTokenRecord>;
+  } catch (err) {
+    return {
+      drive: null,
+      reason: `unreadable cached source token (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+
+  const tokens = record.tokens;
+  const hasRefresh = Boolean(tokens?.refresh_token);
+  const hasUnexpiredAccess = Boolean(
+    tokens?.access_token &&
+      typeof tokens.expiry_date === 'number' &&
+      tokens.expiry_date > Date.now() + 60_000
+  );
+  if (!tokens || (!hasRefresh && !hasUnexpiredAccess)) {
+    return { drive: null, reason: 'cached source OAuth token is expired and lacks a refresh token' };
+  }
+
+  const client = new OAuth2Client(config.clientId, config.clientSecret);
+  client.setCredentials(tokens);
+  return { drive: google.drive({ version: 'v3', auth: client }) };
 }
 
 export function parseDriveFolderIdOrUrl(input: string): string {
@@ -390,13 +446,7 @@ async function scanExternalDriveTree(params: {
           | undefined;
         if (existing) {
           if (conflictMode === 'skip') {
-            const existingMd5 = normalizeMd5(existing.hash);
-            if (!md5Checksum || !existingMd5 || existingMd5 === md5Checksum) {
-              skipReason = 'skipped_conflict';
-            } else {
-              // Under skip policy, existing target path is skipped rather than overwritten.
-              skipReason = 'skipped_conflict';
-            }
+            skipReason = 'skipped_conflict';
           } else if (conflictMode === 'keep_both') {
             destVirtualPath = allocateUniqueVirtualPath({
               targetDir: path.posix.dirname(destVirtualPath),
@@ -685,7 +735,7 @@ async function copyExternalFileWithAclBackoff(params: {
     } catch (err) {
       lastErr = err;
       if (getDriveErrorStatus(err) === 404 && attempt < ACL_PROPAGATION_BACKOFF_MS.length) {
-        await sleep(ACL_PROPAGATION_BACKOFF_MS[attempt]);
+        await sleepMs(ACL_PROPAGATION_BACKOFF_MS[attempt]);
         continue;
       }
       throw err;
@@ -702,6 +752,7 @@ async function streamExternalFileToTarget(params: {
   sourceAuth: AcquiredSourceDriveClient;
   sourceDriveFileId: string;
   targetAccountId: string;
+  poolId: number;
   targetRemoteFolderId: string;
   destFileName: string;
   mimeType: string;
@@ -790,6 +841,14 @@ async function streamExternalFileToTarget(params: {
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         streamedBytes += chunk.byteLength;
+        if (streamedBytes > params.sizeBytes) {
+          controller.error(
+            new UploadValidationError(
+              `Source Drive stream exceeded expected size (${streamedBytes} > ${params.sizeBytes} bytes)`
+            )
+          );
+          return;
+        }
         md5Hasher.update(chunk);
         controller.enqueue(chunk);
       },
@@ -807,8 +866,22 @@ async function streamExternalFileToTarget(params: {
     body: hashedStream,
   };
 
-  const uploadRes = await fetch(uploadLocation, uploadInit);
+  let uploadRes: Response;
+  try {
+    uploadRes = await fetch(uploadLocation, uploadInit);
+  } catch (err) {
+    await sourceRes.body.cancel().catch(() => {});
+    if (streamedBytes > 0) {
+      recordTransferSync(params.targetAccountId, 'upload', streamedBytes, Date.now(), params.poolId);
+    }
+    throw err;
+  }
+
   if (!uploadRes.ok) {
+    await sourceRes.body.cancel().catch(() => {});
+    if (streamedBytes > 0) {
+      recordTransferSync(params.targetAccountId, 'upload', streamedBytes, Date.now(), params.poolId);
+    }
     const errText = await uploadRes.text().catch(() => '');
     throw new Error(`Target Drive streaming upload failed (${uploadRes.status}): ${errText}`);
   }
@@ -821,54 +894,6 @@ async function streamExternalFileToTarget(params: {
     streamedMd5: md5Hasher.digest('hex').toLowerCase(),
     streamedBytes,
   };
-}
-
-function syncImportCounters(jobId: string): {
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-  skipped: number;
-  transferredBytes: number;
-} {
-  const rows = sqlite
-    .prepare(
-      `SELECT status, COUNT(*) as cnt, COALESCE(SUM(transferred_bytes), 0) as bytes
-       FROM transfer_job_items
-       WHERE job_id = ?
-       GROUP BY status`
-    )
-    .all(jobId) as Array<{ status: string; cnt: number; bytes: number }>;
-
-  const counts = {
-    pending: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-    skipped: 0,
-    transferredBytes: 0,
-  };
-
-  for (const r of rows) {
-    const cnt = Number(r.cnt);
-    if (r.status === 'pending') counts.pending = cnt;
-    else if (r.status === 'running') counts.running = cnt;
-    else if (r.status === 'completed') {
-      counts.completed = cnt;
-      counts.transferredBytes += Number(r.bytes);
-    } else if (r.status === 'failed') counts.failed = cnt;
-    else if (r.status === 'skipped') counts.skipped = cnt;
-  }
-
-  sqlite
-    .prepare(
-      `UPDATE transfer_jobs
-       SET completed_items = ?, failed_items = ?, skipped_items = ?, transferred_bytes = ?, updated_at = unixepoch()
-       WHERE id = ?`
-    )
-    .run(counts.completed, counts.failed, counts.skipped, counts.transferredBytes, jobId);
-
-  return counts;
 }
 
 function readImportJobResult(jobId: string, queued = false): ImportDriveJobResult {
@@ -1020,6 +1045,7 @@ async function executeImportDriveJobInternal(
   let pausedForDailyCap = false;
   let pauseMessage: string | null = null;
   let fatalError: string | null = null;
+  let shareRevokeWarning: string | null = null;
 
   try {
     for (const item of pendingItems) {
@@ -1036,25 +1062,29 @@ async function executeImportDriveJobInternal(
 
       if (existingActive) {
         if (meta.conflictMode === 'skip') {
-          sqlite
-            .prepare(
-              `UPDATE transfer_job_items
-               SET status = 'skipped', skip_reason = 'skipped_conflict', updated_at = unixepoch()
-               WHERE id = ?`
-            )
-            .run(item.id);
-          syncImportCounters(jobId);
+          sqlite.transaction(() => {
+            sqlite
+              .prepare(
+                `UPDATE transfer_job_items
+                 SET status = 'skipped', skip_reason = 'skipped_conflict', updated_at = unixepoch()
+                 WHERE id = ?`
+              )
+              .run(item.id);
+            incrementTransferJobProgress(jobId, { skippedDelta: 1 });
+          }).immediate();
           continue;
         }
         if (meta.conflictMode === 'reject') {
           const msg = `Destination path already exists: ${item.destVirtualPath}`;
           fatalError = fatalError ?? msg;
-          sqlite
-            .prepare(
-              `UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`
-            )
-            .run(msg, item.id);
-          syncImportCounters(jobId);
+          sqlite.transaction(() => {
+            sqlite
+              .prepare(
+                `UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`
+              )
+              .run(msg, item.id);
+            incrementTransferJobProgress(jobId, { failedDelta: 1 });
+          }).immediate();
           continue;
         }
       }
@@ -1078,12 +1108,14 @@ async function executeImportDriveJobInternal(
         }
         const msg = placeErr instanceof Error ? placeErr.message : String(placeErr);
         fatalError = fatalError ?? msg;
-        sqlite
-          .prepare(
-            `UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`
-          )
-          .run(msg, item.id);
-        syncImportCounters(jobId);
+        sqlite.transaction(() => {
+          sqlite
+            .prepare(
+              `UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`
+            )
+            .run(msg, item.id);
+          incrementTransferJobProgress(jobId, { failedDelta: 1 });
+        }).immediate();
         continue;
       }
 
@@ -1160,6 +1192,7 @@ async function executeImportDriveJobInternal(
             sourceAuth,
             sourceDriveFileId: item.sourceDriveFileId,
             targetAccountId,
+            poolId,
             targetRemoteFolderId,
             destFileName,
             mimeType: item.mimeType,
@@ -1183,19 +1216,17 @@ async function executeImportDriveJobInternal(
           (expectedMd5 && transferred.md5Checksum && transferred.md5Checksum !== expectedMd5) ||
           (actualSize !== null && actualSize !== item.sizeBytes)
         ) {
-          try {
-            await deleteRemoteFileIgnoreNotFound(driveTarget, transferred.id);
-          } catch {
-            enqueueDriveOutbox([
-              {
-                accountId: targetAccountId,
-                poolId,
-                opType: 'file_delete',
-                driveFileId: transferred.id,
-                payload: { fileId, driveFileId: transferred.id },
-              },
-            ]);
+          const uploadedBytes = transferred.streamedBytes ?? actualSize ?? item.sizeBytes;
+          if (uploadedBytes > 0) {
+            recordTransferSync(targetAccountId, 'upload', uploadedBytes, Date.now(), poolId);
           }
+          await deleteDriveFileWithOutboxFallback(driveTarget, {
+            accountId: targetAccountId,
+            poolId,
+            fileId,
+            driveFileId: transferred.id,
+            contextLabel: 'import verification cleanup',
+          });
           throw new Error(
             `Import verification failed for "${item.destVirtualPath}": expected md5=${expectedMd5} size=${item.sizeBytes}, got md5=${transferred.md5Checksum} size=${actualSize}`
           );
@@ -1303,25 +1334,31 @@ async function executeImportDriveJobInternal(
                WHERE id = ?`
             )
             .run(transferred.id, resolvedHash, item.sizeBytes, useStream ? 'stream' : 'copy', item.id);
+
+          incrementTransferJobProgress(jobId, { completedDelta: 1, bytesDelta: item.sizeBytes });
         }).immediate();
 
         touchedAccounts.add(targetAccountId);
-        syncImportCounters(jobId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         fatalError = fatalError ?? msg;
-        sqlite
-          .prepare(
-            `UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`
-          )
-          .run(msg, item.id);
-        syncImportCounters(jobId);
+        sqlite.transaction(() => {
+          sqlite
+            .prepare(
+              `UPDATE transfer_job_items SET status = 'failed', last_error = ?, updated_at = unixepoch() WHERE id = ?`
+            )
+            .run(msg, item.id);
+          incrementTransferJobProgress(jobId, { failedDelta: 1 });
+        }).immediate();
       } finally {
         releaseCapacity();
       }
     }
   } finally {
-    await revokeExternalImportJobShares(jobId, sourceAuth.drive);
+    const revokeRes = await revokeExternalImportJobShares(jobId, sourceAuth.drive);
+    if (revokeRes.failedCount > 0) {
+      shareRevokeWarning = `${revokeRes.failedCount} temporary Drive share(s) could not be revoked.`;
+    }
     bumpPoolRevision(poolId);
     invalidatePooledStorageOverview(poolId);
     for (const accId of touchedAccounts) {
@@ -1329,10 +1366,11 @@ async function executeImportDriveJobInternal(
     }
   }
 
-  const finalCounts = syncImportCounters(jobId);
+  const finalCounts = reconcileTransferJobCounters(jobId);
 
   if (cancelledImportJobs.has(jobId)) {
     cancelledImportJobs.delete(jobId);
+    const cancelError = shareRevokeWarning ? `Cancelled, but ${shareRevokeWarning}` : null;
     sqlite.transaction(() => {
       sqlite
         .prepare(
@@ -1342,32 +1380,35 @@ async function executeImportDriveJobInternal(
         .run(jobId);
       sqlite
         .prepare(
-          `UPDATE transfer_jobs SET status = 'cancelled', pause_reason = NULL, updated_at = unixepoch() WHERE id = ?`
+          `UPDATE transfer_jobs SET status = 'cancelled', pause_reason = NULL, last_error = ?, updated_at = unixepoch() WHERE id = ?`
         )
-        .run(jobId);
+        .run(cancelError, jobId);
     }).immediate();
   } else if (pausedForDailyCap) {
+    const combinedPause = shareRevokeWarning ? `${pauseMessage} (${shareRevokeWarning})` : pauseMessage;
     sqlite
       .prepare(
         `UPDATE transfer_jobs
          SET status = 'paused', pause_reason = 'DAILY_TRANSFER_CAP', last_error = ?, updated_at = unixepoch()
          WHERE id = ?`
       )
-      .run(pauseMessage, jobId);
+      .run(combinedPause, jobId);
   } else if (finalCounts.failed > 0) {
+    const errSummary = fatalError ?? `${finalCounts.failed} import item(s) failed`;
+    const combinedErr = shareRevokeWarning ? `${errSummary} (${shareRevokeWarning})` : errSummary;
     sqlite
       .prepare(
         `UPDATE transfer_jobs SET status = 'failed', pause_reason = NULL, last_error = ?, updated_at = unixepoch() WHERE id = ?`
       )
-      .run(fatalError ?? `${finalCounts.failed} import item(s) failed`, jobId);
+      .run(combinedErr, jobId);
   } else {
     sqlite
       .prepare(
         `UPDATE transfer_jobs
-         SET status = 'completed', pause_reason = NULL, last_error = NULL, completed_at = unixepoch(), updated_at = unixepoch()
+         SET status = 'completed', pause_reason = NULL, last_error = ?, completed_at = unixepoch(), updated_at = unixepoch()
          WHERE id = ?`
       )
-      .run(jobId);
+      .run(shareRevokeWarning, jobId);
   }
 
   return readImportJobResult(jobId, false);
@@ -1507,6 +1548,9 @@ export async function resumeImportDriveJob(
   if (!row) {
     throw new ItemNotFoundError(`Import job '${jobId}' not found`);
   }
+  if (row.status === 'cancelled') {
+    throw new UploadJobStateError(`Import job '${jobId}' was cancelled and cannot be resumed`);
+  }
   if (row.status === 'completed') {
     return readImportJobResult(jobId, false);
   }
@@ -1527,6 +1571,7 @@ export async function resumeImportDriveJob(
          WHERE id = ?`
       )
       .run(jobId);
+    reconcileTransferJobCounters(jobId);
   }).immediate();
 
   const runPromise = executeImportDriveJobInternal(jobId).finally(() => {
@@ -1561,50 +1606,202 @@ export async function cancelImportDriveJob(jobId: string): Promise<ImportDriveJo
 
   cancelledImportJobs.add(jobId);
 
-  // Best-effort revocation of any unrevoked temporary shares using cached source tokens only (never launch interactive OAuth on cancel).
-  const activeShareCountRow = sqlite
-    .prepare('SELECT COUNT(*) as cnt FROM transfer_job_shares WHERE job_id = ? AND revoked_at IS NULL')
-    .get(jobId) as { cnt: number } | undefined;
+  const isRunningInProcess = activeImportJobs.has(jobId);
+  let shareRevokeWarning: string | null = null;
 
-  if (Number(activeShareCountRow?.cnt ?? 0) > 0 && row.metadataJson) {
-    let sourceDrive: drive_v3.Drive | null = null;
-    try {
-      const meta = JSON.parse(row.metadataJson) as Partial<ImportDriveJobMetadata>;
-      const cachedTokens = listCachedSourceTokens(meta.homeDir);
-      if (meta.sourceAuthPath && cachedTokens.length > 0) {
-        const auth = await acquireSourceOAuthClient({
-          credPath: meta.sourceAuthPath,
-          scopeMode: meta.sourceScopeMode ?? 'drive',
-          noBrowser: true,
-          homeDir: meta.homeDir,
-          timeoutMs: 1_000,
-        });
-        sourceDrive = auth.drive;
+  // When no in-process runner owns the live source Drive client, revoke unrevoked shares
+  // strictly from cached disk tokens (never launching interactive OAuth on cancel).
+  if (!isRunningInProcess) {
+    const activeShareCountRow = sqlite
+      .prepare('SELECT COUNT(*) as cnt FROM transfer_job_shares WHERE job_id = ? AND revoked_at IS NULL')
+      .get(jobId) as { cnt: number } | undefined;
+    const activeShareCount = Number(activeShareCountRow?.cnt ?? 0);
+
+    if (activeShareCount > 0) {
+      let meta: Partial<ImportDriveJobMetadata> = {};
+      if (row.metadataJson) {
+        try {
+          meta = JSON.parse(row.metadataJson) as Partial<ImportDriveJobMetadata>;
+        } catch {
+          meta = {};
+        }
       }
-    } catch {
-      sourceDrive = null;
+
+      const cached = tryLoadCachedSourceDriveNonInteractive(
+        meta.sourceAuthPath,
+        meta.sourceScopeMode ?? 'drive',
+        meta.homeDir
+      );
+      const revokeRes = await revokeExternalImportJobShares(jobId, cached.drive);
+      if (revokeRes.failedCount > 0) {
+        const reasonSuffix = cached.reason ? `: ${cached.reason}` : '';
+        shareRevokeWarning = `Cancelled, but ${revokeRes.failedCount} temporary Drive share(s) could not be revoked${reasonSuffix}.`;
+      }
     }
-    await revokeExternalImportJobShares(jobId, sourceDrive);
+
+    if (row.status !== 'completed') {
+      sqlite.transaction(() => {
+        sqlite
+          .prepare(
+            `UPDATE transfer_job_items
+             SET status = 'cancelled', updated_at = unixepoch()
+             WHERE job_id = ? AND status NOT IN ('completed', 'skipped')`
+          )
+          .run(jobId);
+        sqlite
+          .prepare(
+            `UPDATE transfer_jobs
+             SET status = 'cancelled', pause_reason = NULL, last_error = ?, updated_at = unixepoch()
+             WHERE id = ?`
+          )
+          .run(shareRevokeWarning, jobId);
+      }).immediate();
+    } else if (shareRevokeWarning) {
+      sqlite
+        .prepare('UPDATE transfer_jobs SET last_error = ?, updated_at = unixepoch() WHERE id = ?')
+        .run(shareRevokeWarning, jobId);
+    }
   }
 
-  if (!activeImportJobs.has(jobId) && row.status !== 'completed') {
+  return readImportJobResult(jobId, false);
+}
+
+export interface OrphanedJobRecoveryResult {
+  recoveredJobs: number;
+  revokedShares: number;
+  failedShareRevocations: number;
+}
+
+/**
+ * Recovers transfer jobs left in 'running' state after a hard server crash or restart
+ * and revokes any unrevoked temporary Drive folder shares left in transfer_job_shares.
+ */
+export async function recoverOrphanedTransferJobsOnStartup(): Promise<OrphanedJobRecoveryResult> {
+  authPool.ensureScanned();
+
+  const orphanedJobs = sqlite
+    .prepare(
+      `SELECT id, kind, metadata_json as metadataJson
+       FROM transfer_jobs
+       WHERE status = 'running'
+         AND kind IN ('account_evacuate', 'cross_pool_move', 'import_drive')`
+    )
+    .all() as Array<{ id: string; kind: string; metadataJson: string | null }>;
+
+  const unrevokedShareJobRows = sqlite
+    .prepare(
+      `SELECT DISTINCT s.job_id as jobId, j.kind as kind, j.status as status, j.metadata_json as metadataJson, j.last_error as lastError
+       FROM transfer_job_shares s
+       LEFT JOIN transfer_jobs j ON j.id = s.job_id
+       WHERE s.revoked_at IS NULL`
+    )
+    .all() as Array<{
+    jobId: string;
+    kind: string | null;
+    status: string | null;
+    metadataJson: string | null;
+    lastError: string | null;
+  }>;
+
+  let revokedShares = 0;
+  let failedShareRevocations = 0;
+  const shareWarningByJob = new Map<string, string>();
+
+  for (const row of unrevokedShareJobRows) {
+    // 1. Revoke any internal pool-account shares (source_account_id IS NOT NULL).
+    const internalRes = await revokeJobShares(row.jobId);
+    revokedShares += internalRes.revokedCount;
+    failedShareRevocations += internalRes.failedCount;
+
+    let warningParts: string[] = [];
+    if (internalRes.failedCount > 0) {
+      warningParts.push(`${internalRes.failedCount} internal temporary share(s) could not be revoked`);
+    }
+
+    // 2. Revoke any external import_drive shares (source_account_id IS NULL) non-interactively.
+    const remainingExternal = sqlite
+      .prepare(
+        `SELECT COUNT(*) as cnt
+         FROM transfer_job_shares
+         WHERE job_id = ? AND revoked_at IS NULL AND source_account_id IS NULL`
+      )
+      .get(row.jobId) as { cnt: number } | undefined;
+
+    if (Number(remainingExternal?.cnt ?? 0) > 0) {
+      let meta: Partial<ImportDriveJobMetadata> = {};
+      if (row.metadataJson) {
+        try {
+          meta = JSON.parse(row.metadataJson) as Partial<ImportDriveJobMetadata>;
+        } catch {
+          meta = {};
+        }
+      }
+      const cached = tryLoadCachedSourceDriveNonInteractive(
+        meta.sourceAuthPath,
+        meta.sourceScopeMode ?? 'drive',
+        meta.homeDir
+      );
+      const extRes = await revokeExternalImportJobShares(row.jobId, cached.drive);
+      revokedShares += extRes.revokedCount;
+      failedShareRevocations += extRes.failedCount;
+      if (extRes.failedCount > 0) {
+        const reasonSuffix = cached.reason ? ` (${cached.reason})` : '';
+        warningParts.push(
+          `${extRes.failedCount} external temporary Drive share(s) could not be revoked${reasonSuffix}`
+        );
+      }
+    }
+
+    if (warningParts.length > 0) {
+      shareWarningByJob.set(row.jobId, warningParts.join('; '));
+    }
+  }
+
+  const orphanedJobIds = new Set(orphanedJobs.map((j) => j.id));
+
+  for (const job of orphanedJobs) {
+    const shareWarning = shareWarningByJob.get(job.id);
+    const recoveryMessage = shareWarning
+      ? `Paused after server restart recovery; resume with 'tsubasa job resume'. Warning: ${shareWarning}.`
+      : "Paused after server restart recovery; resume with 'tsubasa job resume'.";
+
     sqlite.transaction(() => {
       sqlite
         .prepare(
           `UPDATE transfer_job_items
-           SET status = 'cancelled', updated_at = unixepoch()
-           WHERE job_id = ? AND status NOT IN ('completed', 'skipped')`
+           SET status = 'pending', updated_at = unixepoch()
+           WHERE job_id = ? AND status = 'running'`
         )
-        .run(jobId);
+        .run(job.id);
       sqlite
         .prepare(
           `UPDATE transfer_jobs
-           SET status = 'cancelled', pause_reason = NULL, updated_at = unixepoch()
+           SET status = 'paused',
+               pause_reason = 'SERVER_RESTART_RECOVERY',
+               last_error = ?,
+               updated_at = unixepoch()
            WHERE id = ?`
         )
-        .run(jobId);
+        .run(recoveryMessage, job.id);
+      reconcileTransferJobCounters(job.id);
     }).immediate();
   }
 
-  return readImportJobResult(jobId, false);
+  for (const row of unrevokedShareJobRows) {
+    if (orphanedJobIds.has(row.jobId)) {
+      continue;
+    }
+    const shareWarning = shareWarningByJob.get(row.jobId);
+    if (shareWarning && !row.lastError) {
+      sqlite
+        .prepare('UPDATE transfer_jobs SET last_error = ?, updated_at = unixepoch() WHERE id = ?')
+        .run(`Startup recovery warning: ${shareWarning}.`, row.jobId);
+    }
+  }
+
+  return {
+    recoveredJobs: orphanedJobs.length,
+    revokedShares,
+    failedShareRevocations,
+  };
 }

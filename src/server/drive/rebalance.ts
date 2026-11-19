@@ -9,7 +9,6 @@ import { copyDriveFileCrossAccount } from './crossAccountCopy.js';
 import { deleteRemoteFileIgnoreNotFound } from './outboxExecutors.js';
 import { enqueueDriveOutbox } from './outbox.js';
 import { ensureRemoteFolderHierarchy } from './mirror.js';
-import { normalizeVirtualPath } from '../virtualPath.js';
 import { invalidateDiscrepancyCache } from './discrepancyCache.js';
 import {
   calculateHeadroom,
@@ -17,10 +16,8 @@ import {
   getAccountTransferStats,
   recordTransferSync,
   InsufficientStorageError,
-  type AccountTransferStats,
 } from '../storage/index.js';
 import { getTransferStatsByAccountMap } from '../storage/quota.js';
-import { buildPoolFolderAffinityMap } from '../storage/placement.js';
 
 export class RebalanceValidationError extends Error {
   constructor(message: string) {
@@ -391,196 +388,5 @@ export function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   const val = bytes / Math.pow(k, i);
   return `${val >= 10 || i === 0 ? Math.round(val) : val.toFixed(2)} ${sizes[i]}`;
-}
-
-function formatCountdown(ms: number): string {
-  if (ms <= 0) return '0s';
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
-}
-
-export interface EvacuationResult {
-  sourceAccountId: string;
-  filesMoved: number;
-  bytesMoved: number;
-  transfers: RebalanceOperationResult[];
-}
-
-export async function evacuateAccountFiles(sourceAccountId: string): Promise<EvacuationResult> {
-  const sourceAccount = await db.query.accounts.findFirst({
-    where: eq(accounts.id, sourceAccountId),
-  });
-
-  if (!sourceAccount) {
-    throw new Error(`Account ${sourceAccountId} not found`);
-  }
-
-  const accountFiles = await db.query.files.findMany({
-    where: eq(files.accountId, sourceAccountId),
-  });
-
-  if (accountFiles.length === 0) {
-    return {
-      sourceAccountId,
-      filesMoved: 0,
-      bytesMoved: 0,
-      transfers: [],
-    };
-  }
-
-  const allAccounts = await db.query.accounts.findMany();
-  const candidateAccounts = allAccounts.filter(
-    (a) =>
-      a.poolId === sourceAccount.poolId &&
-      a.id !== sourceAccountId &&
-      !a.isDisabled &&
-      a.syncState !== 'error'
-  );
-
-  if (candidateAccounts.length === 0) {
-    throw new InsufficientStorageError(
-      'Cannot disable or remove drive: no other active accounts available in the storage pool to receive files.'
-    );
-  }
-
-  const nowMs = Date.now();
-  interface TargetState {
-    account: typeof allAccounts[0];
-    headroomBytes: number;
-    remainingDailyBytes: number;
-    transferStats: AccountTransferStats;
-  }
-
-  const transferStatsByAccount = await getTransferStatsByAccountMap(
-    candidateAccounts.map((cand) => cand.id),
-    nowMs
-  );
-  const targetStates: TargetState[] = candidateAccounts.map((cand) => {
-    const transferStats = transferStatsByAccount.get(cand.id)!;
-    return {
-      account: cand,
-      headroomBytes: calculateHeadroom(cand.quotaLimitBytes, cand.quotaUsedBytes),
-      remainingDailyBytes: transferStats.remainingUploadBytes24h,
-      transferStats,
-    };
-  });
-
-  const totalBytesToMove = accountFiles.reduce((sum, f) => sum + f.sizeBytes, 0);
-  const totalAvailableHeadroom = targetStates.reduce((sum, t) => sum + t.headroomBytes, 0);
-  const totalAvailableDailyBudget = targetStates.reduce((sum, t) => sum + t.remainingDailyBytes, 0);
-
-  if (totalAvailableHeadroom < totalBytesToMove) {
-    throw new InsufficientStorageError(
-      `Cannot disable or remove drive: insufficient pool headroom. Evacuating files requires ${formatBytes(totalBytesToMove)}, but remaining active accounts only have ${formatBytes(totalAvailableHeadroom)} free headroom.`
-    );
-  }
-
-  if (totalAvailableDailyBudget < totalBytesToMove) {
-    const activeResets = targetStates
-      .map((t) => t.transferStats.nextResetMs)
-      .filter((ms): ms is number => typeof ms === 'number' && ms > 0);
-    const minResetMs = activeResets.length > 0 ? Math.min(...activeResets) : null;
-    const graceMsg = minResetMs ? ` Quota frees in ${formatCountdown(minResetMs)}.` : '';
-    throw new InsufficientStorageError(
-      `Cannot disable or remove drive: 24-hour transfer quota limit exceeded. Evacuating files requires ${formatBytes(totalBytesToMove)}, but remaining active accounts only have ${formatBytes(totalAvailableDailyBudget)} daily transfer quota remaining.${graceMsg}`
-    );
-  }
-
-  const simulatedHeadrooms = new Map<string, number>(
-    targetStates.map((t) => [t.account.id, t.headroomBytes])
-  );
-  const simulatedBudgets = new Map<string, number>(
-    targetStates.map((t) => [t.account.id, t.remainingDailyBytes])
-  );
-
-  const plan: Array<{ file: FileRecord; targetAccountId: string }> = [];
-  const sortedFiles = [...accountFiles].sort((a, b) => b.sizeBytes - a.sizeBytes);
-  const affinityMap = await buildPoolFolderAffinityMap(sourceAccount.poolId);
-
-  for (const file of sortedFiles) {
-    const normalizedPath = normalizeVirtualPath(file.virtualPath);
-
-    const eligible = targetStates.filter((t) => {
-      const h = simulatedHeadrooms.get(t.account.id) ?? 0;
-      const b = simulatedBudgets.get(t.account.id) ?? 0;
-      return h >= file.sizeBytes && b >= file.sizeBytes;
-    });
-
-    if (eligible.length === 0) {
-      const hasHeadroomCandidate = targetStates.some(
-        (t) => (simulatedHeadrooms.get(t.account.id) ?? 0) >= file.sizeBytes
-      );
-
-      if (hasHeadroomCandidate) {
-        const activeResets = targetStates
-          .map((t) => t.transferStats.nextResetMs)
-          .filter((ms): ms is number => typeof ms === 'number' && ms > 0);
-        const minResetMs = activeResets.length > 0 ? Math.min(...activeResets) : null;
-        const graceMsg = minResetMs ? ` Quota frees in ${formatCountdown(minResetMs)}.` : '';
-        throw new InsufficientStorageError(
-          `Cannot disable or remove drive: daily transfer quota limit exceeded for "${file.name}" (${formatBytes(file.sizeBytes)}).${graceMsg}`
-        );
-      }
-
-      throw new InsufficientStorageError(
-        `Cannot disable or remove drive: no individual active account has enough free headroom to hold "${file.name}" (${formatBytes(file.sizeBytes)}).`
-      );
-    }
-
-    const affinityAccountIds = affinityMap.getAffinityAccounts(normalizedPath);
-    let chosenTarget = eligible.find((t) => affinityAccountIds.includes(t.account.id));
-
-    if (!chosenTarget) {
-      chosenTarget = eligible[0];
-      let minDiff = (simulatedHeadrooms.get(chosenTarget.account.id) ?? 0) - file.sizeBytes;
-      for (let i = 1; i < eligible.length; i++) {
-        const diff = (simulatedHeadrooms.get(eligible[i].account.id) ?? 0) - file.sizeBytes;
-        if (diff < minDiff) {
-          minDiff = diff;
-          chosenTarget = eligible[i];
-        }
-      }
-    }
-
-    affinityMap.recordAssignment(normalizedPath, chosenTarget.account.id);
-
-    const curHeadroom = simulatedHeadrooms.get(chosenTarget.account.id) ?? 0;
-    const curBudget = simulatedBudgets.get(chosenTarget.account.id) ?? 0;
-    simulatedHeadrooms.set(chosenTarget.account.id, curHeadroom - file.sizeBytes);
-    simulatedBudgets.set(chosenTarget.account.id, curBudget - file.sizeBytes);
-
-    plan.push({ file, targetAccountId: chosenTarget.account.id });
-  }
-
-  const groupedByTarget = new Map<string, string[]>();
-  for (const step of plan) {
-    const existing = groupedByTarget.get(step.targetAccountId);
-    if (existing) {
-      existing.push(step.file.id);
-    } else {
-      groupedByTarget.set(step.targetAccountId, [step.file.id]);
-    }
-  }
-
-  const transfers: RebalanceOperationResult[] = [];
-  let bytesMoved = 0;
-
-  for (const [targetAccountId, fileIds] of groupedByTarget) {
-    const batchResult = await rebalanceFilesBatch(fileIds, targetAccountId);
-    transfers.push(...batchResult.results);
-    bytesMoved += batchResult.totalBytesMoved;
-  }
-
-  return {
-    sourceAccountId,
-    filesMoved: transfers.length,
-    bytesMoved,
-    transfers,
-  };
 }
 

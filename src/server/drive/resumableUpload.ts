@@ -16,6 +16,7 @@ import { normalizeVirtualPath } from '../virtualPath.js';
 import { buildTsubasaAppProperties } from './appProperties.js';
 import { getAccessToken, getDriveClient } from './client.js';
 import { ItemNotFoundError, validateItemName } from './errors.js';
+import { normalizeMd5 } from './jobHelpers.js';
 import { ensureRemoteFolderHierarchy } from './mirror.js';
 import { allocateUniqueVirtualPath, displaceTrashedFileAtPath } from './operationsDb.js';
 import { enqueueDriveOutbox } from './outbox.js';
@@ -33,6 +34,7 @@ export const SMALL_UPLOAD_FAST_PATH_BYTES = 5 * 1024 * 1024;
 export const CHUNK_ALIGNMENT_BYTES = 256 * 1024;
 export const DEFAULT_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 export const MAX_CHUNK_SIZE_BYTES = 32 * 1024 * 1024;
+const MAX_AGGREGATE_IN_FLIGHT_CHUNK_BYTES = 32 * 1024 * 1024;
 
 export type ResumableUploadConflictMode = 'reject' | 'replace' | 'keep_both' | 'skip';
 
@@ -159,14 +161,126 @@ interface ActiveHashTracker {
 }
 
 const activeUploadHashes = new Map<string, ActiveHashTracker>();
-const MD5_HEX_RE = /^[a-f0-9]{32}$/i;
+const inFlightUploadPaths = new Map<string, string>();
+const activeUploadReservations = new Map<string, { releaseCapacity: () => void; inFlightKey: string; token: string }>();
+const recordedTransferBytesByJob = new Map<string, number>();
+const jobChunkChains = new Map<string, Promise<unknown>>();
+
+let inFlightChunkBytesTotal = 0;
+const chunkBudgetWaiters: Array<{
+  bytes: number;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+  cleanup?: () => void;
+}> = [];
+
 const CONTENT_RANGE_RE = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i;
 const DRIVE_308_RANGE_RE = /bytes=\d+-(\d+)/i;
 
-function normalizeMd5(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim().toLowerCase();
-  return MD5_HEX_RE.test(trimmed) ? trimmed : null;
+function drainChunkBudgetWaiters(): void {
+  while (chunkBudgetWaiters.length > 0) {
+    const next = chunkBudgetWaiters[0];
+    if (inFlightChunkBytesTotal + next.bytes > MAX_AGGREGATE_IN_FLIGHT_CHUNK_BYTES) {
+      break;
+    }
+    chunkBudgetWaiters.shift();
+    inFlightChunkBytesTotal += next.bytes;
+    next.cleanup?.();
+    next.resolve();
+  }
+}
+
+async function acquireChunkMemoryBudget(chunkBytes: number, signal?: AbortSignal): Promise<() => void> {
+  if (chunkBytes <= 0) {
+    return () => {};
+  }
+  if (chunkBytes > MAX_AGGREGATE_IN_FLIGHT_CHUNK_BYTES) {
+    throw new UploadValidationError(
+      `Chunk size (${chunkBytes} bytes) exceeds aggregate in-flight limit (${MAX_AGGREGATE_IN_FLIGHT_CHUNK_BYTES} bytes)`
+    );
+  }
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error('Upload chunk aborted');
+  }
+
+  if (
+    chunkBudgetWaiters.length === 0 &&
+    inFlightChunkBytesTotal + chunkBytes <= MAX_AGGREGATE_IN_FLIGHT_CHUNK_BYTES
+  ) {
+    inFlightChunkBytesTotal += chunkBytes;
+  } else {
+    await new Promise<void>((resolve, reject) => {
+      const waiter: (typeof chunkBudgetWaiters)[number] = {
+        bytes: chunkBytes,
+        resolve,
+        reject,
+      };
+      if (signal) {
+        const onAbort = () => {
+          const idx = chunkBudgetWaiters.indexOf(waiter);
+          if (idx !== -1) {
+            chunkBudgetWaiters.splice(idx, 1);
+          }
+          reject(signal.reason ?? new Error('Upload chunk aborted while waiting for memory budget'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        waiter.cleanup = () => signal.removeEventListener('abort', onAbort);
+      }
+      chunkBudgetWaiters.push(waiter);
+    });
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    inFlightChunkBytesTotal = Math.max(0, inFlightChunkBytesTotal - chunkBytes);
+    drainChunkBudgetWaiters();
+  };
+}
+
+function serializeJobChunk<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = jobChunkChains.get(jobId) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  jobChunkChains.set(jobId, next);
+  void next.finally(() => {
+    if (jobChunkChains.get(jobId) === next) {
+      jobChunkChains.delete(jobId);
+    }
+  });
+  return next;
+}
+
+function releaseUploadJobResources(jobId: string): void {
+  activeUploadHashes.delete(jobId);
+  const res = activeUploadReservations.get(jobId);
+  if (res) {
+    activeUploadReservations.delete(jobId);
+    res.releaseCapacity();
+    if (inFlightUploadPaths.get(res.inFlightKey) === res.token) {
+      inFlightUploadPaths.delete(res.inFlightKey);
+    }
+  }
+}
+
+function recordUnloggedUploadBytes(
+  jobId: string,
+  accountId: string,
+  poolId: number,
+  totalUploadedSoFar: number
+): void {
+  const safeTotal = Math.max(0, Math.round(totalUploadedSoFar));
+  const alreadyRecorded = recordedTransferBytesByJob.get(jobId) ?? 0;
+  const delta = safeTotal - alreadyRecorded;
+  if (delta <= 0) {
+    return;
+  }
+  try {
+    recordTransferSync(accountId, 'upload', delta, Date.now(), poolId);
+    recordedTransferBytesByJob.set(jobId, alreadyRecorded + delta);
+  } catch (err) {
+    console.warn(`Failed to record partial upload bytes for job ${jobId} (${accountId}):`, err);
+  }
 }
 
 function validateUploadPath(rawPath: string): string {
@@ -194,7 +308,9 @@ function allocateKeepBothUploadPath(poolId: number, basePath: string): string {
     kind: 'file',
     style: 'numbered',
     startCounter: 1,
-    isTaken: (candidatePath) => Boolean(checkActiveStmt.get(poolId, candidatePath)),
+    isTaken: (candidatePath) =>
+      inFlightUploadPaths.has(`${poolId}:${candidatePath}`) ||
+      Boolean(checkActiveStmt.get(poolId, candidatePath)),
   });
 }
 
@@ -330,7 +446,11 @@ function commitUploadedFileToSqlite(params: {
         .run(sizeBytes, accountId);
     }
 
-    recordTransferSync(accountId, 'upload', sizeBytes, Date.now(), poolId);
+    const alreadyRecorded = jobId ? (recordedTransferBytesByJob.get(jobId) ?? 0) : 0;
+    const remainingToRecord = Math.max(0, sizeBytes - alreadyRecorded);
+    if (remainingToRecord > 0) {
+      recordTransferSync(accountId, 'upload', remainingToRecord, Date.now(), poolId);
+    }
 
     if (itemId) {
       sqlite
@@ -363,6 +483,11 @@ function commitUploadedFileToSqlite(params: {
         .run(sizeBytes, jobId);
     }
   }).immediate();
+
+  if (jobId) {
+    recordedTransferBytesByJob.delete(jobId);
+    releaseUploadJobResources(jobId);
+  }
 
   invalidatePooledStorageOverview(poolId);
   bumpPoolRevision(poolId);
@@ -459,6 +584,8 @@ export async function executeVerifiedSmallUpload(
     .get(poolId, initialVirtualPath) as { id: string; account_id: string; size_bytes: number } | undefined;
 
   let virtualPath = initialVirtualPath;
+  const initialInFlight = inFlightUploadPaths.has(`${poolId}:${initialVirtualPath}`);
+
   if (existingActive) {
     if (conflictMode === 'reject') {
       throw new UploadConflictError(
@@ -467,29 +594,47 @@ export async function executeVerifiedSmallUpload(
     }
     if (conflictMode === 'keep_both') {
       virtualPath = allocateKeepBothUploadPath(poolId, initialVirtualPath);
+    } else if (initialInFlight) {
+      throw new UploadConflictError(
+        `An upload for "${path.posix.basename(initialVirtualPath)}" is already in progress at ${initialVirtualPath}`
+      );
+    }
+  } else if (initialInFlight) {
+    if (conflictMode === 'keep_both') {
+      virtualPath = allocateKeepBothUploadPath(poolId, initialVirtualPath);
+    } else {
+      throw new UploadConflictError(
+        `An upload for "${path.posix.basename(initialVirtualPath)}" is already in progress at ${initialVirtualPath}`
+      );
     }
   }
 
-  let accountId: string;
-  if (options.targetAccountId) {
-    await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), poolId);
-    accountId = options.targetAccountId;
-  } else if (conflictMode === 'replace' && existingActive) {
-    try {
-      await validateTargetPlacement(existingActive.account_id, sizeBytes, Date.now(), poolId);
-      accountId = existingActive.account_id;
-    } catch {
+  const inFlightKey = `${poolId}:${virtualPath}`;
+  const uploadToken = randomUUID();
+  inFlightUploadPaths.set(inFlightKey, uploadToken);
+
+  let releaseCapacity: () => void = () => {};
+
+  try {
+    let accountId: string;
+    if (options.targetAccountId) {
+      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), poolId);
+      accountId = options.targetAccountId;
+    } else if (conflictMode === 'replace' && existingActive) {
+      try {
+        await validateTargetPlacement(existingActive.account_id, sizeBytes, Date.now(), poolId);
+        accountId = existingActive.account_id;
+      } catch {
+        const decision = await selectPlacementForFile({ virtualPath, sizeBytes }, undefined, Date.now(), undefined, poolId);
+        accountId = decision.accountId;
+      }
+    } else {
       const decision = await selectPlacementForFile({ virtualPath, sizeBytes }, undefined, Date.now(), undefined, poolId);
       accountId = decision.accountId;
     }
-  } else {
-    const decision = await selectPlacementForFile({ virtualPath, sizeBytes }, undefined, Date.now(), undefined, poolId);
-    accountId = decision.accountId;
-  }
 
-  const releaseCapacity = reserveAccountCapacity(accountId, sizeBytes);
+    releaseCapacity = reserveAccountCapacity(accountId, sizeBytes);
 
-  try {
     const md5Hasher = crypto.createHash('md5');
     const chunks: Uint8Array[] = [];
     let actualBytes = 0;
@@ -586,6 +731,13 @@ export async function executeVerifiedSmallUpload(
     const driveSize = driveData.size !== undefined ? Number(driveData.size) : null;
 
     if ((driveMd5 && driveMd5 !== localMd5) || (driveSize !== null && driveSize !== sizeBytes)) {
+      if (sizeBytes > 0) {
+        try {
+          recordTransferSync(accountId, 'upload', sizeBytes, Date.now(), poolId);
+        } catch {
+          // Best-effort accounting for discarded upload bytes.
+        }
+      }
       await deleteRemoteDriveFileWithFallback(accountId, poolId, fileId, driveData.id);
       throw new UploadIntegrityError(
         `Drive checksum/size mismatch for "${virtualPath}": local md5=${localMd5} size=${sizeBytes}, remote md5=${driveMd5} size=${driveSize}`
@@ -607,6 +759,9 @@ export async function executeVerifiedSmallUpload(
     });
   } finally {
     releaseCapacity();
+    if (inFlightUploadPaths.get(inFlightKey) === uploadToken) {
+      inFlightUploadPaths.delete(inFlightKey);
+    }
   }
 }
 
@@ -707,6 +862,8 @@ export async function initChunkedResumableUpload(
     .get(poolId, initialVirtualPath) as { id: string; account_id: string; size_bytes: number } | undefined;
 
   let virtualPath = initialVirtualPath;
+  const initialInFlight = inFlightUploadPaths.has(`${poolId}:${initialVirtualPath}`);
+
   if (existingActive) {
     if (conflictMode === 'skip') {
       return {
@@ -724,109 +881,137 @@ export async function initChunkedResumableUpload(
     }
     if (conflictMode === 'keep_both') {
       virtualPath = allocateKeepBothUploadPath(poolId, initialVirtualPath);
+    } else if (initialInFlight) {
+      throw new UploadConflictError(
+        `An upload for "${path.posix.basename(initialVirtualPath)}" is already in progress at ${initialVirtualPath}`
+      );
+    }
+  } else if (initialInFlight) {
+    if (conflictMode === 'keep_both') {
+      virtualPath = allocateKeepBothUploadPath(poolId, initialVirtualPath);
+    } else {
+      throw new UploadConflictError(
+        `An upload for "${path.posix.basename(initialVirtualPath)}" is already in progress at ${initialVirtualPath}`
+      );
     }
   }
 
-  let accountId: string;
-  if (options.targetAccountId) {
-    await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), poolId);
-    accountId = options.targetAccountId;
-  } else if (conflictMode === 'replace' && existingActive) {
-    try {
-      await validateTargetPlacement(existingActive.account_id, sizeBytes, Date.now(), poolId);
-      accountId = existingActive.account_id;
-    } catch {
+  const inFlightKey = `${poolId}:${virtualPath}`;
+  const jobId = randomUUID();
+  inFlightUploadPaths.set(inFlightKey, jobId);
+
+  let releaseCapacity: () => void = () => {};
+
+  try {
+    let accountId: string;
+    if (options.targetAccountId) {
+      await validateTargetPlacement(options.targetAccountId, sizeBytes, Date.now(), poolId);
+      accountId = options.targetAccountId;
+    } else if (conflictMode === 'replace' && existingActive) {
+      try {
+        await validateTargetPlacement(existingActive.account_id, sizeBytes, Date.now(), poolId);
+        accountId = existingActive.account_id;
+      } catch {
+        const decision = await selectPlacementForFile({ virtualPath, sizeBytes }, undefined, Date.now(), undefined, poolId);
+        accountId = decision.accountId;
+      }
+    } else {
       const decision = await selectPlacementForFile({ virtualPath, sizeBytes }, undefined, Date.now(), undefined, poolId);
       accountId = decision.accountId;
     }
-  } else {
-    const decision = await selectPlacementForFile({ virtualPath, sizeBytes }, undefined, Date.now(), undefined, poolId);
-    accountId = decision.accountId;
+
+    releaseCapacity = reserveAccountCapacity(accountId, sizeBytes);
+
+    const rootFolderId = await getAccountRootFolderId(accountId);
+    const drive = getDriveClient(accountId);
+    const remoteParentFolderId = await ensureRemoteFolderHierarchy(drive, rootFolderId, path.posix.dirname(virtualPath));
+    const fileName = path.posix.basename(virtualPath);
+    const fileId = randomUUID();
+    const driveSessionUri = await openDriveResumableSession({
+      accountId,
+      remoteParentFolderId,
+      fileName,
+      fileId,
+      virtualPath,
+      sizeBytes,
+      mimeType,
+      expectedMd5,
+    });
+
+    const itemId = randomUUID();
+    const metadata: UploadJobMetadata = {
+      fileId,
+      virtualPath,
+      fileName,
+      mimeType,
+      localPath,
+      sizeBytes,
+      mtimeMs,
+      chunkSizeBytes,
+      conflictMode,
+      remoteParentFolderId,
+      driveSessionUri,
+      expectedMd5,
+    };
+
+    sqlite.transaction(() => {
+      sqlite
+        .prepare(
+          `INSERT INTO transfer_jobs (
+            id, kind, status, pool_id, account_id, conflict_policy, mode,
+            total_items, completed_items, failed_items, skipped_items,
+            total_bytes, transferred_bytes, metadata_json, created_at, updated_at
+          ) VALUES (?, 'upload', 'running', ?, ?, ?, 'chunked', 1, 0, 0, 0, ?, 0, ?, unixepoch(), unixepoch())`
+        )
+        .run(jobId, poolId, accountId, conflictMode, sizeBytes, JSON.stringify(metadata));
+
+      sqlite
+        .prepare(
+          `INSERT INTO transfer_job_items (
+            id, job_id, status, target_account_id, local_path, virtual_path, file_name,
+            mime_type, size_bytes, transferred_bytes, mtime_ms, expected_hash,
+            drive_session_uri, transfer_mode, created_at, updated_at
+          ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'chunked', unixepoch(), unixepoch())`
+        )
+        .run(
+          itemId,
+          jobId,
+          accountId,
+          localPath,
+          virtualPath,
+          fileName,
+          mimeType,
+          sizeBytes,
+          mtimeMs,
+          expectedMd5,
+          driveSessionUri
+        );
+    }).immediate();
+
+    activeUploadReservations.set(jobId, { releaseCapacity, inFlightKey, token: jobId });
+    activeUploadHashes.set(jobId, { hash: crypto.createHash('md5'), nextOffset: 0 });
+
+    return {
+      skipped: false,
+      jobId,
+      itemId,
+      fileId,
+      status: 'running',
+      accountId,
+      poolId,
+      virtualPath,
+      chunkSizeBytes,
+      offsetBytes: 0,
+      totalBytes: sizeBytes,
+      conflictMode,
+    };
+  } catch (err) {
+    releaseCapacity();
+    if (inFlightUploadPaths.get(inFlightKey) === jobId) {
+      inFlightUploadPaths.delete(inFlightKey);
+    }
+    throw err;
   }
-
-  const rootFolderId = await getAccountRootFolderId(accountId);
-  const drive = getDriveClient(accountId);
-  const remoteParentFolderId = await ensureRemoteFolderHierarchy(drive, rootFolderId, path.posix.dirname(virtualPath));
-  const fileName = path.posix.basename(virtualPath);
-  const fileId = randomUUID();
-  const driveSessionUri = await openDriveResumableSession({
-    accountId,
-    remoteParentFolderId,
-    fileName,
-    fileId,
-    virtualPath,
-    sizeBytes,
-    mimeType,
-    expectedMd5,
-  });
-
-  const jobId = randomUUID();
-  const itemId = randomUUID();
-  const metadata: UploadJobMetadata = {
-    fileId,
-    virtualPath,
-    fileName,
-    mimeType,
-    localPath,
-    sizeBytes,
-    mtimeMs,
-    chunkSizeBytes,
-    conflictMode,
-    remoteParentFolderId,
-    driveSessionUri,
-    expectedMd5,
-  };
-
-  sqlite.transaction(() => {
-    sqlite
-      .prepare(
-        `INSERT INTO transfer_jobs (
-          id, kind, status, pool_id, account_id, conflict_policy, mode,
-          total_items, completed_items, failed_items, skipped_items,
-          total_bytes, transferred_bytes, metadata_json, created_at, updated_at
-        ) VALUES (?, 'upload', 'running', ?, ?, ?, 'chunked', 1, 0, 0, 0, ?, 0, ?, unixepoch(), unixepoch())`
-      )
-      .run(jobId, poolId, accountId, conflictMode, sizeBytes, JSON.stringify(metadata));
-
-    sqlite
-      .prepare(
-        `INSERT INTO transfer_job_items (
-          id, job_id, status, target_account_id, local_path, virtual_path, file_name,
-          mime_type, size_bytes, transferred_bytes, mtime_ms, expected_hash,
-          drive_session_uri, transfer_mode, created_at, updated_at
-        ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'chunked', unixepoch(), unixepoch())`
-      )
-      .run(
-        itemId,
-        jobId,
-        accountId,
-        localPath,
-        virtualPath,
-        fileName,
-        mimeType,
-        sizeBytes,
-        mtimeMs,
-        expectedMd5,
-        driveSessionUri
-      );
-  }).immediate();
-
-  activeUploadHashes.set(jobId, { hash: crypto.createHash('md5'), nextOffset: 0 });
-
-  return {
-    skipped: false,
-    jobId,
-    itemId,
-    fileId,
-    status: 'running',
-    accountId,
-    poolId,
-    virtualPath,
-    chunkSizeBytes,
-    offsetBytes: 0,
-    totalBytes: sizeBytes,
-    conflictMode,
-  };
 }
 
 interface LoadedUploadJob {
@@ -959,8 +1144,17 @@ function parseDrive308Offset(rangeHeader: string | null, fallbackOffset: number)
   return Number.isSafeInteger(lastByte) && lastByte >= 0 ? lastByte + 1 : fallbackOffset;
 }
 
-function markUploadJobFailed(jobId: string, itemId: string, errorMessage: string): void {
-  activeUploadHashes.delete(jobId);
+function markUploadJobFailed(
+  jobId: string,
+  itemId: string,
+  accountId: string,
+  poolId: number,
+  uploadedBytesSoFar: number,
+  errorMessage: string
+): void {
+  recordUnloggedUploadBytes(jobId, accountId, poolId, uploadedBytesSoFar);
+  recordedTransferBytesByJob.delete(jobId);
+  releaseUploadJobResources(jobId);
   sqlite.transaction(() => {
     sqlite
       .prepare(
@@ -979,7 +1173,7 @@ function markUploadJobFailed(jobId: string, itemId: string, errorMessage: string
   }).immediate();
 }
 
-export async function uploadResumableChunk(params: {
+async function uploadResumableChunkInternal(params: {
   jobId: string;
   contentRangeHeader: string | null | undefined;
   localMd5Header?: string | null;
@@ -1060,164 +1254,210 @@ export async function uploadResumableChunk(params: {
     }
   }
 
-  if (start === 0) {
-    activeUploadHashes.set(loaded.jobId, { hash: crypto.createHash('md5'), nextOffset: 0 });
-  }
-  const tracker = activeUploadHashes.get(loaded.jobId);
-  const canHashSequentially = Boolean(tracker && tracker.nextOffset === start);
-  if (tracker && !canHashSequentially) {
-    activeUploadHashes.delete(loaded.jobId);
-  }
+  const releaseChunkBudget = await acquireChunkMemoryBudget(chunkLength, params.signal);
 
-  let streamedBytes = 0;
-  const bodyToSend =
-    chunkLength === 0
-      ? Buffer.alloc(0)
-      : params.bodyStream!.pipeThrough(
-          new TransformStream<Uint8Array, Uint8Array>({
-            transform(chunk, controller) {
-              streamedBytes += chunk.byteLength;
-              if (streamedBytes > chunkLength) {
-                controller.error(
-                  new UploadValidationError(
-                    `Chunk stream exceeded Content-Range length (${chunkLength} bytes)`
-                  )
-                );
-                return;
-              }
-              if (canHashSequentially && tracker) {
-                tracker.hash.update(chunk);
-              }
-              controller.enqueue(chunk);
-            },
-          })
-        );
-
-  const accessToken = await getAccessToken(loaded.accountId);
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${accessToken}`,
-    'Content-Length': String(chunkLength),
-    'Content-Type': loaded.metadata.mimeType,
-  };
-  if (chunkLength > 0) {
-    headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
-  }
-
-  const requestInit: RequestInit & { duplex?: string } = {
-    method: 'PUT',
-    signal: params.signal,
-    headers,
-    body: bodyToSend,
-    ...(chunkLength > 0 ? { duplex: 'half' } : {}),
-  };
-
-  const driveRes = await fetch(loaded.driveSessionUri, requestInit);
-
-  if (driveRes.status === 404 || driveRes.status === 410) {
-    activeUploadHashes.delete(loaded.jobId);
-    sqlite
-      .prepare(`UPDATE transfer_jobs SET status = 'paused', pause_reason = 'SESSION_EXPIRED', updated_at = unixepoch() WHERE id = ?`)
-      .run(loaded.jobId);
-    throw new UploadSessionExpiredError(loaded.jobId);
-  }
-
-  if (driveRes.status === 308) {
-    if (canHashSequentially && tracker) {
-      tracker.nextOffset = end + 1;
+  try {
+    if (start === 0) {
+      activeUploadHashes.set(loaded.jobId, { hash: crypto.createHash('md5'), nextOffset: 0 });
     }
-    const confirmedOffset = parseDrive308Offset(driveRes.headers.get('Range'), end + 1);
-    sqlite.transaction(() => {
+    const tracker = activeUploadHashes.get(loaded.jobId);
+    const canHashSequentially = Boolean(tracker && tracker.nextOffset === start);
+    if (tracker && !canHashSequentially) {
+      activeUploadHashes.delete(loaded.jobId);
+    }
+
+    let streamedBytes = 0;
+    const bodyToSend =
+      chunkLength === 0
+        ? Buffer.alloc(0)
+        : params.bodyStream!.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                streamedBytes += chunk.byteLength;
+                if (streamedBytes > chunkLength) {
+                  controller.error(
+                    new UploadValidationError(
+                      `Chunk stream exceeded Content-Range length (${chunkLength} bytes)`
+                    )
+                  );
+                  return;
+                }
+                if (canHashSequentially && tracker) {
+                  tracker.hash.update(chunk);
+                }
+                controller.enqueue(chunk);
+              },
+            })
+          );
+
+    const accessToken = await getAccessToken(loaded.accountId);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Length': String(chunkLength),
+      'Content-Type': loaded.metadata.mimeType,
+    };
+    if (chunkLength > 0) {
+      headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+    }
+
+    const requestInit: RequestInit & { duplex?: string } = {
+      method: 'PUT',
+      signal: params.signal,
+      headers,
+      body: bodyToSend,
+      ...(chunkLength > 0 ? { duplex: 'half' } : {}),
+    };
+
+    let driveRes: Response;
+    try {
+      driveRes = await fetch(loaded.driveSessionUri, requestInit);
+    } catch (err) {
+      recordUnloggedUploadBytes(
+        loaded.jobId,
+        loaded.accountId,
+        loaded.poolId,
+        Math.max(loaded.transferredBytes, start + streamedBytes)
+      );
+      throw err;
+    }
+
+    if (driveRes.status === 404 || driveRes.status === 410) {
+      recordUnloggedUploadBytes(
+        loaded.jobId,
+        loaded.accountId,
+        loaded.poolId,
+        Math.max(loaded.transferredBytes, start + streamedBytes)
+      );
+      releaseUploadJobResources(loaded.jobId);
       sqlite
-        .prepare(
-          `UPDATE transfer_job_items SET transferred_bytes = ?, status = 'running', updated_at = unixepoch() WHERE id = ?`
-        )
-        .run(confirmedOffset, loaded.itemId);
-      sqlite
-        .prepare(
-          `UPDATE transfer_jobs SET transferred_bytes = ?, status = 'running', pause_reason = NULL, updated_at = unixepoch() WHERE id = ?`
-        )
-        .run(confirmedOffset, loaded.jobId);
-    }).immediate();
+        .prepare(`UPDATE transfer_jobs SET status = 'paused', pause_reason = 'SESSION_EXPIRED', updated_at = unixepoch() WHERE id = ?`)
+        .run(loaded.jobId);
+      throw new UploadSessionExpiredError(loaded.jobId);
+    }
+
+    if (driveRes.status === 308) {
+      if (canHashSequentially && tracker) {
+        tracker.nextOffset = end + 1;
+      }
+      const confirmedOffset = parseDrive308Offset(driveRes.headers.get('Range'), end + 1);
+      sqlite.transaction(() => {
+        sqlite
+          .prepare(
+            `UPDATE transfer_job_items SET transferred_bytes = ?, status = 'running', updated_at = unixepoch() WHERE id = ?`
+          )
+          .run(confirmedOffset, loaded.itemId);
+        sqlite
+          .prepare(
+            `UPDATE transfer_jobs SET transferred_bytes = ?, status = 'running', pause_reason = NULL, updated_at = unixepoch() WHERE id = ?`
+          )
+          .run(confirmedOffset, loaded.jobId);
+      }).immediate();
+
+      return {
+        jobId: loaded.jobId,
+        status: 'running',
+        completed: false,
+        offsetBytes: confirmedOffset,
+        totalBytes: total,
+      };
+    }
+
+    if (!driveRes.ok) {
+      recordUnloggedUploadBytes(
+        loaded.jobId,
+        loaded.accountId,
+        loaded.poolId,
+        Math.max(loaded.transferredBytes, start + streamedBytes)
+      );
+      const errText = await driveRes.text().catch(() => '');
+      throw new Error(`Google Drive chunk upload failed (${driveRes.status}): ${errText}`);
+    }
+
+    // Final chunk completed (HTTP 200 or 201)
+    const driveData = (await driveRes.json()) as {
+      id: string;
+      name: string;
+      size?: string;
+      md5Checksum?: string;
+      sha256Checksum?: string;
+    };
+
+    if (chunkLength > 0 && streamedBytes !== chunkLength) {
+      await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
+      const msg = `Chunk byte count mismatch: expected ${chunkLength}, streamed ${streamedBytes}`;
+      markUploadJobFailed(
+        loaded.jobId,
+        loaded.itemId,
+        loaded.accountId,
+        loaded.poolId,
+        Math.max(loaded.transferredBytes, start + streamedBytes),
+        msg
+      );
+      throw new UploadIntegrityError(msg);
+    }
+
+    let serverComputedMd5: string | null = null;
+    if (canHashSequentially && tracker && (total === 0 || end + 1 === total)) {
+      serverComputedMd5 = tracker.hash.digest('hex').toLowerCase();
+    }
+    activeUploadHashes.delete(loaded.jobId);
+
+    const clientMd5 = normalizeMd5(params.localMd5Header);
+    const expectedMd5 = clientMd5 || serverComputedMd5 || normalizeMd5(loaded.expectedHash);
+    const driveMd5 = driveData.md5Checksum?.toLowerCase() ?? null;
+    const driveSize = driveData.size !== undefined ? Number(driveData.size) : null;
+
+    if (clientMd5 && serverComputedMd5 && clientMd5 !== serverComputedMd5) {
+      await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
+      const msg = `Client MD5 (${clientMd5}) disagrees with streamed MD5 (${serverComputedMd5}); remote file deleted`;
+      markUploadJobFailed(loaded.jobId, loaded.itemId, loaded.accountId, loaded.poolId, total, msg);
+      throw new UploadIntegrityError(msg);
+    }
+
+    if ((expectedMd5 && driveMd5 && expectedMd5 !== driveMd5) || (driveSize !== null && driveSize !== total)) {
+      await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
+      const msg = `Drive verification failed for "${loaded.metadata.virtualPath}": expected md5=${expectedMd5} size=${total}, got md5=${driveMd5} size=${driveSize}; remote file deleted`;
+      markUploadJobFailed(loaded.jobId, loaded.itemId, loaded.accountId, loaded.poolId, total, msg);
+      throw new UploadIntegrityError(msg);
+    }
+
+    const resolvedHash = driveMd5 || expectedMd5 || driveData.sha256Checksum || null;
+    const savedFile = commitUploadedFileToSqlite({
+      fileId: loaded.metadata.fileId,
+      poolId: loaded.poolId,
+      virtualPath: loaded.metadata.virtualPath,
+      fileName: loaded.metadata.fileName,
+      sizeBytes: total,
+      mimeType: loaded.metadata.mimeType,
+      resolvedHash,
+      accountId: loaded.accountId,
+      driveFileId: driveData.id,
+      jobId: loaded.jobId,
+      itemId: loaded.itemId,
+      verifiedHash: driveMd5 ?? expectedMd5,
+    });
 
     return {
       jobId: loaded.jobId,
-      status: 'running',
-      completed: false,
-      offsetBytes: confirmedOffset,
+      status: 'completed',
+      completed: true,
+      offsetBytes: total,
       totalBytes: total,
+      file: savedFile,
     };
+  } finally {
+    releaseChunkBudget();
   }
+}
 
-  if (!driveRes.ok) {
-    const errText = await driveRes.text().catch(() => '');
-    throw new Error(`Google Drive chunk upload failed (${driveRes.status}): ${errText}`);
-  }
-
-  // Final chunk completed (HTTP 200 or 201)
-  const driveData = (await driveRes.json()) as {
-    id: string;
-    name: string;
-    size?: string;
-    md5Checksum?: string;
-    sha256Checksum?: string;
-  };
-
-  if (chunkLength > 0 && streamedBytes !== chunkLength) {
-    await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
-    const msg = `Chunk byte count mismatch: expected ${chunkLength}, streamed ${streamedBytes}`;
-    markUploadJobFailed(loaded.jobId, loaded.itemId, msg);
-    throw new UploadIntegrityError(msg);
-  }
-
-  let serverComputedMd5: string | null = null;
-  if (canHashSequentially && tracker && (total === 0 || end + 1 === total)) {
-    serverComputedMd5 = tracker.hash.digest('hex').toLowerCase();
-  }
-  activeUploadHashes.delete(loaded.jobId);
-
-  const clientMd5 = normalizeMd5(params.localMd5Header);
-  const expectedMd5 = clientMd5 || serverComputedMd5 || normalizeMd5(loaded.expectedHash);
-  const driveMd5 = driveData.md5Checksum?.toLowerCase() ?? null;
-  const driveSize = driveData.size !== undefined ? Number(driveData.size) : null;
-
-  if (clientMd5 && serverComputedMd5 && clientMd5 !== serverComputedMd5) {
-    await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
-    const msg = `Client MD5 (${clientMd5}) disagrees with streamed MD5 (${serverComputedMd5}); remote file deleted`;
-    markUploadJobFailed(loaded.jobId, loaded.itemId, msg);
-    throw new UploadIntegrityError(msg);
-  }
-
-  if ((expectedMd5 && driveMd5 && expectedMd5 !== driveMd5) || (driveSize !== null && driveSize !== total)) {
-    await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
-    const msg = `Drive verification failed for "${loaded.metadata.virtualPath}": expected md5=${expectedMd5} size=${total}, got md5=${driveMd5} size=${driveSize}; remote file deleted`;
-    markUploadJobFailed(loaded.jobId, loaded.itemId, msg);
-    throw new UploadIntegrityError(msg);
-  }
-
-  const resolvedHash = driveMd5 || expectedMd5 || driveData.sha256Checksum || null;
-  const savedFile = commitUploadedFileToSqlite({
-    fileId: loaded.metadata.fileId,
-    poolId: loaded.poolId,
-    virtualPath: loaded.metadata.virtualPath,
-    fileName: loaded.metadata.fileName,
-    sizeBytes: total,
-    mimeType: loaded.metadata.mimeType,
-    resolvedHash,
-    accountId: loaded.accountId,
-    driveFileId: driveData.id,
-    jobId: loaded.jobId,
-    itemId: loaded.itemId,
-    verifiedHash: driveMd5 ?? expectedMd5,
-  });
-
-  return {
-    jobId: loaded.jobId,
-    status: 'completed',
-    completed: true,
-    offsetBytes: total,
-    totalBytes: total,
-    file: savedFile,
-  };
+export function uploadResumableChunk(params: {
+  jobId: string;
+  contentRangeHeader: string | null | undefined;
+  localMd5Header?: string | null;
+  bodyStream: ReadableStream<Uint8Array> | null;
+  signal?: AbortSignal;
+}): Promise<UploadChunkResult> {
+  return serializeJobChunk(params.jobId, () => uploadResumableChunkInternal(params));
 }
 
 export async function probeOrResumeUploadJob(
@@ -1276,6 +1516,12 @@ export async function probeOrResumeUploadJob(
   if (probeRes.status === 308) {
     const offsetBytes = parseDrive308Offset(probeRes.headers.get('Range'), 0);
     activeUploadHashes.delete(loaded.jobId);
+    if (!activeUploadReservations.has(loaded.jobId)) {
+      const inFlightKey = `${loaded.poolId}:${loaded.metadata.virtualPath}`;
+      const releaseCapacity = reserveAccountCapacity(loaded.accountId, Math.max(0, loaded.sizeBytes - offsetBytes));
+      inFlightUploadPaths.set(inFlightKey, loaded.jobId);
+      activeUploadReservations.set(loaded.jobId, { releaseCapacity, inFlightKey, token: loaded.jobId });
+    }
     sqlite.transaction(() => {
       sqlite
         .prepare(
@@ -1303,6 +1549,10 @@ export async function probeOrResumeUploadJob(
   }
 
   if (probeRes.status === 404 || probeRes.status === 410) {
+    recordUnloggedUploadBytes(loaded.jobId, loaded.accountId, loaded.poolId, loaded.transferredBytes);
+    recordedTransferBytesByJob.delete(loaded.jobId);
+    releaseUploadJobResources(loaded.jobId);
+
     await validateTargetPlacement(loaded.accountId, loaded.sizeBytes, Date.now(), loaded.poolId);
     const rootFolderId = await getAccountRootFolderId(loaded.accountId);
     const drive = getDriveClient(loaded.accountId);
@@ -1327,7 +1577,12 @@ export async function probeOrResumeUploadJob(
       driveSessionUri: newSessionUri,
     };
 
+    const inFlightKey = `${loaded.poolId}:${loaded.metadata.virtualPath}`;
+    const releaseCapacity = reserveAccountCapacity(loaded.accountId, loaded.sizeBytes);
+    inFlightUploadPaths.set(inFlightKey, loaded.jobId);
+    activeUploadReservations.set(loaded.jobId, { releaseCapacity, inFlightKey, token: loaded.jobId });
     activeUploadHashes.set(loaded.jobId, { hash: crypto.createHash('md5'), nextOffset: 0 });
+
     sqlite.transaction(() => {
       sqlite
         .prepare(
@@ -1372,7 +1627,7 @@ export async function probeOrResumeUploadJob(
     if (expectedMd5 && driveMd5 && expectedMd5 !== driveMd5) {
       await deleteRemoteDriveFileWithFallback(loaded.accountId, loaded.poolId, loaded.metadata.fileId, driveData.id);
       const msg = `Drive checksum mismatch on completed session probe: expected ${expectedMd5}, got ${driveMd5}`;
-      markUploadJobFailed(loaded.jobId, loaded.itemId, msg);
+      markUploadJobFailed(loaded.jobId, loaded.itemId, loaded.accountId, loaded.poolId, loaded.sizeBytes, msg);
       throw new UploadIntegrityError(msg);
     }
 
@@ -1411,7 +1666,12 @@ export async function probeOrResumeUploadJob(
 
 export async function cancelUploadJob(jobId: string): Promise<{ jobId: string; status: 'cancelled' }> {
   const loaded = loadUploadJob(jobId);
-  activeUploadHashes.delete(jobId);
+
+  if (loaded.status !== 'completed') {
+    recordUnloggedUploadBytes(loaded.jobId, loaded.accountId, loaded.poolId, loaded.transferredBytes);
+  }
+  recordedTransferBytesByJob.delete(jobId);
+  releaseUploadJobResources(jobId);
 
   if (loaded.status !== 'completed' && loaded.driveSessionUri) {
     try {
