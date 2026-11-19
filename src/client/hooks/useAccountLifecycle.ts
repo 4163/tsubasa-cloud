@@ -3,7 +3,7 @@ import { client } from '../api.js';
 import type { AccountItem, ClientFileRecord, DiscoveredAccount } from '../types.js';
 import { copyTextToClipboard } from '../utils/format.js';
 import { invalidateShareInspectCache } from '../utils/queryCache.js';
-import { readResponseError, reportDevError } from '../utils/workspaceHelpers.js';
+import { extractErrorMessage, readResponseError, reportDevError } from '../utils/workspaceHelpers.js';
 
 export interface DriveActionModalState {
   isOpen: boolean;
@@ -20,8 +20,6 @@ export interface UseAccountLifecycleOptions {
   loadedTrashPoolIdRef: React.RefObject<number | null>;
   trashStaleRef: React.MutableRefObject<boolean>;
   currentPathRef: React.RefObject<string>;
-  setWorkspaceError: React.Dispatch<React.SetStateAction<string | null>>;
-  surfaceWorkspaceError: (context: string, err: unknown, fallback: string) => void;
   loadClusterData: (targetPoolId?: number) => Promise<DiscoveredAccount[] | undefined>;
   loadFiles: (path: string, targetPoolId?: number) => Promise<void>;
   loadTrashFiles: (targetPoolId?: number) => Promise<void>;
@@ -40,14 +38,13 @@ export function useAccountLifecycle({
   loadedTrashPoolIdRef,
   trashStaleRef,
   currentPathRef,
-  setWorkspaceError,
-  surfaceWorkspaceError,
   loadClusterData,
   loadFiles,
   loadTrashFiles,
   presentAuthorizedAccount,
 }: UseAccountLifecycleOptions) {
   const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [driveActionModal, setDriveActionModal] = useState<DriveActionModalState>({
     isOpen: false,
     account: null,
@@ -144,10 +141,24 @@ export function useAccountLifecycle({
     }
   }, []);
 
+  const clearSidebarError = useCallback(() => {
+    setSidebarError(null);
+  }, []);
+
+  const surfaceSidebarError = useCallback(
+    (context: string, err: unknown, fallback: string, formatMessage?: (message: string) => string) => {
+      const extracted = extractErrorMessage(err, fallback);
+      setSidebarError(formatMessage ? formatMessage(extracted) : extracted);
+      reportDevError(context, err instanceof Error ? err : extracted);
+    },
+    []
+  );
+
   const handleImportOAuth = useCallback(
     async (file: File) => {
-      setWorkspaceError(null);
+      setSidebarError(null);
       setIsImporting(true);
+      const poolId = activePoolIdRef.current;
       try {
         const text = await file.text();
 
@@ -155,11 +166,10 @@ export function useAccountLifecycle({
           try {
             const parsed = JSON.parse(text);
             if (parsed.web && !parsed.installed) {
-              surfaceWorkspaceError(
-                'importOAuth',
-                "Uploaded credential is 'Web application'; Tsubasa requires 'Desktop app' credentials.",
-                "Uploaded credential is 'Web application'; Tsubasa requires 'Desktop app' credentials."
-              );
+              const msg = "Uploaded credential is 'Web application'; Tsubasa requires 'Desktop app' credentials.";
+              if (activePoolIdRef.current === poolId) {
+                surfaceSidebarError('importOAuth', msg, msg);
+              }
               return;
             }
           } catch {
@@ -171,7 +181,7 @@ export function useAccountLifecycle({
           json: {
             filename: file.name,
             content: text,
-            poolId: activePoolIdRef.current,
+            poolId,
           },
         });
 
@@ -197,67 +207,73 @@ export function useAccountLifecycle({
           }
         } else {
           const msg = await readResponseError(res, 'Failed to import OAuth credentials');
-          surfaceWorkspaceError('importOAuth', msg, 'Failed to import OAuth credentials');
+          if (activePoolIdRef.current === poolId) {
+            surfaceSidebarError('importOAuth', msg, 'Failed to import OAuth credentials');
+          }
         }
       } catch (err) {
-        surfaceWorkspaceError('importOAuth', err, 'Failed to import OAuth credentials');
+        if (activePoolIdRef.current === poolId) {
+          surfaceSidebarError('importOAuth', err, 'Failed to import OAuth credentials');
+        }
       } finally {
         setIsImporting(false);
       }
     },
-    [activePoolIdRef, setWorkspaceError, presentAuthorizedAccount, loadClusterData, surfaceWorkspaceError]
+    [activePoolIdRef, presentAuthorizedAccount, loadClusterData, surfaceSidebarError]
+  );
+
+  const setAccountEnabled = useCallback(
+    async (accountId: string, enabled: boolean) => {
+      const context = enabled ? 'handleEnableAccount' : 'handleDisableAccount';
+      const fallback = enabled ? 'Failed to enable drive' : 'Failed to disable drive';
+      const acc = accountItems.find((a) => a.id === accountId);
+      const rawEmail = acc?.email;
+      const accountLabel =
+        (acc?.displayName && acc.displayName !== rawEmail ? acc.displayName : undefined) ||
+        rawEmail ||
+        accountId;
+      const formatError = (msg: string) => {
+        const lower = msg.toLowerCase();
+        const mentionsAccount =
+          lower.includes(accountId.toLowerCase()) ||
+          lower.includes(accountLabel.toLowerCase()) ||
+          Boolean(rawEmail && lower.includes(rawEmail.toLowerCase()));
+
+        return mentionsAccount ? msg : `${accountLabel} ${msg}`;
+      };
+
+      setSidebarError(null);
+      const poolId = activePoolIdRef.current;
+      try {
+        const res = enabled
+          ? await client.api.accounts[':id'].enable.$post({ param: { id: accountId } })
+          : await client.api.accounts[':id'].disable.$post({ param: { id: accountId } });
+        if (res.ok) {
+          invalidateShareInspectCache();
+          await loadClusterData(poolId);
+        } else {
+          const msg = await readResponseError(res, fallback);
+          if (activePoolIdRef.current === poolId) {
+            surfaceSidebarError(context, msg, fallback, formatError);
+          }
+        }
+      } catch (err) {
+        if (activePoolIdRef.current === poolId) {
+          surfaceSidebarError(context, err, fallback, formatError);
+        }
+      }
+    },
+    [activePoolIdRef, accountItems, loadClusterData, surfaceSidebarError]
   );
 
   const handleDisableAccount = useCallback(
-    async (accountId: string) => {
-      setWorkspaceError(null);
-      const poolId = activePoolIdRef.current;
-      try {
-        const res = await client.api.accounts[':id'].disable.$post({
-          param: { id: accountId },
-        });
-        if (res.ok) {
-          invalidateShareInspectCache();
-          await loadClusterData(poolId);
-        } else {
-          const msg = await readResponseError(res, 'Failed to disable drive');
-          if (activePoolIdRef.current === poolId) {
-            surfaceWorkspaceError('handleDisableAccount', msg, 'Failed to disable drive');
-          }
-        }
-      } catch (err) {
-        if (activePoolIdRef.current === poolId) {
-          surfaceWorkspaceError('handleDisableAccount', err, 'Failed to disable drive');
-        }
-      }
-    },
-    [activePoolIdRef, setWorkspaceError, loadClusterData, surfaceWorkspaceError]
+    (accountId: string) => setAccountEnabled(accountId, false),
+    [setAccountEnabled]
   );
 
   const handleEnableAccount = useCallback(
-    async (accountId: string) => {
-      setWorkspaceError(null);
-      const poolId = activePoolIdRef.current;
-      try {
-        const res = await client.api.accounts[':id'].enable.$post({
-          param: { id: accountId },
-        });
-        if (res.ok) {
-          invalidateShareInspectCache();
-          await loadClusterData(poolId);
-        } else {
-          const msg = await readResponseError(res, 'Failed to enable drive');
-          if (activePoolIdRef.current === poolId) {
-            surfaceWorkspaceError('handleEnableAccount', msg, 'Failed to enable drive');
-          }
-        }
-      } catch (err) {
-        if (activePoolIdRef.current === poolId) {
-          surfaceWorkspaceError('handleEnableAccount', err, 'Failed to enable drive');
-        }
-      }
-    },
-    [activePoolIdRef, setWorkspaceError, loadClusterData, surfaceWorkspaceError]
+    (accountId: string) => setAccountEnabled(accountId, true),
+    [setAccountEnabled]
   );
 
   const handleOpenDriveAction = useCallback(
@@ -353,6 +369,8 @@ export function useAccountLifecycle({
 
   return {
     isImporting,
+    sidebarError,
+    clearSidebarError,
     driveActionModal,
     setDriveActionModal,
     handleImportOAuth,

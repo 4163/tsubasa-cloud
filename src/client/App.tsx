@@ -523,6 +523,8 @@ export function App() {
 
   const {
     isImporting,
+    sidebarError,
+    clearSidebarError,
     driveActionModal,
     setDriveActionModal,
     handleImportOAuth,
@@ -544,8 +546,6 @@ export function App() {
     loadedTrashPoolIdRef,
     trashStaleRef,
     currentPathRef,
-    setWorkspaceError,
-    surfaceWorkspaceError,
     loadClusterData,
     loadFiles,
     loadTrashFiles,
@@ -648,6 +648,7 @@ export function App() {
       setSelectedIds(new Set());
       setClipboard(null);
       setWorkspaceError(null);
+      clearSidebarError();
       setPendingMoveConflict(null);
       setPendingPurgeFiles(null);
       setIsResolvingMoveConflict(false);
@@ -661,6 +662,7 @@ export function App() {
     onPoolSwitched: () => {
       setCurrentPath('/');
       setWorkspaceError(null);
+      clearSidebarError();
       setIsUploadDrawerOpen(false);
       setIsExternalChangesOpen(false);
       setShareModalState(null);
@@ -971,6 +973,8 @@ export function App() {
         copiedAuthUrlId={copiedAuthUrlId}
         onCopyAuthUrl={handleCopyAuthUrl}
         isImporting={isImporting}
+        sidebarError={sidebarError}
+        onDismissSidebarError={clearSidebarError}
         isMobileOpen={isMobileOpen}
         isDimmed={isExternalChangesOpen}
         onCloseMobile={handleCloseMobile}

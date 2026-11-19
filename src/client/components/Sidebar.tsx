@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconFolder, IconTrash, IconPlus } from './Icons.js';
+import { IconFolder, IconTrash, IconPlus, IconAlertTriangle, IconClose } from './Icons.js';
+import { RedactedEmail } from './RedactedEmail.js';
 import { SidebarAccountCard } from './SidebarAccountCard.js';
 import { SidebarPoolSection } from './SidebarPoolSection.js';
 import { useDialogLifecycle } from '../hooks/useDialogLifecycle.js';
@@ -49,6 +50,8 @@ export interface SidebarProps {
   authUrlErrors?: Record<string, boolean>;
   copiedAuthUrlId?: string | null;
   onCopyAuthUrl?: (accountId: string) => void;
+  sidebarError?: string | null;
+  onDismissSidebarError?: () => void;
 }
 
 const styles = stylex.create({
@@ -300,6 +303,99 @@ const styles = stylex.create({
       cursor: 'not-allowed',
     },
   },
+  inlineErrorWrapper: {
+    paddingLeft: spacing.space4,
+    paddingRight: spacing.space4,
+    marginBottom: spacing.space2,
+  },
+  inlineErrorAlert: {
+    paddingTop: spacing.space2,
+    paddingBottom: spacing.space2,
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space2,
+    borderRadius: radius.compact,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.dangerBorder,
+    backgroundColor: colors.dangerSurface,
+    color: colors.dangerTextOnSurface,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.space2,
+    boxSizing: 'border-box',
+  },
+  inlineErrorContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+    flex: 1,
+  },
+  inlineErrorIcon: {
+    flexShrink: 0,
+  },
+  inlineErrorText: {
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeMeta,
+    lineHeight: typography.lineHeightMeta,
+    color: colors.dangerTextOnSurface,
+    overflowWrap: 'anywhere',
+    minWidth: 0,
+    flex: 1,
+  },
+  inlineErrorEmail: {
+    fontSize: typography.fontSizeMeta,
+    lineHeight: typography.lineHeightMeta,
+    color: colors.dangerTextOnSurface,
+    whiteSpace: 'normal',
+    overflow: 'visible',
+    textOverflow: 'clip',
+    overflowWrap: 'anywhere',
+  },
+  inlineErrorDismissBtn: {
+    width: '18px',
+    height: '18px',
+    padding: '0px',
+    borderRadius: radius.compact,
+    borderWidth: '0px',
+    backgroundColor: {
+      default: 'transparent',
+      ':hover': {
+        default: colors.rowHover,
+        '@media (pointer: coarse)': 'transparent',
+      },
+      ':active': colors.selectionBg,
+    },
+    color: {
+      default: colors.dangerTextOnSurface,
+      ':hover': {
+        default: colors.primaryText,
+        '@media (pointer: coarse)': colors.dangerTextOnSurface,
+      },
+      ':active': colors.primaryText,
+    },
+    cursor: 'pointer',
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    outline: 'none',
+    transition: {
+      default: motion.transitionFast,
+      ':active': motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '1px',
+    },
+    '@media (pointer: coarse)': {
+      minWidth: '44px',
+      minHeight: '44px',
+    },
+  },
   addAccountIconCircle: {
     width: '30px',
     height: '30px',
@@ -422,6 +518,20 @@ const styles = stylex.create({
   }),
 });
 
+const EMAIL_TOKEN_PATTERN = /([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/g;
+
+function renderSidebarErrorMessage(message: string): React.ReactNode {
+  const parts = message.split(EMAIL_TOKEN_PATTERN);
+  if (parts.length === 1) return message;
+  return parts.map((part, index) => {
+    if (!part) return null;
+    if (index % 2 === 1) {
+      return <RedactedEmail key={`${index}-${part}`} email={part} style={styles.inlineErrorEmail} />;
+    }
+    return <React.Fragment key={index}>{part}</React.Fragment>;
+  });
+}
+
 export function Sidebar({
   accounts,
   tsubasaUsedBytes,
@@ -455,6 +565,8 @@ export function Sidebar({
   authUrlErrors,
   copiedAuthUrlId,
   onCopyAuthUrl,
+  sidebarError,
+  onDismissSidebarError,
 }: SidebarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOverNav, setDragOverNav] = useState<'files' | 'trash' | null>(null);
@@ -498,6 +610,7 @@ export function Sidebar({
   }, []);
 
   const handleImportClick = () => {
+    onDismissSidebarError?.();
     fileInputRef.current?.click();
   };
 
@@ -672,6 +785,29 @@ export function Sidebar({
               {...stylex.props(styles.hiddenInput)}
               onChange={handleFileChange}
             />
+          </div>
+        )}
+
+        {sidebarError && (
+          <div {...stylex.props(styles.inlineErrorWrapper)}>
+            <div role="alert" {...stylex.props(styles.inlineErrorAlert)}>
+              <div {...stylex.props(styles.inlineErrorContent)}>
+                <IconAlertTriangle size={13} {...stylex.props(styles.inlineErrorIcon)} />
+                <span {...stylex.props(styles.inlineErrorText)}>
+                  {renderSidebarErrorMessage(sidebarError)}
+                </span>
+              </div>
+              {onDismissSidebarError && (
+                <button
+                  type="button"
+                  aria-label="Dismiss sidebar error"
+                  onClick={onDismissSidebarError}
+                  {...stylex.props(styles.inlineErrorDismissBtn)}
+                >
+                  <IconClose size={12} />
+                </button>
+              )}
+            </div>
           </div>
         )}
 
