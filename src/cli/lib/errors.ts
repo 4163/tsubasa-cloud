@@ -1,4 +1,4 @@
-import { scrubEmailsInString } from './redact.js';
+import { redactPayload, scrubEmailsInString } from './redact.js';
 import { AmbiguousAccountSelectorError } from './selectors.js';
 
 export type ExitCode = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -43,6 +43,7 @@ const QUOTA_CODES = new Set<string>([
 const CONFLICT_CODES = new Set<string>([
   'WRITER_LOCK_HELD',
   'SHARE_POOL_READ_ONLY',
+  'SHARE_POOL_PROTECTED',
   'ITEM_EXISTS',
   'MOVE_CONFLICT',
   'ACCOUNT_POOL_LOCKED',
@@ -123,6 +124,15 @@ export function toCliErrorEnvelope(
 ): CliErrorEnvelope {
   const showEmails = options?.showEmails === true;
   const scrub = (text: string): string => (showEmails ? text : scrubEmailsInString(text));
+  const redactDetails = (details: unknown): unknown => {
+    if (details === null || details === undefined || showEmails) {
+      return details ?? null;
+    }
+    if (typeof details === 'string') {
+      return scrubEmailsInString(details);
+    }
+    return redactPayload(details, { showEmails: false });
+  };
 
   if (err instanceof CliError) {
     return {
@@ -131,7 +141,7 @@ export function toCliErrorEnvelope(
         code: err.code,
         message: scrub(err.message),
         exitCode: err.exitCode,
-        details: err.details ?? null,
+        details: redactDetails(err.details),
         hint: err.hint ? scrub(err.hint) : null,
       },
     };
@@ -145,7 +155,7 @@ export function toCliErrorEnvelope(
         message: scrub(err.message),
         exitCode: EXIT_CODES.USAGE,
         details: {
-          selector: err.selector,
+          selector: scrub(err.selector),
           candidates: err.candidates,
         },
         hint: 'Pass the exact accountRef (acc_<8-hex>) or a longer email prefix.',
@@ -184,7 +194,7 @@ export function toCliErrorEnvelope(
         code: inferredCode,
         message: scrub(rawMessage),
         exitCode,
-        details,
+        details: redactDetails(details),
         hint: rawHint ? scrub(rawHint) : null,
       },
     };
@@ -210,7 +220,7 @@ export function toCliErrorEnvelope(
         code,
         message: scrub(err.message || 'Unexpected error.'),
         exitCode: mapErrorCodeToExitCode(code, status),
-        details: anyErr.details ?? null,
+        details: redactDetails(anyErr.details),
         hint: hint ? scrub(hint) : null,
       },
     };

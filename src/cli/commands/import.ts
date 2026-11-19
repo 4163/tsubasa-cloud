@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   emitSuccess,
-  resolvePoolArg,
+  readFlagValue,
+  resolveRemoteTarget,
   type CliContext,
   type PoolInfo,
 } from '../context.js';
@@ -14,7 +15,6 @@ import {
   renderTable,
 } from '../lib/format.js';
 import { maskEmail, scrubEmailsInString, toAccountRef } from '../lib/redact.js';
-import { parseRemoteSelector } from '../lib/selectors.js';
 
 type ImportDriveMode = 'copy' | 'stream';
 type ImportDriveConflictMode = 'skip' | 'reject' | 'replace' | 'keep_both';
@@ -115,49 +115,6 @@ const VALID_CONFLICTS = new Set<ImportDriveConflictMode>([
   'keep_both',
 ]);
 const ACTIVE_STATUSES = new Set(['pending', 'queued', 'running']);
-
-function readFlagValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
-}
-
-function normalizePosixPath(rawPath: string): string {
-  const cleaned = rawPath.replace(/\\/g, '/').trim();
-  if (!cleaned || cleaned === '.') return '/';
-  const normalized = path.posix.normalize(cleaned.startsWith('/') ? cleaned : `/${cleaned}`);
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    return normalized.slice(0, -1);
-  }
-  return normalized;
-}
-
-async function resolveDestTarget(
-  ctx: CliContext,
-  rawDest: string
-): Promise<{ pool: PoolInfo; destPath: string }> {
-  const parsed = parseRemoteSelector(rawDest);
-  if (parsed.isRemote && parsed.pool && ctx.flags.pool) {
-    const [prefixPool, flagPool] = await Promise.all([
-      resolvePoolArg(ctx, parsed.pool),
-      resolvePoolArg(ctx, ctx.flags.pool),
-    ]);
-    if (prefixPool.id !== flagPool.id) {
-      throw new CliError(
-        'USAGE_ERROR',
-        `Conflicting pool selectors: --dest specifies '${parsed.pool}' while --pool specifies '${ctx.flags.pool}'.`,
-        { exitCode: EXIT_CODES.USAGE }
-      );
-    }
-    return { pool: prefixPool, destPath: normalizePosixPath(parsed.path) };
-  }
-  const pool = await resolvePoolArg(ctx, parsed.isRemote ? parsed.pool : undefined);
-  return { pool, destPath: normalizePosixPath(parsed.path) };
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -444,10 +401,17 @@ async function runImportDriveImpl(
     });
   }
 
-  const { pool, destPath } = await resolveDestTarget(ctx, destRaw);
+  const { pool, path: destPath } = await resolveRemoteTarget(ctx, destRaw);
   if (pool.isSharePool) {
     throw new CliError('SHARE_POOL_READ_ONLY', 'Importing directly into Share Pool is disabled.', {
       exitCode: EXIT_CODES.CONFLICT,
+    });
+  }
+
+  if (ctx.transport.mode === 'local' && detach) {
+    throw new CliError('USAGE_ERROR', 'Cannot use --detach in standalone --local mode.', {
+      exitCode: EXIT_CODES.USAGE,
+      hint: 'Start the Tsubasa server for detached background jobs, or omit --detach.',
     });
   }
 
@@ -485,6 +449,7 @@ async function runImportDriveImpl(
     return;
   }
 
+  const waitInPlace = ctx.transport.mode === 'local';
   const started = await ctx.transport.requestJson<ImportDriveJobResult>(
     '/api/transfers/import-drive',
     {
@@ -498,7 +463,8 @@ async function runImportDriveImpl(
         mode,
         conflictMode,
         noBrowser,
-        detach: true,
+        detach: !waitInPlace,
+        wait: waitInPlace,
       }),
     }
   );
@@ -516,7 +482,7 @@ async function runImportDriveImpl(
     `/api/jobs/${encodeURIComponent(started.jobId)}`
   );
 
-  while (ACTIVE_STATUSES.has(detail.job.status)) {
+  while (!waitInPlace && ACTIVE_STATUSES.has(detail.job.status)) {
     if (!ctx.flags.quiet) {
       if (ctx.flags.json) {
         ctx.stderr.write(
@@ -549,11 +515,15 @@ async function runImportDriveImpl(
     );
   }
 
-  if (!ctx.flags.quiet && !ctx.flags.json && ctx.stderr.isTTY) {
+  if (!waitInPlace && !ctx.flags.quiet && !ctx.flags.json && ctx.stderr.isTTY) {
     ctx.stderr.write('\n');
   }
 
   const finalJob = detail.job;
+  const safeLastError =
+    finalJob.lastError && !ctx.flags.showEmails
+      ? scrubEmailsInString(finalJob.lastError)
+      : finalJob.lastError;
   const summary = {
     jobId: finalJob.id,
     status: finalJob.status,
@@ -567,15 +537,14 @@ async function runImportDriveImpl(
     totalBytes: finalJob.totalBytes,
     transferredBytes: finalJob.transferredBytes,
     pauseReason: finalJob.pauseReason,
-    lastError: finalJob.lastError,
+    lastError: safeLastError,
     itemSummary: detail.itemSummary,
     activeShareCount: detail.activeShareCount,
   };
 
   if (finalJob.status === 'paused') {
-    const message = finalJob.lastError
-      ? scrubEmailsInString(finalJob.lastError)
-      : `Import job ${finalJob.id} paused (${finalJob.pauseReason ?? 'DAILY_TRANSFER_CAP'}).`;
+    const message =
+      safeLastError ?? `Import job ${finalJob.id} paused (${finalJob.pauseReason ?? 'DAILY_TRANSFER_CAP'}).`;
     throw new CliError(
       finalJob.pauseReason === 'DAILY_TRANSFER_CAP' ? 'TRANSFER_QUOTA_EXCEEDED' : 'CONFLICT',
       message,
@@ -591,7 +560,7 @@ async function runImportDriveImpl(
   if (finalJob.status === 'failed') {
     throw new CliError(
       'UPSTREAM_ERROR',
-      finalJob.lastError || `Import drive job ${finalJob.id} failed.`,
+      safeLastError || `Import drive job ${finalJob.id} failed.`,
       {
         exitCode: EXIT_CODES.AUTH_UPSTREAM,
         details: summary,

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   emitSuccess,
+  formatTimestamp,
+  readFlagValue,
   readStdinLines,
   requireConfirmation,
   resolvePoolArg,
@@ -109,22 +111,6 @@ interface DupesResponse {
 }
 
 const VALID_OUTBOX_STATUSES = new Set(['pending', 'processing', 'failed', 'dead']);
-
-function readFlagValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
-}
-
-function formatTimestamp(ts: number | null): string {
-  if (ts === null || !Number.isFinite(ts) || ts <= 0) return '-';
-  const ms = ts > 1_000_000_000_000 ? ts : ts * 1000;
-  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
 
 export async function handleTrash(ctx: CliContext, args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
@@ -341,10 +327,33 @@ export async function handleSync(ctx: CliContext, args: string[]): Promise<void>
       errors: Array<{ accountId: string; error: string }>;
     }>(`/api/sync/all?poolId=${pool.id}`, { method: 'POST' });
 
+    const hydrated = (report.hydrated ?? []).map((id) =>
+      ctx.flags.showEmails ? id : maskEmail(id)
+    );
+    const synced = (report.synced ?? []).map((id) =>
+      ctx.flags.showEmails ? id : maskEmail(id)
+    );
+    const hydratedRefs = (report.hydrated ?? []).map((id) => toAccountRef(id));
+    const syncedRefs = (report.synced ?? []).map((id) => toAccountRef(id));
+    const errors = (report.errors ?? []).map((entry) => ({
+      accountRef: toAccountRef(entry.accountId),
+      accountId: entry.accountId,
+      error: entry.error,
+    }));
+
     emitSuccess(
       ctx,
-      { mode: 'delta', poolId: pool.id, poolSlug: pool.slug, ...report },
-      `Delta sync for pool '${pool.slug}': synced ${report.synced.length} account(s), errors=${report.errors.length}.`
+      {
+        mode: 'delta',
+        poolId: pool.id,
+        poolSlug: pool.slug,
+        hydrated,
+        hydratedRefs,
+        synced,
+        syncedRefs,
+        errors,
+      },
+      `Delta sync for pool '${pool.slug}': synced ${synced.length} account(s), errors=${errors.length}.`
     );
     return;
   }

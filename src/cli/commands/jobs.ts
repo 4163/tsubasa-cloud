@@ -1,4 +1,9 @@
-import { emitSuccess, type CliContext } from '../context.js';
+import {
+  emitSuccess,
+  formatTimestamp,
+  readFlagValue,
+  type CliContext,
+} from '../context.js';
 import { CliError, EXIT_CODES } from '../lib/errors.js';
 import {
   formatBytes,
@@ -41,21 +46,6 @@ interface JobDetailResponse {
 }
 
 const ACTIVE_JOB_STATUSES = new Set(['pending', 'queued', 'running']);
-
-function readFlagValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
-}
-
-function formatMs(ms: number | null): string {
-  if (ms === null || !Number.isFinite(ms) || ms <= 0) return '-';
-  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
 
 function formatAccount(accountId: string | null, showEmails: boolean): string {
   if (!accountId) return '-';
@@ -155,7 +145,7 @@ export async function handleJobList(ctx: CliContext, args: string[]): Promise<vo
         header: 'ACCOUNT',
         format: (r) => formatAccount(r.accountId, ctx.flags.showEmails),
       },
-      { key: 'updatedAt', header: 'UPDATED', format: (r) => formatMs(r.updatedAt) },
+      { key: 'updatedAt', header: 'UPDATED', format: (r) => formatTimestamp(r.updatedAt) },
     ],
     { emptyMessage: 'No jobs found.' }
   );
@@ -238,9 +228,9 @@ export async function handleJobStatus(ctx: CliContext, args: string[]): Promise<
     `Items:       ${j.completedItems}/${j.totalItems} completed, ${j.skippedItems} skipped, ${j.failedItems} failed`,
     `Bytes:       ${formatBytes(j.transferredBytes)} / ${formatBytes(j.totalBytes)}`,
     `Shares Open: ${detail.activeShareCount}`,
-    `Created:     ${formatMs(j.createdAt)}`,
-    `Updated:     ${formatMs(j.updatedAt)}`,
-    `Completed:   ${formatMs(j.completedAt)}`,
+    `Created:     ${formatTimestamp(j.createdAt)}`,
+    `Updated:     ${formatTimestamp(j.updatedAt)}`,
+    `Completed:   ${formatTimestamp(j.completedAt)}`,
   ];
   if (j.pauseReason) {
     lines.push(`Pause:       ${j.pauseReason}`);
@@ -251,13 +241,66 @@ export async function handleJobStatus(ctx: CliContext, args: string[]): Promise<
     );
   }
 
+  const redactStringField = (value: unknown): unknown =>
+    typeof value === 'string' && value.length > 0 && !ctx.flags.showEmails
+      ? maskEmail(value)
+      : value;
+
+  const redactedMetadata = j.metadata
+    ? {
+        ...j.metadata,
+        ...(j.metadata.accountId !== undefined
+          ? { accountId: redactStringField(j.metadata.accountId) }
+          : {}),
+        ...(j.metadata.sourceAccountId !== undefined
+          ? {
+              sourceAccountRef:
+                typeof j.metadata.sourceAccountId === 'string'
+                  ? toAccountRef(j.metadata.sourceAccountId)
+                  : null,
+              sourceAccountId: redactStringField(j.metadata.sourceAccountId),
+            }
+          : {}),
+        ...(j.metadata.targetAccountId !== undefined
+          ? {
+              targetAccountRef:
+                typeof j.metadata.targetAccountId === 'string'
+                  ? toAccountRef(j.metadata.targetAccountId)
+                  : null,
+              targetAccountId: redactStringField(j.metadata.targetAccountId),
+            }
+          : {}),
+        ...(j.metadata.sourceEmail !== undefined
+          ? { sourceEmail: redactStringField(j.metadata.sourceEmail) }
+          : {}),
+      }
+    : null;
+
+  const redactedItems = (detail.items ?? []).map((item) => ({
+    ...item,
+    ...(typeof item.sourceAccountId === 'string'
+      ? {
+          sourceAccountRef: toAccountRef(item.sourceAccountId),
+          sourceAccountId: redactStringField(item.sourceAccountId),
+        }
+      : {}),
+    ...(typeof item.targetAccountId === 'string'
+      ? {
+          targetAccountRef: toAccountRef(item.targetAccountId),
+          targetAccountId: redactStringField(item.targetAccountId),
+        }
+      : {}),
+  }));
+
   emitSuccess(
     ctx,
     {
       ...detail,
+      items: redactedItems,
       job: {
         ...j,
         accountRef: j.accountId ? toAccountRef(j.accountId) : null,
+        metadata: redactedMetadata,
       },
     },
     lines.join('\n')
@@ -266,15 +309,18 @@ export async function handleJobStatus(ctx: CliContext, args: string[]): Promise<
 
 export async function handleJobResume(ctx: CliContext, args: string[]): Promise<void> {
   let wait = true;
+  let explicitDetach = false;
   const positionals: string[] = [];
 
   for (const token of args) {
     if (token === '--wait') {
       wait = true;
+      explicitDetach = false;
       continue;
     }
     if (token === '--detach') {
       wait = false;
+      explicitDetach = true;
       continue;
     }
     if (token.startsWith('-')) {
@@ -283,6 +329,13 @@ export async function handleJobResume(ctx: CliContext, args: string[]): Promise<
       });
     }
     positionals.push(token);
+  }
+
+  if (ctx.transport.mode === 'local' && explicitDetach) {
+    throw new CliError('USAGE_ERROR', 'Cannot use --detach in standalone --local mode.', {
+      exitCode: EXIT_CODES.USAGE,
+      hint: 'Start the Tsubasa server for detached background jobs, or omit --detach.',
+    });
   }
 
   if (positionals.length !== 1) {
@@ -326,9 +379,19 @@ export async function handleJobResume(ctx: CliContext, args: string[]): Promise<
     }
   );
 
+  const sanitizedRes: Record<string, unknown> = {
+    ...res,
+    ...(typeof res.sourceAccountId === 'string'
+      ? {
+          accountRef: toAccountRef(res.sourceAccountId),
+          sourceAccountId: ctx.flags.showEmails ? res.sourceAccountId : maskEmail(res.sourceAccountId),
+        }
+      : {}),
+  };
+
   emitSuccess(
     ctx,
-    res,
+    sanitizedRes,
     `Job ${jobId} resume: status=${String(res.status ?? 'ok')}${res.queued ? ' (queued)' : ''}`
   );
 }

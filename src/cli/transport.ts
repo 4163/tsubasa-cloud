@@ -172,6 +172,70 @@ function createHttpTransport(
   };
 }
 
+export async function createProbeOnlyTransport(
+  options: Pick<TransportOptions, 'homeDir' | 'server' | 'local'> = {}
+): Promise<CliTransport> {
+  if (options.homeDir) {
+    setTsubasaHomeOverride(options.homeDir);
+  }
+
+  const paths = resolveTsubasaPaths(options.homeDir);
+  const dbFingerprint = computeDbFingerprint(paths.dbPath);
+
+  const rawExplicitServer = options.server?.trim() || process.env.TSUBASA_API_URL?.trim() || '';
+  if (rawExplicitServer && options.local) {
+    throw new CliError(
+      'USAGE_ERROR',
+      'Cannot combine --server / TSUBASA_API_URL with --local.',
+      { exitCode: EXIT_CODES.USAGE }
+    );
+  }
+
+  let mode: 'http' | 'local' = 'local';
+  let serverUrl: string | null = null;
+
+  if (rawExplicitServer) {
+    const explicitUrl = normalizeBaseUrl(rawExplicitServer);
+    const probe = await probeHealth(explicitUrl, EXPLICIT_SERVER_TIMEOUT_MS);
+    if (!probe.ok) {
+      throw new CliError(
+        'SERVER_UNREACHABLE',
+        `Tsubasa server at ${explicitUrl} is unreachable (${probe.reason}).`,
+        {
+          exitCode: EXIT_CODES.AUTH_UPSTREAM,
+          hint: 'Start the server or remove --server / TSUBASA_API_URL to allow local execution.',
+        }
+      );
+    }
+    mode = 'http';
+    serverUrl = explicitUrl;
+  } else if (!options.local) {
+    const defaultServerUrl = getDefaultServerUrl();
+    const probe = await probeHealth(defaultServerUrl, AUTO_PROBE_TIMEOUT_MS);
+    if (probe.ok && probe.dbFingerprint === dbFingerprint) {
+      mode = 'http';
+      serverUrl = defaultServerUrl;
+    }
+  }
+
+  const unsupported = async (): Promise<never> => {
+    throw new CliError('RUNTIME_ERROR', 'Probe-only transport does not execute API requests.', {
+      exitCode: EXIT_CODES.RUNTIME,
+    });
+  };
+
+  return {
+    mode,
+    serverUrl,
+    homeDir: paths.homeDir,
+    dbPath: paths.dbPath,
+    dbFingerprint,
+    request: unsupported,
+    requestJson: unsupported,
+    async close(): Promise<void> {},
+  };
+}
+
 export async function createCliTransport(options: TransportOptions = {}): Promise<CliTransport> {
   if (options.homeDir) {
     setTsubasaHomeOverride(options.homeDir);

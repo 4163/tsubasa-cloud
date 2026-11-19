@@ -4,7 +4,9 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import {
   emitSuccess,
-  resolvePoolArg,
+  normalizePosixPath,
+  readFlagValue,
+  resolveRemoteTarget,
   type CliContext,
   type PoolInfo,
 } from '../context.js';
@@ -22,7 +24,6 @@ import {
   renderTable,
 } from '../lib/format.js';
 import { maskEmail, toAccountRef } from '../lib/redact.js';
-import { parseRemoteSelector } from '../lib/selectors.js';
 
 type UploadConflictPolicy = 'reject' | 'replace' | 'keep_both' | 'skip';
 
@@ -138,16 +139,6 @@ const VALID_CONFLICTS = new Set<UploadConflictPolicy>([
   'skip',
 ]);
 
-function readFlagValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
-}
-
 function parseByteSizeFlag(raw: string, flagName: string): number {
   const trimmed = raw.trim();
   const match = /^(\d+(?:\.\d+)?)\s*(b|k|kb|kib|m|mb|mib|g|gb|gib)?$/i.exec(trimmed);
@@ -173,39 +164,6 @@ function parseByteSizeFlag(raw: string, flagName: string): number {
     });
   }
   return bytes;
-}
-
-function normalizePosixPath(rawPath: string): string {
-  const cleaned = rawPath.replace(/\\/g, '/').trim();
-  if (!cleaned || cleaned === '.') return '/';
-  const normalized = path.posix.normalize(cleaned.startsWith('/') ? cleaned : `/${cleaned}`);
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    return normalized.slice(0, -1);
-  }
-  return normalized;
-}
-
-async function resolveRemoteTarget(
-  ctx: CliContext,
-  rawPath: string
-): Promise<{ pool: PoolInfo; virtualPath: string }> {
-  const parsed = parseRemoteSelector(rawPath);
-  if (parsed.isRemote && parsed.pool && ctx.flags.pool) {
-    const [prefixPool, flagPool] = await Promise.all([
-      resolvePoolArg(ctx, parsed.pool),
-      resolvePoolArg(ctx, ctx.flags.pool),
-    ]);
-    if (prefixPool.id !== flagPool.id) {
-      throw new CliError(
-        'USAGE_ERROR',
-        `Conflicting pool selectors: target specifies '${parsed.pool}' while --pool specifies '${ctx.flags.pool}'.`,
-        { exitCode: EXIT_CODES.USAGE }
-      );
-    }
-    return { pool: prefixPool, virtualPath: normalizePosixPath(parsed.path) };
-  }
-  const pool = await resolvePoolArg(ctx, parsed.isRemote ? parsed.pool : undefined);
-  return { pool, virtualPath: normalizePosixPath(parsed.path) };
 }
 
 async function statRemoteOptional(
@@ -1074,7 +1032,7 @@ async function runUploadImpl(
     );
   }
 
-  const { pool, virtualPath: destVirtualBase } = await resolveRemoteTarget(ctx, remoteDestRaw);
+  const { pool, path: destVirtualBase } = await resolveRemoteTarget(ctx, remoteDestRaw);
   if (pool.isSharePool) {
     throw new CliError('SHARE_POOL_READ_ONLY', 'Uploading directly to Share Pool is disabled.', {
       exitCode: EXIT_CODES.CONFLICT,

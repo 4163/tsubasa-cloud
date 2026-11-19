@@ -4,14 +4,14 @@ import path from 'node:path';
 import {
   emitSuccess,
   readStdinLines,
-  resolvePoolArg,
+  resolveRemoteTarget,
+  throwHttpError,
   type CliContext,
   type PoolInfo,
 } from '../context.js';
 import { detectHashAlgorithm } from '../lib/chunks.js';
-import { CliError, EXIT_CODES, mapErrorCodeToExitCode } from '../lib/errors.js';
+import { CliError, EXIT_CODES } from '../lib/errors.js';
 import { formatBytes, formatStderrEvent, renderProgressBar } from '../lib/format.js';
-import { parseRemoteSelector } from '../lib/selectors.js';
 
 interface StatFileItem {
   id: string;
@@ -79,40 +79,6 @@ interface DownloadResultItem {
   hash: string | null;
   hashVerified: boolean;
   resumedFromBytes: number;
-}
-
-function normalizePosixPath(rawPath: string): string {
-  const cleaned = rawPath.replace(/\\/g, '/').trim();
-  if (!cleaned || cleaned === '.') return '/';
-  const normalized = path.posix.normalize(cleaned.startsWith('/') ? cleaned : `/${cleaned}`);
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    return normalized.slice(0, -1);
-  }
-  return normalized;
-}
-
-async function resolveRemoteTarget(
-  ctx: CliContext,
-  rawPath: string
-): Promise<{ pool: PoolInfo; virtualPath: string }> {
-  const parsed = parseRemoteSelector(rawPath);
-  if (parsed.isRemote && parsed.pool && ctx.flags.pool) {
-    const [prefixPool, flagPool] = await Promise.all([
-      resolvePoolArg(ctx, parsed.pool),
-      resolvePoolArg(ctx, ctx.flags.pool),
-    ]);
-    if (prefixPool.id !== flagPool.id) {
-      throw new CliError(
-        'USAGE_ERROR',
-        `Conflicting pool selectors: path specifies '${parsed.pool}' while --pool specifies '${ctx.flags.pool}'.`,
-        { exitCode: EXIT_CODES.USAGE }
-      );
-    }
-    return { pool: prefixPool, virtualPath: normalizePosixPath(parsed.path) };
-  }
-
-  const pool = await resolvePoolArg(ctx, parsed.isRemote ? parsed.pool : undefined);
-  return { pool, virtualPath: normalizePosixPath(parsed.path) };
 }
 
 async function statRemoteItem(
@@ -225,36 +191,6 @@ async function computeFileHash(
   return hash.digest('hex').toLowerCase();
 }
 
-async function parseDownloadErrorResponse(response: Response): Promise<never> {
-  const text = await response.text();
-  let record: Record<string, unknown> = {};
-  if (text.length > 0) {
-    try {
-      const parsed = JSON.parse(text);
-      if (typeof parsed === 'object' && parsed !== null) {
-        record = parsed as Record<string, unknown>;
-      }
-    } catch {
-      record = { error: text };
-    }
-  }
-  const code =
-    typeof record.code === 'string' && record.code.length > 0
-      ? record.code
-      : response.status === 404
-        ? 'NOT_FOUND'
-        : response.status === 401 || response.status === 403
-          ? 'AUTH_ERROR'
-          : 'UPSTREAM_ERROR';
-  const message =
-    typeof record.error === 'string' && record.error.length > 0
-      ? record.error
-      : `Download failed with HTTP ${response.status}.`;
-  throw new CliError(code, message, {
-    exitCode: mapErrorCodeToExitCode(code, response.status),
-  });
-}
-
 function emitProgress(
   ctx: CliContext,
   opts: {
@@ -327,7 +263,7 @@ async function downloadToStdout(ctx: CliContext, file: StatFileItem): Promise<vo
     `/api/files/${encodeURIComponent(file.id)}/download?poolId=${file.poolId}`
   );
   if (!response.ok) {
-    await parseDownloadErrorResponse(response);
+    await throwHttpError(response, 'Download failed.');
   }
 
   const headerSizeRaw = response.headers.get('x-tsubasa-size');
@@ -508,7 +444,7 @@ async function downloadFileResumable(
   );
 
   if (!response.ok) {
-    await parseDownloadErrorResponse(response);
+    await throwHttpError(response, 'Download failed.');
   }
 
   const headerFileId = response.headers.get('x-tsubasa-file-id')?.trim();
@@ -697,8 +633,8 @@ export async function handleDownload(ctx: CliContext, args: string[]): Promise<v
   const resolvedSources = await Promise.all(
     remoteInputs.map(async (raw) => {
       const target = await resolveRemoteTarget(ctx, raw);
-      const stat = await statRemoteItem(ctx, target.pool.id, target.virtualPath);
-      return { ...target, stat };
+      const stat = await statRemoteItem(ctx, target.pool.id, target.path);
+      return { pool: target.pool, virtualPath: target.path, stat };
     })
   );
 

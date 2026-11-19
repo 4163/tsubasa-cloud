@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { resolveOAuthsDir } from '../../server/paths.js';
 import {
   emitSuccess,
+  readFlagValue,
   resolvePoolArg,
   type CliContext,
 } from '../context.js';
@@ -15,14 +16,16 @@ import { maskEmail, toAccountRef } from '../lib/redact.js';
 import { resolveAccountSelector } from '../lib/selectors.js';
 
 interface AccountListItem {
-  id: string;
-  email: string;
+  accountId: string;
+  clientId?: string;
+  email?: string;
   displayName?: string;
   poolId: number;
   authorized: boolean;
-  syncState: string;
+  syncState?: string;
   isDisabled: boolean;
   sourceFile?: string;
+  canSwitchPool?: boolean;
 }
 
 interface AuthCheckRow {
@@ -95,11 +98,16 @@ function scanOauthDirReadOnly(oauthDir: string): {
 async function handleAuthCheck(ctx: CliContext, args: string[]): Promise<void> {
   const selector = args[0]?.trim();
   const res = await ctx.transport.requestJson<{ accounts: AccountListItem[] }>('/api/accounts');
-  const allAccounts = res.accounts ?? [];
+  const normalizedAccounts = (res.accounts ?? []).map((acc) => ({
+    ...acc,
+    id: acc.accountId,
+    email: acc.email ?? acc.accountId,
+    syncState: acc.syncState ?? 'idle',
+  }));
 
-  let targetAccounts = allAccounts;
+  let targetAccounts = normalizedAccounts;
   if (selector) {
-    const matched = resolveAccountSelector(selector, allAccounts);
+    const matched = resolveAccountSelector(selector, normalizedAccounts);
     if (!matched) {
       throw new CliError('ACCOUNT_NOT_FOUND', `Account '${selector}' not found.`, {
         exitCode: EXIT_CODES.NOT_FOUND,
@@ -115,7 +123,9 @@ async function handleAuthCheck(ctx: CliContext, args: string[]): Promise<void> {
     const key = acc.id.toLowerCase();
     const emailKey = acc.email.toLowerCase();
     const hasCredentialFile =
-      credentialBaseNames.has(key) || credentialBaseNames.has(emailKey);
+      Boolean(acc.sourceFile) ||
+      credentialBaseNames.has(key) ||
+      credentialBaseNames.has(emailKey);
     const hasTokenFile = tokenBaseNames.has(key) || tokenBaseNames.has(emailKey);
     const status: AuthCheckRow['status'] =
       !acc.authorized
@@ -312,7 +322,7 @@ async function handleAuthAdd(ctx: CliContext, args: string[]): Promise<void> {
       continue;
     }
     if (token === '--pool') {
-      explicitPool = args[i + 1];
+      explicitPool = readFlagValue(args, i, '--pool');
       i += 1;
       continue;
     }

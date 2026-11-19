@@ -1,5 +1,6 @@
 import {
   emitSuccess,
+  readFlagValue,
   requireConfirmation,
   resolvePoolArg,
   type CliContext,
@@ -33,16 +34,6 @@ interface PoolStorageOverview {
   totalHeadroomBytes: number;
   totalTsubasaUsedBytes: number;
   accounts: PoolOverviewAccount[];
-}
-
-function readFlagValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
 }
 
 function assertValidSlug(rawSlug: string): string {

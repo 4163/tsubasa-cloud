@@ -1,5 +1,6 @@
 import {
   emitSuccess,
+  readFlagValue,
   requireConfirmation,
   resolvePoolArg,
   type CliContext,
@@ -7,7 +8,7 @@ import {
 } from '../context.js';
 import { CliError, EXIT_CODES } from '../lib/errors.js';
 import { formatBytes, renderTable } from '../lib/format.js';
-import { maskEmail, toAccountRef } from '../lib/redact.js';
+import { maskEmail, scrubEmailsInString, toAccountRef } from '../lib/redact.js';
 import { resolveAccountSelector, type AccountCandidate } from '../lib/selectors.js';
 
 interface AccountListItem {
@@ -67,16 +68,6 @@ interface QuotaRefreshResponse {
   usableLimitBytes: number;
   headroomBytes: number;
   syncState: string;
-}
-
-function readFlagValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
 }
 
 async function fetchAccountCandidates(
@@ -490,15 +481,18 @@ interface RemoveAccountResponse {
 
 export async function handleAccountEvacuate(ctx: CliContext, args: string[]): Promise<void> {
   let wait = false;
+  let explicitDetach = false;
   const positionals: string[] = [];
 
   for (const token of args) {
     if (token === '--wait') {
       wait = true;
+      explicitDetach = false;
       continue;
     }
     if (token === '--detach') {
       wait = false;
+      explicitDetach = true;
       continue;
     }
     if (token.startsWith('-')) {
@@ -507,6 +501,16 @@ export async function handleAccountEvacuate(ctx: CliContext, args: string[]): Pr
       });
     }
     positionals.push(token);
+  }
+
+  if (ctx.transport.mode === 'local' && explicitDetach) {
+    throw new CliError('USAGE_ERROR', 'Cannot use --detach in standalone --local mode.', {
+      exitCode: EXIT_CODES.USAGE,
+      hint: 'Start the Tsubasa server for detached background jobs, or omit --detach.',
+    });
+  }
+  if (ctx.transport.mode === 'local') {
+    wait = true;
   }
 
   if (positionals.length !== 1) {
@@ -548,6 +552,10 @@ export async function handleAccountEvacuate(ctx: CliContext, args: string[]): Pr
     accountRef: acc.accountRef,
     ...res,
     sourceAccountId: ctx.flags.showEmails ? res.sourceAccountId : maskEmail(res.sourceAccountId),
+    lastError:
+      res.lastError && !ctx.flags.showEmails
+        ? scrubEmailsInString(res.lastError)
+        : res.lastError,
   };
 
   emitSuccess(
@@ -560,6 +568,7 @@ export async function handleAccountEvacuate(ctx: CliContext, args: string[]): Pr
 export async function handleAccountRemove(ctx: CliContext, args: string[]): Promise<void> {
   let evacuate = false;
   let wait = false;
+  let explicitDetach = false;
   const positionals: string[] = [];
 
   for (const token of args) {
@@ -569,10 +578,12 @@ export async function handleAccountRemove(ctx: CliContext, args: string[]): Prom
     }
     if (token === '--wait') {
       wait = true;
+      explicitDetach = false;
       continue;
     }
     if (token === '--detach') {
       wait = false;
+      explicitDetach = true;
       continue;
     }
     if (token.startsWith('-')) {
@@ -581,6 +592,16 @@ export async function handleAccountRemove(ctx: CliContext, args: string[]): Prom
       });
     }
     positionals.push(token);
+  }
+
+  if (ctx.transport.mode === 'local' && explicitDetach) {
+    throw new CliError('USAGE_ERROR', 'Cannot use --detach in standalone --local mode.', {
+      exitCode: EXIT_CODES.USAGE,
+      hint: 'Start the Tsubasa server for detached background jobs, or omit --detach.',
+    });
+  }
+  if (ctx.transport.mode === 'local') {
+    wait = true;
   }
 
   if (positionals.length !== 1) {

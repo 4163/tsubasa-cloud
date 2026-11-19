@@ -1,7 +1,9 @@
+import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { CliError, EXIT_CODES } from './lib/errors.js';
+import { CliError, EXIT_CODES, mapErrorCodeToExitCode } from './lib/errors.js';
 import { formatJsonlLine } from './lib/format.js';
 import { redactPayload } from './lib/redact.js';
+import { parseRemoteSelector } from './lib/selectors.js';
 import type { CliTransport } from './transport.js';
 
 export interface GlobalFlags {
@@ -45,10 +47,6 @@ export interface CliContext {
 
 export type CommandHandler = (ctx: CliContext, args: string[]) => Promise<void>;
 
-export interface CommandModule {
-  run: CommandHandler;
-}
-
 export function createDefaultGlobalFlags(): GlobalFlags {
   return {
     json: false,
@@ -62,7 +60,7 @@ export function createDefaultGlobalFlags(): GlobalFlags {
   };
 }
 
-function readFlagValue(argv: readonly string[], index: number, flagName: string): string {
+export function readFlagValue(argv: readonly string[], index: number, flagName: string): string {
   const value = argv[index + 1];
   if (value === undefined || value.startsWith('-')) {
     throw new CliError('USAGE_ERROR', `Flag ${flagName} requires a value.`, {
@@ -70,6 +68,139 @@ function readFlagValue(argv: readonly string[], index: number, flagName: string)
     });
   }
   return value;
+}
+
+export function normalizePosixPath(input: string): string {
+  const trimmed = input.trim().replace(/\\/g, '/');
+  if (!trimmed || trimmed === '/' || trimmed === '.') {
+    return '/';
+  }
+  const normalized = path.posix.normalize(trimmed.startsWith('/') ? trimmed : `/${trimmed}`);
+  if (normalized === '.' || normalized === '/') {
+    return '/';
+  }
+  return normalized.length > 1 && normalized.endsWith('/')
+    ? normalized.slice(0, -1)
+    : normalized;
+}
+
+export interface ResolvedRemoteTarget {
+  pool: PoolInfo;
+  path: string;
+  isRemote: boolean;
+}
+
+export async function resolveRemoteTarget(
+  ctx: CliContext,
+  rawTarget: string,
+  options?: { explicitPool?: string }
+): Promise<ResolvedRemoteTarget> {
+  const parsed = parseRemoteSelector(rawTarget);
+  const flagPool = options?.explicitPool?.trim() || ctx.flags.pool?.trim();
+
+  if (parsed.isRemote && parsed.pool && flagPool) {
+    const [prefixPool, explicitResolved] = await Promise.all([
+      resolvePoolArg(ctx, parsed.pool),
+      resolvePoolArg(ctx, flagPool),
+    ]);
+    if (prefixPool.id !== explicitResolved.id) {
+      throw new CliError(
+        'USAGE_ERROR',
+        `Conflicting pool selectors: '${parsed.pool}' (pool ${prefixPool.id}) in '${rawTarget}' and --pool '${flagPool}' (pool ${explicitResolved.id}).`,
+        { exitCode: EXIT_CODES.USAGE }
+      );
+    }
+    return {
+      pool: prefixPool,
+      path: normalizePosixPath(parsed.path),
+      isRemote: true,
+    };
+  }
+
+  const pool = await resolvePoolArg(ctx, parsed.pool ?? options?.explicitPool);
+  return {
+    pool,
+    path: normalizePosixPath(parsed.path),
+    isRemote: parsed.isRemote,
+  };
+}
+
+export function formatTimestamp(value: number | string | Date | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? '-' : value.toISOString();
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value <= 0) {
+      return '-';
+    }
+    const ms = Math.abs(value) < 1e12 ? value * 1000 : value;
+    return new Date(ms).toISOString();
+  }
+  const asNum = Number(value);
+  if (Number.isFinite(asNum) && value.trim() !== '') {
+    const ms = Math.abs(asNum) < 1e12 ? asNum * 1000 : asNum;
+    return new Date(ms).toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+export async function throwHttpError(
+  response: Response,
+  fallbackMessage?: string
+): Promise<never> {
+  const text = await response.text();
+  let parsed: Record<string, unknown> = {};
+  if (text.length > 0) {
+    try {
+      const json = JSON.parse(text);
+      if (typeof json === 'object' && json !== null) {
+        parsed = json as Record<string, unknown>;
+      } else {
+        parsed = { error: text };
+      }
+    } catch {
+      parsed = { error: text };
+    }
+  }
+
+  const code =
+    typeof parsed.code === 'string' && parsed.code.length > 0
+      ? parsed.code
+      : response.status === 404
+        ? 'NOT_FOUND'
+        : response.status === 409
+          ? 'CONFLICT'
+          : response.status === 401 || response.status === 403
+            ? 'AUTH_ERROR'
+            : response.status === 400
+              ? 'VALIDATION_ERROR'
+              : 'RUNTIME_ERROR';
+  const message =
+    typeof parsed.error === 'string' && parsed.error.length > 0
+      ? parsed.error
+      : typeof parsed.message === 'string' && parsed.message.length > 0
+        ? parsed.message
+        : fallbackMessage ?? `Request failed with HTTP ${response.status}`;
+  const hint = typeof parsed.hint === 'string' && parsed.hint.length > 0 ? parsed.hint : null;
+  const details =
+    parsed.details !== undefined
+      ? parsed.details
+      : 'conflicts' in parsed || 'cleanCount' in parsed
+        ? {
+            ...(parsed.conflicts !== undefined ? { conflicts: parsed.conflicts } : {}),
+            ...(parsed.cleanCount !== undefined ? { cleanCount: parsed.cleanCount } : {}),
+          }
+        : null;
+
+  throw new CliError(code, message, {
+    exitCode: mapErrorCodeToExitCode(code, response.status),
+    details,
+    hint,
+  });
 }
 
 export function parseGlobalArgs(argv: readonly string[]): ParsedGlobalArgs {

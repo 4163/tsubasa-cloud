@@ -2,9 +2,13 @@ import path from 'node:path';
 import {
   emitJsonl,
   emitSuccess,
+  formatTimestamp,
+  normalizePosixPath,
+  readFlagValue,
   readStdinLines,
   requireConfirmation,
   resolvePoolArg,
+  resolveRemoteTarget,
   type CliContext,
   type PoolInfo,
 } from '../context.js';
@@ -111,40 +115,6 @@ type StatResponse =
 
 const MOVE_CONFLICT_MODES = new Set(['reject', 'skip', 'keep_both', 'overwrite']);
 
-function normalizePosixPath(rawPath: string): string {
-  const cleaned = rawPath.replace(/\\/g, '/').trim();
-  if (!cleaned || cleaned === '.') return '/';
-  const normalized = path.posix.normalize(cleaned.startsWith('/') ? cleaned : `/${cleaned}`);
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    return normalized.slice(0, -1);
-  }
-  return normalized;
-}
-
-async function resolveTarget(
-  ctx: CliContext,
-  rawPath: string
-): Promise<{ pool: PoolInfo; virtualPath: string }> {
-  const parsed = parseRemoteSelector(rawPath);
-  if (parsed.isRemote && parsed.pool && ctx.flags.pool) {
-    const [prefixPool, flagPool] = await Promise.all([
-      resolvePoolArg(ctx, parsed.pool),
-      resolvePoolArg(ctx, ctx.flags.pool),
-    ]);
-    if (prefixPool.id !== flagPool.id) {
-      throw new CliError(
-        'USAGE_ERROR',
-        `Conflicting pool selectors: path specifies '${parsed.pool}' while --pool specifies '${ctx.flags.pool}'.`,
-        { exitCode: EXIT_CODES.USAGE }
-      );
-    }
-    return { pool: prefixPool, virtualPath: normalizePosixPath(parsed.path) };
-  }
-
-  const pool = await resolvePoolArg(ctx, parsed.isRemote ? parsed.pool : undefined);
-  return { pool, virtualPath: normalizePosixPath(parsed.path) };
-}
-
 async function statOptional(
   ctx: CliContext,
   poolId: number,
@@ -177,22 +147,6 @@ function formatAccountCell(accountId: string | null, showEmails: boolean): strin
   const ref = toAccountRef(accountId);
   const label = showEmails ? accountId : maskEmail(accountId);
   return `${ref} (${label})`;
-}
-
-function formatUnixTimestamp(ts: number | null): string {
-  if (ts === null || !Number.isFinite(ts) || ts <= 0) return '-';
-  const ms = ts > 1_000_000_000_000 ? ts : ts * 1000;
-  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
-
-function readNextValue(args: readonly string[], index: number, flag: string): string {
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return next;
 }
 
 function parsePositiveInt(raw: string, flag: string, max = 1000): number {
@@ -360,7 +314,7 @@ export async function handleLs(ctx: CliContext, args: string[]): Promise<void> {
       continue;
     }
     if (token === '--limit') {
-      limit = parsePositiveInt(readNextValue(args, i, '--limit'), '--limit');
+      limit = parsePositiveInt(readFlagValue(args, i, '--limit'), '--limit');
       i += 1;
       continue;
     }
@@ -369,7 +323,7 @@ export async function handleLs(ctx: CliContext, args: string[]): Promise<void> {
       continue;
     }
     if (token === '--cursor') {
-      cursor = readNextValue(args, i, '--cursor');
+      cursor = readFlagValue(args, i, '--cursor');
       i += 1;
       continue;
     }
@@ -378,7 +332,7 @@ export async function handleLs(ctx: CliContext, args: string[]): Promise<void> {
       continue;
     }
     if (token === '--format') {
-      const val = readNextValue(args, i, '--format').toLowerCase();
+      const val = readFlagValue(args, i, '--format').toLowerCase();
       if (val !== 'table' && val !== 'json' && val !== 'jsonl') {
         throw new CliError('USAGE_ERROR', "Flag --format must be 'table', 'json', or 'jsonl'.", {
           exitCode: EXIT_CODES.USAGE,
@@ -411,7 +365,7 @@ export async function handleLs(ctx: CliContext, args: string[]): Promise<void> {
   }
 
   const rawPath = positionals[0] ?? '/';
-  const { pool, virtualPath } = await resolveTarget(ctx, rawPath);
+  const { pool, path: virtualPath } = await resolveRemoteTarget(ctx, rawPath);
 
   const params = new URLSearchParams({
     poolId: String(pool.id),
@@ -493,7 +447,7 @@ export async function handleLs(ctx: CliContext, args: string[]): Promise<void> {
       {
         key: 'updatedAt',
         header: 'UPDATED',
-        format: (r) => formatUnixTimestamp(r.updatedAt),
+        format: (r) => formatTimestamp(r.updatedAt),
       },
     ],
     { emptyMessage: `(${pool.slug}:${virtualPath} is empty)` }
@@ -517,7 +471,7 @@ export async function handleStat(ctx: CliContext, args: string[]): Promise<void>
     throw new CliError('USAGE_ERROR', 'Usage: tsubasa stat <path>', { exitCode: EXIT_CODES.USAGE });
   }
 
-  const { pool, virtualPath } = await resolveTarget(ctx, positionals[0]);
+  const { pool, path: virtualPath } = await resolveRemoteTarget(ctx, positionals[0]);
   const statRes = await statRequired(ctx, pool.id, virtualPath);
   const payload = {
     kind: statRes.kind,
@@ -540,8 +494,8 @@ export async function handleStat(ctx: CliContext, args: string[]): Promise<void>
       `Hash:        ${f.hash ?? '-'}`,
       `Account:     ${formatAccountCell(f.accountId, ctx.flags.showEmails)}`,
       `Drive ID:    ${f.driveFileId}`,
-      `Created:     ${formatUnixTimestamp(f.createdAt)}`,
-      `Updated:     ${formatUnixTimestamp(f.updatedAt)}`,
+      `Created:     ${formatTimestamp(f.createdAt)}`,
+      `Updated:     ${formatTimestamp(f.updatedAt)}`,
     ];
   } else {
     const d = statRes.item;
@@ -552,8 +506,8 @@ export async function handleStat(ctx: CliContext, args: string[]): Promise<void>
       `Name:        ${d.name}`,
       `ID:          ${d.id ?? '-'}`,
       `Parent ID:   ${d.parentFolderId ?? '-'}`,
-      `Created:     ${formatUnixTimestamp(d.createdAt)}`,
-      `Updated:     ${formatUnixTimestamp(d.updatedAt)}`,
+      `Created:     ${formatTimestamp(d.createdAt)}`,
+      `Updated:     ${formatTimestamp(d.updatedAt)}`,
     ];
   }
 
@@ -572,7 +526,7 @@ export async function handleFind(ctx: CliContext, args: string[]): Promise<void>
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--glob') {
-      glob = readNextValue(args, i, '--glob');
+      glob = readFlagValue(args, i, '--glob');
       i += 1;
       continue;
     }
@@ -581,7 +535,7 @@ export async function handleFind(ctx: CliContext, args: string[]): Promise<void>
       continue;
     }
     if (token === '--path') {
-      scopePath = readNextValue(args, i, '--path');
+      scopePath = readFlagValue(args, i, '--path');
       i += 1;
       continue;
     }
@@ -590,7 +544,7 @@ export async function handleFind(ctx: CliContext, args: string[]): Promise<void>
       continue;
     }
     if (token === '--limit') {
-      limit = parsePositiveInt(readNextValue(args, i, '--limit'), '--limit');
+      limit = parsePositiveInt(readFlagValue(args, i, '--limit'), '--limit');
       i += 1;
       continue;
     }
@@ -599,7 +553,7 @@ export async function handleFind(ctx: CliContext, args: string[]): Promise<void>
       continue;
     }
     if (token === '--cursor') {
-      cursor = readNextValue(args, i, '--cursor');
+      cursor = readFlagValue(args, i, '--cursor');
       i += 1;
       continue;
     }
@@ -612,7 +566,7 @@ export async function handleFind(ctx: CliContext, args: string[]): Promise<void>
       continue;
     }
     if (token === '--format') {
-      const val = readNextValue(args, i, '--format').toLowerCase();
+      const val = readFlagValue(args, i, '--format').toLowerCase();
       if (val !== 'table' && val !== 'json' && val !== 'jsonl') {
         throw new CliError('USAGE_ERROR', "Flag --format must be 'table', 'json', or 'jsonl'.", {
           exitCode: EXIT_CODES.USAGE,
@@ -647,7 +601,7 @@ export async function handleFind(ctx: CliContext, args: string[]): Promise<void>
   }
 
   const query = positionals[0] ?? '';
-  const { pool, virtualPath } = await resolveTarget(ctx, scopePath);
+  const { pool, path: virtualPath } = await resolveRemoteTarget(ctx, scopePath);
 
   const params = new URLSearchParams({
     poolId: String(pool.id),
@@ -721,7 +675,7 @@ export async function handleMkdir(ctx: CliContext, args: string[]): Promise<void
     throw new CliError('USAGE_ERROR', 'Usage: tsubasa mkdir <path>', { exitCode: EXIT_CODES.USAGE });
   }
 
-  const { pool, virtualPath } = await resolveTarget(ctx, positionals[0]);
+  const { pool, path: virtualPath } = await resolveRemoteTarget(ctx, positionals[0]);
   if (virtualPath === '/') {
     throw new CliError('USAGE_ERROR', "Cannot create root directory '/'.", {
       exitCode: EXIT_CODES.USAGE,
@@ -769,7 +723,7 @@ async function resolveBatchTargets(
   ctx: CliContext,
   rawInputs: readonly string[]
 ): Promise<{ pool: PoolInfo; paths: string[] }> {
-  const resolved = await Promise.all(rawInputs.map((raw) => resolveTarget(ctx, raw)));
+  const resolved = await Promise.all(rawInputs.map((raw) => resolveRemoteTarget(ctx, raw)));
   const firstPool = resolved[0].pool;
   for (const item of resolved) {
     if (item.pool.id !== firstPool.id) {
@@ -780,7 +734,7 @@ async function resolveBatchTargets(
       );
     }
   }
-  return { pool: firstPool, paths: resolved.map((r) => r.virtualPath) };
+  return { pool: firstPool, paths: resolved.map((r) => r.path) };
 }
 
 export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
@@ -788,6 +742,7 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
   let conflictMode = 'reject';
   let toPoolSelector: string | undefined;
   let wait = true;
+  let explicitDetach = false;
   const positionals: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -797,7 +752,7 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
       continue;
     }
     if (token === '--to-pool') {
-      toPoolSelector = readNextValue(args, i, '--to-pool');
+      toPoolSelector = readFlagValue(args, i, '--to-pool');
       i += 1;
       continue;
     }
@@ -807,14 +762,16 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
     }
     if (token === '--wait') {
       wait = true;
+      explicitDetach = false;
       continue;
     }
     if (token === '--detach') {
       wait = false;
+      explicitDetach = true;
       continue;
     }
     if (token === '--conflict') {
-      conflictMode = readNextValue(args, i, '--conflict').toLowerCase();
+      conflictMode = readFlagValue(args, i, '--conflict').toLowerCase();
       i += 1;
       continue;
     }
@@ -828,6 +785,13 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
       });
     }
     positionals.push(token);
+  }
+
+  if (ctx.transport.mode === 'local' && explicitDetach) {
+    throw new CliError('USAGE_ERROR', 'Cannot use --detach in standalone --local mode.', {
+      exitCode: EXIT_CODES.USAGE,
+      hint: 'Start the Tsubasa server for detached background jobs, or omit --detach.',
+    });
   }
 
   if (!MOVE_CONFLICT_MODES.has(conflictMode)) {
@@ -877,9 +841,9 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
     }
     destPath = normalizePosixPath(parsedDest.path);
   } else {
-    const resolvedDest = await resolveTarget(ctx, destRaw);
+    const resolvedDest = await resolveRemoteTarget(ctx, destRaw);
     destPool = resolvedDest.pool;
-    destPath = resolvedDest.virtualPath;
+    destPath = resolvedDest.path;
   }
 
   for (const srcPath of srcPaths) {
@@ -1327,9 +1291,9 @@ export async function handleRm(ctx: CliContext, args: string[]): Promise<void> {
     });
   }
 
-  const resolvedTargets = await Promise.all(rawPaths.map((p) => resolveTarget(ctx, p)));
+  const resolvedTargets = await Promise.all(rawPaths.map((p) => resolveRemoteTarget(ctx, p)));
   for (const target of resolvedTargets) {
-    if (target.virtualPath === '/') {
+    if (target.path === '/') {
       throw new CliError('USAGE_ERROR', "Cannot remove root directory '/'.", {
         exitCode: EXIT_CODES.USAGE,
       });
@@ -1339,8 +1303,8 @@ export async function handleRm(ctx: CliContext, args: string[]): Promise<void> {
   const resolvedStats = await Promise.all(
     resolvedTargets.map(async (target) => ({
       pool: target.pool,
-      virtualPath: target.virtualPath,
-      stat: await statRequired(ctx, target.pool.id, target.virtualPath),
+      virtualPath: target.path,
+      stat: await statRequired(ctx, target.pool.id, target.path),
     }))
   );
 

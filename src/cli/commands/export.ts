@@ -1,5 +1,5 @@
-import { type CliContext } from '../context.js';
-import { CliError, EXIT_CODES, mapErrorCodeToExitCode } from '../lib/errors.js';
+import { readFlagValue, throwHttpError, type CliContext } from '../context.js';
+import { CliError, EXIT_CODES } from '../lib/errors.js';
 import { formatCsv } from '../lib/format.js';
 
 const EXPORT_ENTITIES = new Set([
@@ -12,16 +12,6 @@ const EXPORT_ENTITIES = new Set([
   'outbox',
   'transferJobs',
 ]);
-
-function readOptionValue(args: readonly string[], index: number, flag: string): string {
-  const val = args[index + 1];
-  if (val === undefined || val.startsWith('-')) {
-    throw new CliError('USAGE_ERROR', `Flag ${flag} requires a value.`, {
-      exitCode: EXIT_CODES.USAGE,
-    });
-  }
-  return val;
-}
 
 function projectRowFields(
   row: Record<string, unknown>,
@@ -40,31 +30,6 @@ function projectRowFields(
     }
   }
   return out;
-}
-
-async function throwHttpError(response: Response): Promise<never> {
-  const text = await response.text();
-  let parsed: Record<string, unknown> = {};
-  try {
-    parsed = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    parsed = { error: text };
-  }
-  const code =
-    typeof parsed.code === 'string' && parsed.code.length > 0
-      ? parsed.code
-      : response.status === 404
-        ? 'NOT_FOUND'
-        : response.status === 400
-          ? 'VALIDATION_ERROR'
-          : 'RUNTIME_ERROR';
-  const message =
-    typeof parsed.error === 'string' && parsed.error.length > 0
-      ? parsed.error
-      : `Export request failed with HTTP ${response.status}`;
-  throw new CliError(code, message, {
-    exitCode: mapErrorCodeToExitCode(code, response.status),
-  });
 }
 
 async function writeChunk(stream: NodeJS.WriteStream, chunk: Uint8Array | string): Promise<void> {
@@ -90,7 +55,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--preset') {
-      preset = readOptionValue(args, i, '--preset').trim().toLowerCase();
+      preset = readFlagValue(args, i, '--preset').trim().toLowerCase();
       i += 1;
       continue;
     }
@@ -99,7 +64,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--include') {
-      const val = readOptionValue(args, i, '--include');
+      const val = readFlagValue(args, i, '--include');
       includes.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
       i += 1;
       continue;
@@ -110,7 +75,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--pool') {
-      explicitPool = readOptionValue(args, i, '--pool').trim();
+      explicitPool = readFlagValue(args, i, '--pool').trim();
       i += 1;
       continue;
     }
@@ -119,7 +84,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--account') {
-      account = readOptionValue(args, i, '--account').trim();
+      account = readFlagValue(args, i, '--account').trim();
       i += 1;
       continue;
     }
@@ -128,7 +93,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--path') {
-      pathFilter = readOptionValue(args, i, '--path').trim();
+      pathFilter = readFlagValue(args, i, '--path').trim();
       i += 1;
       continue;
     }
@@ -137,7 +102,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--trashed') {
-      trashed = readOptionValue(args, i, '--trashed').trim().toLowerCase();
+      trashed = readFlagValue(args, i, '--trashed').trim().toLowerCase();
       i += 1;
       continue;
     }
@@ -146,7 +111,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--format') {
-      format = readOptionValue(args, i, '--format').trim().toLowerCase();
+      format = readFlagValue(args, i, '--format').trim().toLowerCase();
       i += 1;
       continue;
     }
@@ -155,7 +120,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--entity') {
-      entity = readOptionValue(args, i, '--entity').trim();
+      entity = readFlagValue(args, i, '--entity').trim();
       i += 1;
       continue;
     }
@@ -164,7 +129,7 @@ export async function handleExport(ctx: CliContext, args: string[]): Promise<voi
       continue;
     }
     if (token === '--fields') {
-      const rawFields = readOptionValue(args, i, '--fields');
+      const rawFields = readFlagValue(args, i, '--fields');
       fields = rawFields.split(',').map((s) => s.trim()).filter(Boolean);
       i += 1;
       continue;
