@@ -1,5 +1,6 @@
 import {
   emitSuccess,
+  requireConfirmation,
   resolvePoolArg,
   type CliContext,
   type PoolInfo,
@@ -461,8 +462,202 @@ export async function handleAccountDisable(ctx: CliContext, args: string[]): Pro
   return toggleAccountEnabled(ctx, args, false);
 }
 
+interface EvacuateResponse {
+  jobId: string;
+  status: string;
+  sourceAccountId: string;
+  poolId: number;
+  totalItems: number;
+  filesMoved: number;
+  failedItems: number;
+  totalBytes: number;
+  bytesMoved: number;
+  removed: boolean;
+  queued: boolean;
+  lastError: string | null;
+}
+
+interface RemoveAccountResponse {
+  sourceAccountId: string;
+  filesMoved: number;
+  bytesMoved: number;
+  transfers: unknown[];
+  removed: boolean;
+  queued: boolean;
+  jobId?: string;
+  filesQueued?: number;
+}
+
+export async function handleAccountEvacuate(ctx: CliContext, args: string[]): Promise<void> {
+  let wait = false;
+  const positionals: string[] = [];
+
+  for (const token of args) {
+    if (token === '--wait') {
+      wait = true;
+      continue;
+    }
+    if (token === '--detach') {
+      wait = false;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      throw new CliError('USAGE_ERROR', `Unknown flag '${token}' for account evacuate.`, {
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+    positionals.push(token);
+  }
+
+  if (positionals.length !== 1) {
+    throw new CliError('USAGE_ERROR', 'Usage: tsubasa account evacuate <account> [--wait]', {
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+
+  const acc = await resolveAccountArg(ctx, positionals[0]);
+  const masked = ctx.flags.showEmails ? acc.email : maskEmail(acc.email);
+
+  if (ctx.flags.dryRun) {
+    emitSuccess(
+      ctx,
+      {
+        dryRun: true,
+        action: 'account evacuate',
+        accountRef: acc.accountRef,
+        accountId: acc.accountId,
+        poolId: acc.poolId,
+        wait,
+        canSwitchPool: acc.canSwitchPool,
+      },
+      `[dry-run] evacuate account ${acc.accountRef} (${masked}) in pool ${acc.poolId}`
+    );
+    return;
+  }
+
+  const res = await ctx.transport.requestJson<EvacuateResponse>(
+    `/api/accounts/${encodeURIComponent(acc.accountId)}/evacuate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wait, removeAfter: false }),
+    }
+  );
+
+  const payload = {
+    accountRef: acc.accountRef,
+    ...res,
+    sourceAccountId: ctx.flags.showEmails ? res.sourceAccountId : maskEmail(res.sourceAccountId),
+  };
+
+  emitSuccess(
+    ctx,
+    payload,
+    `Evacuation job ${res.jobId} (${res.status}) for ${acc.accountRef} (${masked}): moved ${res.filesMoved}/${res.totalItems} file(s), ${formatBytes(res.bytesMoved)}${res.queued ? ' [queued]' : ''}.`
+  );
+}
+
+export async function handleAccountRemove(ctx: CliContext, args: string[]): Promise<void> {
+  let evacuate = false;
+  let wait = false;
+  const positionals: string[] = [];
+
+  for (const token of args) {
+    if (token === '--evacuate') {
+      evacuate = true;
+      continue;
+    }
+    if (token === '--wait') {
+      wait = true;
+      continue;
+    }
+    if (token === '--detach') {
+      wait = false;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      throw new CliError('USAGE_ERROR', `Unknown flag '${token}' for account remove.`, {
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+    positionals.push(token);
+  }
+
+  if (positionals.length !== 1) {
+    throw new CliError(
+      'USAGE_ERROR',
+      'Usage: tsubasa account remove <account> [--evacuate] [--yes] [--wait]',
+      { exitCode: EXIT_CODES.USAGE }
+    );
+  }
+
+  const acc = await resolveAccountArg(ctx, positionals[0]);
+  const masked = ctx.flags.showEmails ? acc.email : maskEmail(acc.email);
+
+  if (!acc.canSwitchPool && !evacuate) {
+    throw new CliError(
+      'USAGE_ERROR',
+      `Account ${acc.accountRef} (${masked}) still holds files; pass --evacuate --yes to evacuate and remove it.`,
+      {
+        exitCode: EXIT_CODES.USAGE,
+        hint: 'Run `tsubasa account remove <account> --evacuate --yes` or evacuate files first.',
+      }
+    );
+  }
+
+  if (ctx.flags.dryRun) {
+    emitSuccess(
+      ctx,
+      {
+        dryRun: true,
+        action: 'account remove',
+        accountRef: acc.accountRef,
+        accountId: acc.accountId,
+        poolId: acc.poolId,
+        requiresEvacuation: !acc.canSwitchPool,
+        evacuate,
+        wait,
+      },
+      `[dry-run] remove account ${acc.accountRef} (${masked})${!acc.canSwitchPool ? ' (with evacuation)' : ''}`
+    );
+    return;
+  }
+
+  await requireConfirmation(
+    ctx,
+    `remove account ${acc.accountRef} (${masked})${!acc.canSwitchPool ? ' after evacuating its files' : ''}`
+  );
+
+  const res = await ctx.transport.requestJson<RemoveAccountResponse>(
+    `/api/accounts/${encodeURIComponent(acc.accountId)}${wait ? '?wait=true' : ''}`,
+    { method: 'DELETE' }
+  );
+
+  const payload = {
+    accountRef: acc.accountRef,
+    ...res,
+    sourceAccountId: ctx.flags.showEmails ? res.sourceAccountId : maskEmail(res.sourceAccountId),
+  };
+
+  if (res.queued) {
+    emitSuccess(
+      ctx,
+      payload,
+      `Queued evacuation & removal for ${acc.accountRef} (${masked}), jobId=${res.jobId ?? '-'}, filesQueued=${res.filesQueued ?? 0}.`
+    );
+    return;
+  }
+
+  emitSuccess(
+    ctx,
+    payload,
+    `Removed account ${acc.accountRef} (${masked})${res.filesMoved > 0 ? ` (moved ${res.filesMoved} file(s), ${formatBytes(res.bytesMoved)})` : ''}.`
+  );
+}
+
 export async function handleAccountMovePool(ctx: CliContext, args: string[]): Promise<void> {
   let targetPoolSelector: string | undefined;
+  let evacuate = false;
   const positionals: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -476,6 +671,10 @@ export async function handleAccountMovePool(ctx: CliContext, args: string[]): Pr
       targetPoolSelector = token.slice('--to='.length).trim();
       continue;
     }
+    if (token === '--evacuate') {
+      evacuate = true;
+      continue;
+    }
     if (token.startsWith('-')) {
       throw new CliError('USAGE_ERROR', `Unknown flag '${token}' for account move-pool.`, {
         exitCode: EXIT_CODES.USAGE,
@@ -487,7 +686,7 @@ export async function handleAccountMovePool(ctx: CliContext, args: string[]): Pr
   if (positionals.length !== 1 || !targetPoolSelector) {
     throw new CliError(
       'USAGE_ERROR',
-      'Usage: tsubasa account move-pool <account> --to <pool>',
+      'Usage: tsubasa account move-pool <account> --to <pool> [--evacuate]',
       { exitCode: EXIT_CODES.USAGE }
     );
   }
@@ -499,12 +698,13 @@ export async function handleAccountMovePool(ctx: CliContext, args: string[]): Pr
   const masked = ctx.flags.showEmails ? acc.email : maskEmail(acc.email);
 
   if (ctx.flags.dryRun) {
-    const canMove = acc.canSwitchPool && !targetPool.isSharePool;
-    const blockedReason = !acc.canSwitchPool
-      ? 'Account holds indexed files; empty-account invariant requires evacuation first.'
-      : targetPool.isSharePool
-        ? 'Cannot move an account directly into Share Pool.'
-        : null;
+    const canMove = (acc.canSwitchPool || evacuate) && !targetPool.isSharePool;
+    const blockedReason =
+      !acc.canSwitchPool && !evacuate
+        ? 'Account holds indexed files; pass --evacuate or evacuate files first.'
+        : targetPool.isSharePool
+          ? 'Cannot move an account directly into Share Pool.'
+          : null;
     emitSuccess(
       ctx,
       {
@@ -515,12 +715,41 @@ export async function handleAccountMovePool(ctx: CliContext, args: string[]): Pr
         fromPoolId: acc.poolId,
         toPoolId: targetPool.id,
         toPoolSlug: targetPool.slug,
+        evacuate,
+        willEvacuateFirst: evacuate && !acc.canSwitchPool,
         canMove,
         blockedReason,
       },
-      `[dry-run] move account ${acc.accountRef} (${masked}) from pool ${acc.poolId} to ${targetPool.slug} (id=${targetPool.id})${blockedReason ? ` [blocked: ${blockedReason}]` : ''}`
+      `[dry-run] move account ${acc.accountRef} (${masked}) from pool ${acc.poolId} to ${targetPool.slug} (id=${targetPool.id})${evacuate && !acc.canSwitchPool ? ' [evacuate first]' : ''}${blockedReason ? ` [blocked: ${blockedReason}]` : ''}`
     );
     return;
+  }
+
+  if (targetPool.isSharePool) {
+    throw new CliError(
+      'SHARE_POOL_READ_ONLY',
+      'Cannot move an account directly into Share Pool.',
+      { exitCode: EXIT_CODES.CONFLICT }
+    );
+  }
+
+  let evacuation: EvacuateResponse | null = null;
+  if (evacuate && !acc.canSwitchPool) {
+    evacuation = await ctx.transport.requestJson<EvacuateResponse>(
+      `/api/accounts/${encodeURIComponent(acc.accountId)}/evacuate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wait: true, removeAfter: false }),
+      }
+    );
+    if (evacuation.status !== 'completed' || evacuation.failedItems > 0) {
+      throw new CliError(
+        'RUNTIME_ERROR',
+        `Evacuation job ${evacuation.jobId} ended with status '${evacuation.status}' (failed=${evacuation.failedItems}); aborting pool move.`,
+        { exitCode: EXIT_CODES.RUNTIME }
+      );
+    }
   }
 
   const res = await ctx.transport.requestJson<Record<string, unknown>>(
@@ -534,8 +763,23 @@ export async function handleAccountMovePool(ctx: CliContext, args: string[]): Pr
 
   emitSuccess(
     ctx,
-    { accountRef: acc.accountRef, accountId: acc.accountId, toPoolSlug: targetPool.slug, ...res },
-    `Moved account ${acc.accountRef} (${masked}) to pool "${targetPool.name}" (${targetPool.slug}, id=${targetPool.id}).`
+    {
+      accountRef: acc.accountRef,
+      accountId: acc.accountId,
+      toPoolSlug: targetPool.slug,
+      ...(evacuation
+        ? {
+            evacuation: {
+              ...evacuation,
+              sourceAccountId: ctx.flags.showEmails
+                ? evacuation.sourceAccountId
+                : maskEmail(evacuation.sourceAccountId),
+            },
+          }
+        : {}),
+      ...res,
+    },
+    `Moved account ${acc.accountRef} (${masked}) to pool "${targetPool.name}" (${targetPool.slug}, id=${targetPool.id})${evacuation ? ` after evacuating ${evacuation.filesMoved} file(s)` : ''}.`
   );
 }
 
@@ -544,7 +788,7 @@ export async function handleAccount(ctx: CliContext, args: string[]): Promise<vo
   if (!subcommand) {
     throw new CliError(
       'USAGE_ERROR',
-      'Usage: tsubasa account <list|show|quota|enable|disable|move-pool>',
+      'Usage: tsubasa account <list|show|quota|enable|disable|evacuate|move-pool|remove>',
       { exitCode: EXIT_CODES.USAGE }
     );
   }
@@ -560,12 +804,16 @@ export async function handleAccount(ctx: CliContext, args: string[]): Promise<vo
       return handleAccountEnable(ctx, rest);
     case 'disable':
       return handleAccountDisable(ctx, rest);
+    case 'evacuate':
+      return handleAccountEvacuate(ctx, rest);
     case 'move-pool':
       return handleAccountMovePool(ctx, rest);
+    case 'remove':
+      return handleAccountRemove(ctx, rest);
     default:
       throw new CliError(
         'USAGE_ERROR',
-        `Unknown account subcommand '${subcommand}'. Expected list, show, quota, enable, disable, or move-pool.`,
+        `Unknown account subcommand '${subcommand}'. Expected list, show, quota, enable, disable, evacuate, move-pool, or remove.`,
         { exitCode: EXIT_CODES.USAGE }
       );
   }

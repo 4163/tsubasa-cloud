@@ -9,6 +9,7 @@ import { CliError, EXIT_CODES } from '../lib/errors.js';
 import { formatBytes, renderTable } from '../lib/format.js';
 import { maskEmail, toAccountRef } from '../lib/redact.js';
 import { slugifyPoolName, validatePoolSlug } from '../lib/selectors.js';
+import { resolveAccountArg } from './accounts.js';
 
 interface PoolOverviewAccount {
   id: string;
@@ -455,12 +456,158 @@ export async function handlePoolReorder(ctx: CliContext, args: string[]): Promis
   emitSuccess(ctx, res, table);
 }
 
+interface PoolRebalanceResponse {
+  poolId: number;
+  dryRun: boolean;
+  overCeilingAccounts: Array<{
+    accountId: string;
+    excessBytes: number;
+    candidateFilesCount: number;
+    candidateBytesTotal: number;
+  }>;
+  filesMoved: number;
+  bytesMoved: number;
+  transfers: Array<{
+    fileId: string;
+    virtualPath: string;
+    sourceAccountId: string;
+    targetAccountId: string;
+    newDriveFileId: string;
+    bytesMoved: number;
+  }>;
+}
+
+export async function handlePoolRebalance(ctx: CliContext, args: string[]): Promise<void> {
+  let accountSelector: string | undefined;
+  const positionals: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--account') {
+      accountSelector = readFlagValue(args, i, '--account');
+      i += 1;
+      continue;
+    }
+    if (token.startsWith('--account=')) {
+      accountSelector = token.slice('--account='.length).trim();
+      continue;
+    }
+    if (token.startsWith('-')) {
+      throw new CliError('USAGE_ERROR', `Unknown flag '${token}' for pool rebalance.`, {
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+    positionals.push(token);
+  }
+
+  if (positionals.length > 1) {
+    throw new CliError(
+      'USAGE_ERROR',
+      'Usage: tsubasa pool rebalance [pool] [--account <account>]',
+      { exitCode: EXIT_CODES.USAGE }
+    );
+  }
+
+  const pool = await resolvePoolArg(ctx, positionals[0]);
+  if (pool.isSharePool) {
+    throw new CliError(
+      'SHARE_POOL_READ_ONLY',
+      'Share Pool cannot be rebalanced.',
+      { exitCode: EXIT_CODES.CONFLICT }
+    );
+  }
+
+  let accountId: string | undefined;
+  if (accountSelector) {
+    const acc = await resolveAccountArg(ctx, accountSelector);
+    if (acc.poolId !== pool.id) {
+      throw new CliError(
+        'VALIDATION_ERROR',
+        `Account ${acc.accountRef} belongs to pool ${acc.poolId}, not pool '${pool.slug}' (${pool.id}).`,
+        { exitCode: EXIT_CODES.USAGE }
+      );
+    }
+    accountId = acc.accountId;
+  }
+
+  const res = await ctx.transport.requestJson<PoolRebalanceResponse>(
+    `/api/pools/${pool.id}/rebalance`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(accountId !== undefined ? { accountId } : {}),
+        dryRun: ctx.flags.dryRun,
+      }),
+    }
+  );
+
+  const overCeilingAccounts = (res.overCeilingAccounts ?? []).map((entry) => ({
+    ...entry,
+    accountRef: toAccountRef(entry.accountId),
+  }));
+
+  const transfers = (res.transfers ?? []).map((tr) => ({
+    ...tr,
+    sourceAccountRef: toAccountRef(tr.sourceAccountId),
+    targetAccountRef: toAccountRef(tr.targetAccountId),
+    sourceAccountId: ctx.flags.showEmails ? tr.sourceAccountId : maskEmail(tr.sourceAccountId),
+    targetAccountId: ctx.flags.showEmails ? tr.targetAccountId : maskEmail(tr.targetAccountId),
+  }));
+
+  const payload = {
+    poolId: res.poolId,
+    poolSlug: pool.slug,
+    dryRun: res.dryRun,
+    overCeilingAccounts,
+    filesMoved: res.filesMoved,
+    bytesMoved: res.bytesMoved,
+    transfers,
+  };
+
+  const prefix = res.dryRun ? '[dry-run] ' : '';
+  const lines: string[] = [
+    `${prefix}Pool rebalance (${pool.slug}, id=${pool.id}): over-ceiling accounts=${overCeilingAccounts.length}, filesMoved=${res.filesMoved}, bytesMoved=${formatBytes(res.bytesMoved)}`,
+  ];
+
+  if (overCeilingAccounts.length > 0) {
+    lines.push('');
+    lines.push(
+      renderTable(overCeilingAccounts, [
+        { key: 'accountRef', header: 'REF' },
+        {
+          key: 'accountId',
+          header: 'ACCOUNT',
+          format: (r) => (ctx.flags.showEmails ? r.accountId : maskEmail(r.accountId)),
+        },
+        { key: 'excessBytes', header: 'EXCESS', align: 'right', format: (r) => formatBytes(r.excessBytes) },
+        { key: 'candidateFilesCount', header: 'CANDIDATES', align: 'right' },
+        { key: 'candidateBytesTotal', header: 'CANDIDATE BYTES', align: 'right', format: (r) => formatBytes(r.candidateBytesTotal) },
+      ])
+    );
+  }
+
+  if (transfers.length > 0) {
+    lines.push('');
+    lines.push(
+      renderTable(transfers, [
+        { key: 'virtualPath', header: 'PATH' },
+        { key: 'sourceAccountRef', header: 'FROM' },
+        { key: 'targetAccountRef', header: 'TO' },
+        { key: 'bytesMoved', header: 'BYTES', align: 'right', format: (r) => formatBytes(r.bytesMoved) },
+      ])
+    );
+  }
+
+  emitSuccess(ctx, payload, lines.join('\n'));
+}
+
 export async function handlePool(ctx: CliContext, args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (!subcommand) {
     throw new CliError(
       'USAGE_ERROR',
-      'Usage: tsubasa pool <list|show|create|rename|delete|reorder>',
+      'Usage: tsubasa pool <list|show|create|rename|delete|reorder|rebalance>',
       { exitCode: EXIT_CODES.USAGE }
     );
   }
@@ -478,10 +625,12 @@ export async function handlePool(ctx: CliContext, args: string[]): Promise<void>
       return handlePoolDelete(ctx, rest);
     case 'reorder':
       return handlePoolReorder(ctx, rest);
+    case 'rebalance':
+      return handlePoolRebalance(ctx, rest);
     default:
       throw new CliError(
         'USAGE_ERROR',
-        `Unknown pool subcommand '${subcommand}'. Expected list, show, create, rename, delete, or reorder.`,
+        `Unknown pool subcommand '${subcommand}'. Expected list, show, create, rename, delete, reorder, or rebalance.`,
         { exitCode: EXIT_CODES.USAGE }
       );
   }

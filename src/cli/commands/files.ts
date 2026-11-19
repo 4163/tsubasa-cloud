@@ -786,6 +786,8 @@ async function resolveBatchTargets(
 export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
   let useStdin = false;
   let conflictMode = 'reject';
+  let toPoolSelector: string | undefined;
+  let wait = true;
   const positionals: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -794,12 +796,22 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
       useStdin = true;
       continue;
     }
-    if (token === '--to-pool' || token.startsWith('--to-pool=')) {
-      throw new CliError(
-        'USAGE_ERROR',
-        'Cross-pool mv (--to-pool) is not available yet (planned for Phase 3).',
-        { exitCode: EXIT_CODES.USAGE }
-      );
+    if (token === '--to-pool') {
+      toPoolSelector = readNextValue(args, i, '--to-pool');
+      i += 1;
+      continue;
+    }
+    if (token.startsWith('--to-pool=')) {
+      toPoolSelector = token.slice('--to-pool='.length).trim();
+      continue;
+    }
+    if (token === '--wait') {
+      wait = true;
+      continue;
+    }
+    if (token === '--detach') {
+      wait = false;
+      continue;
     }
     if (token === '--conflict') {
       conflictMode = readNextValue(args, i, '--conflict').toLowerCase();
@@ -846,9 +858,29 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
     });
   }
 
-  const { pool, paths: allPaths } = await resolveBatchTargets(ctx, [...srcRaws, destRaw]);
-  const srcPaths = allPaths.slice(0, -1);
-  const destPath = allPaths[allPaths.length - 1];
+  const { pool, paths: srcPaths } = await resolveBatchTargets(ctx, srcRaws);
+
+  let destPool: PoolInfo;
+  let destPath: string;
+  if (toPoolSelector) {
+    const parsedDest = parseRemoteSelector(destRaw);
+    destPool = await resolvePoolArg(ctx, toPoolSelector);
+    if (parsedDest.isRemote && parsedDest.pool) {
+      const explicitPrefixPool = await resolvePoolArg(ctx, parsedDest.pool);
+      if (explicitPrefixPool.id !== destPool.id) {
+        throw new CliError(
+          'USAGE_ERROR',
+          `Conflicting destination pool selectors: '${parsedDest.pool}' vs --to-pool '${toPoolSelector}'.`,
+          { exitCode: EXIT_CODES.USAGE }
+        );
+      }
+    }
+    destPath = normalizePosixPath(parsedDest.path);
+  } else {
+    const resolvedDest = await resolveTarget(ctx, destRaw);
+    destPool = resolvedDest.pool;
+    destPath = resolvedDest.virtualPath;
+  }
 
   for (const srcPath of srcPaths) {
     if (srcPath === '/') {
@@ -859,6 +891,87 @@ export async function handleMv(ctx: CliContext, args: string[]): Promise<void> {
   }
 
   const srcStats = await Promise.all(srcPaths.map((p) => statRequired(ctx, pool.id, p)));
+
+  if (destPool.id !== pool.id) {
+    if (pool.isSharePool || destPool.isSharePool) {
+      throw new CliError(
+        'SHARE_POOL_READ_ONLY',
+        'Cross-pool move cannot target or originate from Share Pool.',
+        { exitCode: EXIT_CODES.CONFLICT }
+      );
+    }
+
+    const items = srcStats.map((st, idx) => ({
+      kind: st.kind,
+      id: st.item.id as string,
+      path: srcPaths[idx],
+    }));
+
+    const destStat = await statOptional(ctx, destPool.id, destPath);
+    const useDestDir =
+      items.length > 1 ||
+      destPath === '/' ||
+      destRaw.endsWith('/') ||
+      destStat?.kind === 'folder';
+
+    if (ctx.flags.dryRun) {
+      emitSuccess(
+        ctx,
+        {
+          dryRun: true,
+          action: 'cross_pool_move',
+          sourcePoolId: pool.id,
+          sourcePoolSlug: pool.slug,
+          destPoolId: destPool.id,
+          destPoolSlug: destPool.slug,
+          items,
+          ...(useDestDir ? { destDir: destPath } : { destPath }),
+          conflictMode,
+        },
+        `[dry-run] cross-pool mv ${items.length} item(s): ${pool.slug} -> ${destPool.slug}:${destPath}`
+      );
+      return;
+    }
+
+    const moveRes = await ctx.transport.requestJson<{
+      jobId: string;
+      status: string;
+      sourcePoolId: number;
+      destPoolId: number;
+      totalItems: number;
+      completedItems: number;
+      failedItems: number;
+      skippedItems: number;
+      totalBytes: number;
+      transferredBytes: number;
+      queued: boolean;
+      lastError: string | null;
+    }>('/api/transfers/cross-pool-move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourcePoolId: pool.id,
+        destPoolId: destPool.id,
+        items,
+        ...(useDestDir ? { destDir: destPath } : { destPath }),
+        conflictMode,
+        wait,
+      }),
+    });
+
+    emitSuccess(
+      ctx,
+      {
+        action: 'cross_pool_move',
+        sourcePoolSlug: pool.slug,
+        destPoolSlug: destPool.slug,
+        ...moveRes,
+      },
+      `Cross-pool move job ${moveRes.jobId} (${moveRes.status}): ${moveRes.completedItems}/${moveRes.totalItems} item(s), ${formatBytes(moveRes.transferredBytes)}${moveRes.queued ? ' [queued]' : ''}`
+    );
+    return;
+  }
+
   const destStat = await statOptional(ctx, pool.id, destPath);
 
   if (srcStats.length === 1) {

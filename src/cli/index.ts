@@ -37,6 +37,30 @@ import {
 import { runAuthCommand } from './commands/auth.js';
 import { handleExport } from './commands/export.js';
 import { handleExt } from './commands/ext.js';
+import { handleDownload } from './commands/download.js';
+import { handleUpload, handlePlanUpload } from './commands/upload.js';
+import { handleJob } from './commands/jobs.js';
+
+async function handlePlan(ctx: CliContext, args: string[]): Promise<void> {
+  const sub = args[0];
+  if (!sub || sub === '--help' || sub === '-h') {
+    throw new CliError('USAGE_ERROR', 'Usage: tsubasa plan <upload|import-drive> [args...]', {
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  if (sub === 'upload') {
+    await handlePlanUpload(ctx, args.slice(1));
+    return;
+  }
+  if (sub === 'import-drive') {
+    throw new CliError('USAGE_ERROR', 'plan import-drive is not wired yet.', {
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  throw new CliError('USAGE_ERROR', `Unknown plan subcommand '${sub}'. Expected: upload, import-drive.`, {
+    exitCode: EXIT_CODES.USAGE,
+  });
+}
 
 const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   status: handleStatus,
@@ -47,8 +71,12 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   mv: handleMv,
   cp: handleCp,
   rm: handleRm,
+  upload: handleUpload,
+  download: handleDownload,
   export: handleExport,
   ext: handleExt,
+  job: handleJob,
+  plan: handlePlan,
   pool: handlePool,
   account: handleAccount,
   trash: handleTrash,
@@ -74,13 +102,20 @@ function isWriteCommand(command: string, subArgs: readonly string[], flags: Glob
     case 'find':
     case 'audit':
     case 'dupes':
+    case 'download':
+    case 'export':
+    case 'plan':
       return false;
 
     case 'mkdir':
     case 'mv':
     case 'cp':
     case 'rm':
+    case 'upload':
       return true;
+
+    case 'job':
+      return sub !== 'list' && sub !== 'status';
 
     case 'pool':
       return sub !== 'list' && sub !== 'show';
