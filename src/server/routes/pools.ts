@@ -283,6 +283,168 @@ const router = new Hono()
       id: poolId,
       name: existing.name,
     });
-  });
+  })
+  .post(
+    '/api/pools/reorder',
+    validator(
+      'json',
+      (
+        value,
+        c
+      ): { order: Array<string | number> } | Response => {
+        const body = value as Record<string, unknown> | null | undefined;
+        const rawOrder = Array.isArray(body?.order)
+          ? body.order
+          : Array.isArray(body?.slugs)
+            ? body.slugs
+            : Array.isArray(body?.poolIds)
+              ? body.poolIds
+              : null;
+
+        if (!rawOrder || rawOrder.length === 0) {
+          return c.json(
+            { error: 'order, slugs, or poolIds must be a non-empty array', code: 'VALIDATION_ERROR' },
+            400
+          );
+        }
+
+        const parsed: Array<string | number> = [];
+        for (const entry of rawOrder) {
+          if (typeof entry === 'number' && Number.isInteger(entry) && entry > 0) {
+            parsed.push(entry);
+          } else if (typeof entry === 'string' && entry.trim().length > 0) {
+            parsed.push(entry.trim());
+          } else {
+            return c.json(
+              { error: 'Each pool selector must be a positive integer ID or non-empty slug', code: 'VALIDATION_ERROR' },
+              400
+            );
+          }
+        }
+        return { order: parsed };
+      }
+    ),
+    async (c) => {
+      const { order } = c.req.valid('json');
+
+      const result = sqlite
+        .transaction(() => {
+          const allRows = sqlite
+            .prepare('SELECT id, slug, is_share_pool as isSharePool FROM pools')
+            .all() as Array<{ id: number; slug: string; isSharePool: number }>;
+
+          const standardPools = allRows.filter((row) => !Boolean(row.isSharePool));
+          const byId = new Map<number, { id: number; slug: string; isSharePool: number }>();
+          const bySlug = new Map<string, { id: number; slug: string; isSharePool: number }>();
+          for (const row of allRows) {
+            byId.set(row.id, row);
+            bySlug.set(row.slug.toLowerCase(), row);
+          }
+
+          const resolvedIds: number[] = [];
+          const seenIds = new Set<number>();
+
+          for (const selector of order) {
+            let matched: { id: number; slug: string; isSharePool: number } | undefined;
+            if (typeof selector === 'number') {
+              matched = byId.get(selector);
+            } else if (/^\d+$/.test(selector)) {
+              matched = byId.get(Number(selector));
+            } else {
+              matched = bySlug.get(selector.toLowerCase());
+            }
+
+            if (!matched) {
+              return {
+                status: 'not_found' as const,
+                error: `Pool '${selector}' not found`,
+              };
+            }
+            if (Boolean(matched.isSharePool)) {
+              return {
+                status: 'share_protected' as const,
+                error: 'Share Pool cannot be reordered',
+              };
+            }
+            if (seenIds.has(matched.id)) {
+              return {
+                status: 'validation' as const,
+                error: `Duplicate pool '${selector}' in reorder list`,
+              };
+            }
+
+            seenIds.add(matched.id);
+            resolvedIds.push(matched.id);
+          }
+
+          if (resolvedIds.length !== standardPools.length) {
+            const missing = standardPools
+              .filter((p) => !seenIds.has(p.id))
+              .map((p) => p.slug);
+            return {
+              status: 'validation' as const,
+              error: `Reorder list must include every standard pool. Missing: ${missing.join(', ')}`,
+            };
+          }
+
+          const updateStmt = sqlite.prepare(
+            'UPDATE pools SET sort_order = ?, updated_at = unixepoch() WHERE id = ?'
+          );
+          for (let idx = 0; idx < resolvedIds.length; idx += 1) {
+            updateStmt.run(idx + 1, resolvedIds[idx]);
+          }
+
+          const updatedPools = sqlite
+            .prepare(
+              `SELECT
+                 p.id,
+                 p.name,
+                 p.slug,
+                 p.sort_order as sortOrder,
+                 p.drive_folder_name as driveFolderName,
+                 p.is_share_pool as isSharePool,
+                 COALESCE(acc.cnt, 0) as accountCount,
+                 COALESCE(fil.cnt, 0) as fileCount,
+                 COALESCE(fil.total_bytes, 0) as totalBytes
+               FROM pools p
+               LEFT JOIN (SELECT pool_id, COUNT(*) as cnt FROM accounts GROUP BY pool_id) acc ON acc.pool_id = p.id
+               LEFT JOIN (SELECT pool_id, COUNT(*) as cnt, SUM(size_bytes) as total_bytes FROM files WHERE is_trashed = 0 GROUP BY pool_id) fil ON fil.pool_id = p.id
+               ORDER BY p.is_share_pool ASC, p.sort_order ASC, p.id ASC`
+            )
+            .all() as Array<{
+            id: number;
+            name: string;
+            slug: string;
+            sortOrder: number;
+            driveFolderName: string;
+            isSharePool: number;
+            accountCount: number;
+            fileCount: number;
+            totalBytes: number;
+          }>;
+
+          return {
+            status: 'ok' as const,
+            pools: updatedPools.map((r) => ({
+              ...r,
+              isSharePool: Boolean(r.isSharePool),
+            })),
+          };
+        })
+        .immediate();
+
+      if (result.status === 'not_found') {
+        return c.json({ error: result.error, code: 'NOT_FOUND' }, 404);
+      }
+      if (result.status === 'share_protected') {
+        return c.json({ error: result.error, code: 'SHARE_POOL_PROTECTED' }, 403);
+      }
+      if (result.status === 'validation') {
+        return c.json({ error: result.error, code: 'VALIDATION_ERROR' }, 400);
+      }
+
+      return c.json({ pools: result.pools });
+    }
+  );
 
 export default router;

@@ -19,7 +19,11 @@ import {
   simulateBatchPlacement,
   FileExceedsCeilingError,
   InsufficientStorageError,
+  calculateUsableLimit,
+  calculateHeadroom,
+  invalidatePooledStorageOverview,
 } from '../storage/index.js';
+import { refreshAccountLiveQuota } from '../drive/client.js';
 import {
   INVALID_POOL_ID_ERROR,
   parseStrictPoolId,
@@ -140,6 +144,79 @@ const router = new Hono()
       return c.json(result);
     } catch (err) {
       return mapDomainErrorToResponse(c, err);
+    }
+  })
+  .post('/api/accounts/:id/quota/refresh', async (c) => {
+    const accountId = c.req.param('id');
+    const existing = sqlite
+      .prepare(
+        `SELECT id, email, pool_id as poolId, quota_limit_bytes as quotaLimitBytes, quota_used_bytes as quotaUsedBytes, sync_state as syncState
+         FROM accounts WHERE id = ? LIMIT 1`
+      )
+      .get(accountId) as
+      | {
+          id: string;
+          email: string;
+          poolId: number;
+          quotaLimitBytes: number;
+          quotaUsedBytes: number;
+          syncState: string;
+        }
+      | undefined;
+
+    if (!existing) {
+      return c.json({ error: `Account '${accountId}' not found`, code: 'NOT_FOUND' }, 404);
+    }
+
+    if (!authPool.getRecord(accountId)?.authorized) {
+      return c.json(
+        { error: `Account '${accountId}' is not authorized`, code: 'AUTH_ERROR' },
+        401
+      );
+    }
+
+    try {
+      const updatedUsage = await refreshAccountLiveQuota(accountId);
+      if (updatedUsage === null) {
+        return c.json(
+          { error: `Failed to refresh live quota for account '${accountId}'`, code: 'UPSTREAM_ERROR' },
+          502
+        );
+      }
+      invalidatePooledStorageOverview(existing.poolId);
+
+      const refreshed = sqlite
+        .prepare(
+          `SELECT id, email, pool_id as poolId, quota_limit_bytes as quotaLimitBytes, quota_used_bytes as quotaUsedBytes, sync_state as syncState
+           FROM accounts WHERE id = ? LIMIT 1`
+        )
+        .get(accountId) as {
+        id: string;
+        email: string;
+        poolId: number;
+        quotaLimitBytes: number;
+        quotaUsedBytes: number;
+        syncState: string;
+      };
+
+      const usableLimitBytes = calculateUsableLimit(refreshed.quotaLimitBytes);
+      const headroomBytes = calculateHeadroom(refreshed.quotaLimitBytes, refreshed.quotaUsedBytes);
+
+      return c.json({
+        accountId: refreshed.id,
+        email: refreshed.email,
+        poolId: refreshed.poolId,
+        quotaLimitBytes: refreshed.quotaLimitBytes,
+        quotaUsedBytes: refreshed.quotaUsedBytes,
+        usableLimitBytes,
+        headroomBytes,
+        syncState: refreshed.syncState,
+      });
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err), code: 'UPSTREAM_ERROR' },
+        502
+      );
     }
   })
   .post(
