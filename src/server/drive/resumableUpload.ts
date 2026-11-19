@@ -241,10 +241,14 @@ async function acquireChunkMemoryBudget(chunkBytes: number, signal?: AbortSignal
 
 function serializeJobChunk<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
   const prev = jobChunkChains.get(jobId) ?? Promise.resolve();
-  const next = prev.catch(() => {}).then(fn);
-  jobChunkChains.set(jobId, next);
-  void next.finally(() => {
-    if (jobChunkChains.get(jobId) === next) {
+  const next = prev.catch(() => undefined).then(fn);
+  const tail = next.then(
+    () => undefined,
+    () => undefined
+  );
+  jobChunkChains.set(jobId, tail);
+  tail.finally(() => {
+    if (jobChunkChains.get(jobId) === tail) {
       jobChunkChains.delete(jobId);
     }
   });

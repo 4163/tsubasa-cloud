@@ -874,6 +874,10 @@ async function streamExternalFileToTarget(params: {
     if (streamedBytes > 0) {
       recordTransferSync(params.targetAccountId, 'upload', streamedBytes, Date.now(), params.poolId);
     }
+    const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+    if (cause instanceof Error) {
+      throw cause;
+    }
     throw err;
   }
 
@@ -958,6 +962,22 @@ function readImportJobResult(jobId: string, queued = false): ImportDriveJobResul
     lastError: row.lastError,
     queued,
   };
+}
+
+function unwrapErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return String(err);
+  }
+  const cause = (err as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message) {
+    if (!err.message || err.message === 'fetch failed') {
+      return unwrapErrorMessage(cause);
+    }
+    if (!err.message.includes(cause.message)) {
+      return `${err.message}: ${unwrapErrorMessage(cause)}`;
+    }
+  }
+  return err.message;
 }
 
 function isDailyTransferCapError(err: unknown): boolean {
@@ -1340,7 +1360,7 @@ async function executeImportDriveJobInternal(
 
         touchedAccounts.add(targetAccountId);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = unwrapErrorMessage(err);
         fatalError = fatalError ?? msg;
         sqlite.transaction(() => {
           sqlite

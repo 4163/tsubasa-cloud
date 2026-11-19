@@ -81,6 +81,27 @@ export function parseSourceCredentialFile(credPath: string): SourceOAuthClientCo
     );
   }
 
+  if (parsed.type === 'service_account') {
+    throw new Error(
+      `Source credential file ${resolvedPath} is a Google service account key ("type": "service_account"), which is not supported. Pass an OAuth desktop or web application client credentials JSON containing an "installed" or "web" block.`
+    );
+  }
+
+  const hasClientBlock =
+    (typeof parsed.installed === 'object' && parsed.installed !== null) ||
+    (typeof parsed.web === 'object' && parsed.web !== null);
+
+  if (
+    parsed.type === 'authorized_user' ||
+    (!hasClientBlock &&
+      typeof parsed.refresh_token === 'string' &&
+      (!Array.isArray(parsed.redirect_uris) || parsed.redirect_uris.length === 0))
+  ) {
+    throw new Error(
+      `Source credential file ${resolvedPath} appears to be a saved OAuth user token file ("authorized_user" / refresh_token) rather than OAuth client credentials. Pass an OAuth client JSON (such as credentials.json or client_secret_*.json) with an "installed" or "web" block.`
+    );
+  }
+
   const section =
     (parsed.installed as Record<string, unknown> | undefined) ??
     (parsed.web as Record<string, unknown> | undefined) ??

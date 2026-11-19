@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const ACCOUNT_REF_RE = /^acc_[0-9a-f]{8}$/;
 const SCRUB_TEXT_KEYS = new Set([
   'message',
   'error',
@@ -11,6 +12,15 @@ const SCRUB_TEXT_KEYS = new Set([
   'command',
 ]);
 const EMAIL_STRING_ARRAY_KEYS = new Set(['hydrated', 'synced']);
+
+function isValidAccountRef(value: unknown): value is string {
+  return typeof value === 'string' && ACCOUNT_REF_RE.test(value);
+}
+
+function canDeriveAccountRef(raw: string): boolean {
+  // Never hash an already-masked email string into a bogus accountRef.
+  return raw.length > 0 && !raw.includes('*');
+}
 
 export function toAccountRef(accountId: string): string {
   const normalized = accountId.trim().toLowerCase();
@@ -87,6 +97,14 @@ export function redactPayload<T>(value: T, options?: { showEmails?: boolean }): 
 
   const rawAccountId =
     typeof value.accountId === 'string' && value.accountId.length > 0 ? value.accountId : undefined;
+  const rawAccountEmail =
+    typeof value.accountEmail === 'string' && value.accountEmail.length > 0
+      ? value.accountEmail
+      : undefined;
+  const rawAccountDisplayName =
+    typeof value.accountDisplayName === 'string' && value.accountDisplayName.length > 0
+      ? value.accountDisplayName
+      : undefined;
   const rawSourceAccountId =
     typeof value.sourceAccountId === 'string' && value.sourceAccountId.length > 0
       ? value.sourceAccountId
@@ -104,7 +122,7 @@ export function redactPayload<T>(value: T, options?: { showEmails?: boolean }): 
   const rawId = typeof value.id === 'string' && value.id.length > 0 ? value.id : undefined;
 
   if (rawAccountId !== undefined) {
-    if (typeof out.accountRef !== 'string' || out.accountRef.length === 0) {
+    if (!isValidAccountRef(out.accountRef) && canDeriveAccountRef(rawAccountId)) {
       out.accountRef = toAccountRef(rawAccountId);
     }
     if (!showEmails) {
@@ -112,8 +130,23 @@ export function redactPayload<T>(value: T, options?: { showEmails?: boolean }): 
     }
   }
 
+  if (rawAccountEmail !== undefined) {
+    if (!isValidAccountRef(out.accountRef) && canDeriveAccountRef(rawAccountEmail)) {
+      out.accountRef = toAccountRef(rawAccountEmail);
+    }
+    if (!showEmails) {
+      out.accountEmail = maskEmail(rawAccountEmail);
+    }
+  }
+
+  if (rawAccountDisplayName !== undefined && !showEmails && rawAccountDisplayName.includes('@')) {
+    out.accountDisplayName = rawAccountDisplayName.includes(' ')
+      ? scrubEmailsInString(rawAccountDisplayName)
+      : maskEmail(rawAccountDisplayName);
+  }
+
   if (rawSourceAccountId !== undefined) {
-    if (typeof out.sourceAccountRef !== 'string' || out.sourceAccountRef.length === 0) {
+    if (!isValidAccountRef(out.sourceAccountRef) && canDeriveAccountRef(rawSourceAccountId)) {
       out.sourceAccountRef = toAccountRef(rawSourceAccountId);
     }
     if (!showEmails) {
@@ -122,7 +155,7 @@ export function redactPayload<T>(value: T, options?: { showEmails?: boolean }): 
   }
 
   if (rawTargetAccountId !== undefined) {
-    if (typeof out.targetAccountRef !== 'string' || out.targetAccountRef.length === 0) {
+    if (!isValidAccountRef(out.targetAccountRef) && canDeriveAccountRef(rawTargetAccountId)) {
       out.targetAccountRef = toAccountRef(rawTargetAccountId);
     }
     if (!showEmails) {
@@ -135,7 +168,7 @@ export function redactPayload<T>(value: T, options?: { showEmails?: boolean }): 
       out.email = maskEmail(rawEmail);
     }
     if (rawId !== undefined && rawId.includes('@')) {
-      if (typeof out.accountRef !== 'string' || out.accountRef.length === 0) {
+      if (!isValidAccountRef(out.accountRef) && canDeriveAccountRef(rawId)) {
         out.accountRef = toAccountRef(rawId);
       }
       if (!showEmails) {
