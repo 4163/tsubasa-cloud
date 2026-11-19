@@ -13,6 +13,7 @@ import rebalanceRouter from './routes/rebalance.js';
 import shareRouter from './routes/share.js';
 import storageRouter from './routes/storage.js';
 import syncRouter from './routes/sync.js';
+import transfersRouter from './routes/transfers.js';
 import trashRouter from './routes/trash.js';
 
 export interface CreateAppOptions {
@@ -52,7 +53,8 @@ export function createApp(options: CreateAppOptions = {}) {
     .route('/', trashRouter)
     .route('/', discrepanciesRouter)
     .route('/', rebalanceRouter)
-    .route('/', shareRouter);
+    .route('/', shareRouter)
+    .route('/', transfersRouter);
 }
 
 const routes = createApp();

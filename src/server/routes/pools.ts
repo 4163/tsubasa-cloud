@@ -2,8 +2,19 @@ import { Hono } from 'hono';
 import { validator } from 'hono/validator';
 import { sqlite } from '../db/index.js';
 import { getPoolDriveFolderName } from '../drive/index.js';
+import {
+  executeAutoRebalance,
+  planAccountRebalance,
+  type RebalanceOperationResult,
+} from '../drive/rebalance.js';
+import { invalidatePooledStorageOverview } from '../storage/quota.js';
 import { deriveUniquePoolSlug, validatePoolSlug } from '../storage/poolSlug.js';
-import { INVALID_POOL_ID_ERROR, parseStrictPoolId } from './shared.js';
+import {
+  INVALID_POOL_ID_ERROR,
+  mapDomainErrorToResponse,
+  parseStrictPoolId,
+  sharePoolReadOnlyError,
+} from './shared.js';
 
 const router = new Hono()
   .get('/api/pools', async (c) => {
@@ -445,6 +456,116 @@ const router = new Hono()
 
       return c.json({ pools: result.pools });
     }
-  );
+  )
+  .post('/api/pools/:id/rebalance', async (c) => {
+    const poolId = parseStrictPoolId(c.req.param('id'));
+    if (poolId === null) {
+      return c.json({ error: INVALID_POOL_ID_ERROR, code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const pool = sqlite
+      .prepare('SELECT id, is_share_pool as isSharePool FROM pools WHERE id = ? LIMIT 1')
+      .get(poolId) as { id: number; isSharePool: number } | undefined;
+    if (!pool) {
+      return c.json({ error: `Pool ${poolId} not found`, code: 'POOL_NOT_FOUND' }, 404);
+    }
+    if (Boolean(pool.isSharePool)) {
+      return c.json(sharePoolReadOnlyError('Rebalancing is disabled on Share Pool'), 403);
+    }
+
+    let accountId: string | undefined;
+    let dryRun = false;
+    try {
+      const raw = await c.req.text();
+      if (raw.trim()) {
+        const body = JSON.parse(raw) as Record<string, unknown>;
+        if (body.accountId !== undefined) {
+          if (typeof body.accountId !== 'string' || !body.accountId.trim()) {
+            return c.json({ error: 'accountId must be a non-empty string', code: 'VALIDATION_ERROR' }, 400);
+          }
+          accountId = body.accountId.trim();
+        }
+        if (body.dryRun !== undefined) {
+          if (typeof body.dryRun !== 'boolean') {
+            return c.json({ error: 'dryRun must be a boolean', code: 'VALIDATION_ERROR' }, 400);
+          }
+          dryRun = body.dryRun;
+        }
+      }
+    } catch {
+      return c.json({ error: 'Invalid JSON payload', code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    const poolAccounts = (
+      accountId
+        ? sqlite
+            .prepare('SELECT id FROM accounts WHERE pool_id = ? AND id = ? LIMIT 1')
+            .all(poolId, accountId)
+        : sqlite
+            .prepare('SELECT id FROM accounts WHERE pool_id = ? ORDER BY id ASC')
+            .all(poolId)
+    ) as Array<{ id: string }>;
+
+    if (accountId && poolAccounts.length === 0) {
+      return c.json(
+        { error: `Account '${accountId}' not found in pool ${poolId}`, code: 'ACCOUNT_NOT_FOUND' },
+        404
+      );
+    }
+
+    try {
+      const overCeilingAccounts: Array<{
+        accountId: string;
+        excessBytes: number;
+        candidateFilesCount: number;
+        candidateBytesTotal: number;
+      }> = [];
+
+      for (const acc of poolAccounts) {
+        const plan = await planAccountRebalance(acc.id);
+        if (plan) {
+          overCeilingAccounts.push({
+            accountId: plan.sourceAccountId,
+            excessBytes: plan.excessBytes,
+            candidateFilesCount: plan.candidateFiles.length,
+            candidateBytesTotal: plan.candidateFiles.reduce((sum, f) => sum + f.sizeBytes, 0),
+          });
+        }
+      }
+
+      if (dryRun || overCeilingAccounts.length === 0) {
+        return c.json({
+          poolId,
+          dryRun,
+          overCeilingAccounts,
+          filesMoved: 0,
+          bytesMoved: 0,
+          transfers: [] as RebalanceOperationResult[],
+        });
+      }
+
+      const transfers: RebalanceOperationResult[] = [];
+      for (const entry of overCeilingAccounts) {
+        const results = await executeAutoRebalance(entry.accountId);
+        transfers.push(...results);
+      }
+
+      const bytesMoved = transfers.reduce((sum, t) => sum + t.bytesMoved, 0);
+      if (transfers.length > 0) {
+        invalidatePooledStorageOverview(poolId);
+      }
+
+      return c.json({
+        poolId,
+        dryRun: false,
+        overCeilingAccounts,
+        filesMoved: transfers.length,
+        bytesMoved,
+        transfers,
+      });
+    } catch (err) {
+      return mapDomainErrorToResponse(c, err);
+    }
+  });
 
 export default router;

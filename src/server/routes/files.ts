@@ -12,6 +12,11 @@ import {
   formatFolderId,
   isSharePoolId,
 } from '../drive/index.js';
+import {
+  executeVerifiedSmallUpload,
+  SMALL_UPLOAD_FAST_PATH_BYTES,
+  UploadIntegrityError,
+} from '../drive/resumableUpload.js';
 import { normalizeVirtualPath } from '../virtualPath.js';
 import { MAX_SINGLE_FILE_BYTES } from '../storage/index.js';
 import {
@@ -216,21 +221,24 @@ const router = new Hono()
     }
 
     try {
-      const record = await executeStreamingUpload(
-        {
-          virtualPath,
-          sizeBytes,
-          mimeType,
-          hash: hash || undefined,
-          targetAccountId: targetAccountId || undefined,
-          poolId,
-          conflictMode,
-        },
-        c.req.raw.body ?? null,
-        c.req.raw.signal
-      );
+      const uploadOpts = {
+        virtualPath,
+        sizeBytes,
+        mimeType,
+        hash: hash || undefined,
+        targetAccountId: targetAccountId || undefined,
+        poolId,
+        conflictMode,
+      };
+      const record =
+        sizeBytes <= SMALL_UPLOAD_FAST_PATH_BYTES
+          ? await executeVerifiedSmallUpload(uploadOpts, c.req.raw.body ?? null, c.req.raw.signal)
+          : await executeStreamingUpload(uploadOpts, c.req.raw.body ?? null, c.req.raw.signal);
       return c.json(record);
     } catch (err) {
+      if (err instanceof UploadIntegrityError) {
+        return c.json({ error: err.message, code: err.code }, 502);
+      }
       return mapDomainErrorToResponse(c, err);
     }
   })
@@ -241,6 +249,49 @@ const router = new Hono()
       return c.json({ error: INVALID_POOL_ID_ERROR }, 400);
     }
     try {
+      // Handle 0-byte active files directly with HTTP 200 and an empty body so Drive never returns HTTP 416.
+      const zeroByteCandidate = (
+        parsedPool.poolId !== undefined
+          ? sqlite
+              .prepare(
+                `SELECT id, name, size_bytes as sizeBytes, mime_type as mimeType, hash
+                 FROM files
+                 WHERE (id = ? OR virtual_path = ? OR drive_file_id = ?)
+                   AND is_trashed = 0 AND pool_id = ?
+                 LIMIT 1`
+              )
+              .get(fileId, fileId, fileId, parsedPool.poolId)
+          : sqlite
+              .prepare(
+                `SELECT id, name, size_bytes as sizeBytes, mime_type as mimeType, hash
+                 FROM files
+                 WHERE (id = ? OR virtual_path = ? OR drive_file_id = ?)
+                   AND is_trashed = 0
+                 LIMIT 1`
+              )
+              .get(fileId, fileId, fileId)
+      ) as
+        | { id: string; name: string; sizeBytes: number; mimeType: string; hash: string | null }
+        | undefined;
+
+      if (zeroByteCandidate && zeroByteCandidate.sizeBytes === 0) {
+        const headers: Record<string, string> = {
+          'Content-Type': zeroByteCandidate.mimeType || 'application/octet-stream',
+          'Accept-Ranges': 'bytes',
+          'Content-Length': '0',
+          'Content-Disposition': buildContentDisposition(zeroByteCandidate.name),
+          'Cache-Control': 'no-cache, no-transform',
+          'X-Tsubasa-File-Id': zeroByteCandidate.id,
+          'X-Tsubasa-Size': '0',
+          'Access-Control-Expose-Headers':
+            'X-Tsubasa-Hash, X-Tsubasa-File-Id, X-Tsubasa-Size, Content-Range, Content-Length, Content-Disposition',
+        };
+        if (zeroByteCandidate.hash) {
+          headers['X-Tsubasa-Hash'] = zeroByteCandidate.hash;
+        }
+        return new Response(null, { status: 200, headers });
+      }
+
       const { stream, file, status, contentLength, contentRange } = await getStreamingDownload(
         fileId,
         parsedPool.poolId,
@@ -255,7 +306,14 @@ const router = new Hono()
         'Content-Length': String(contentLength),
         'Content-Disposition': buildContentDisposition(file.name),
         'Cache-Control': 'no-cache, no-transform',
+        'X-Tsubasa-File-Id': file.id,
+        'X-Tsubasa-Size': String(file.sizeBytes),
+        'Access-Control-Expose-Headers':
+          'X-Tsubasa-Hash, X-Tsubasa-File-Id, X-Tsubasa-Size, Content-Range, Content-Length, Content-Disposition',
       };
+      if (file.hash) {
+        headers['X-Tsubasa-Hash'] = file.hash;
+      }
       if (contentRange) {
         headers['Content-Range'] = contentRange;
       }
