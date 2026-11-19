@@ -642,6 +642,7 @@ export function ActionPortal({
           onClick={onEmptyTrash}
           disabled={trashedCount === 0}
           aria-label="Empty trash"
+          title={compact ? 'Empty trash' : undefined}
         >
           <IconTrash {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -689,6 +690,7 @@ export function ActionPortal({
                 {...stylex.props(actionButtonStyles.primaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Upload file"
+                title={compact ? 'Upload file' : undefined}
               >
                 <IconUpload strokeWidth={2.5} {...stylex.props(actionButtonStyles.btnIcon)} />
                 <span
@@ -705,6 +707,7 @@ export function ActionPortal({
                 {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
                 onClick={() => folderInputRef.current?.click()}
                 aria-label="Upload folder"
+                title={compact ? 'Upload folder' : undefined}
               >
                 <IconFolderPlus {...stylex.props(actionButtonStyles.btnIcon)} />
                 <span
@@ -721,6 +724,7 @@ export function ActionPortal({
                 {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
                 onClick={onCreateFolderPrompt}
                 aria-label="New folder"
+                title={compact ? 'New folder' : undefined}
               >
                 <IconFolder {...stylex.props(actionButtonStyles.btnIcon)} />
                 <span

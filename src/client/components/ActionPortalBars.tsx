@@ -387,7 +387,7 @@ function ShareCopyButton({
           /* copy failed; leave button un-marked */
         }
       }}
-      title={isTruncatedBatch || isIconOnly ? title : undefined}
+      title={isTruncatedBatch ? title : compact ? (isCopied ? copiedLabel : defaultLabel) : undefined}
       aria-label={title}
     >
       {isCopied ? (
@@ -532,7 +532,10 @@ export function SelectionBatchBar({
           )}
         </>
       ) : (
-        <span {...stylex.props(styles.selectionBadge)}>
+        <span
+          {...stylex.props(styles.selectionBadge)}
+          title={compact ? `${selectedCount} selected` : undefined}
+        >
           <span>
             <span
               data-compact-label="true"
@@ -559,6 +562,7 @@ export function SelectionBatchBar({
           {...stylex.props(actionButtonStyles.primaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
           onClick={onRestoreSelected}
           aria-label="Restore selected items"
+          title={compact ? 'Restore' : undefined}
         >
           <IconRotateCcw {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -577,7 +581,7 @@ export function SelectionBatchBar({
           {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
           onClick={onRenamePrompt}
           aria-label="Rename item"
-          title="Rename item (F2)"
+          title={compact ? 'Rename' : undefined}
         >
           <IconEdit {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -596,7 +600,7 @@ export function SelectionBatchBar({
           {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
           onClick={onCutSelected}
           aria-label="Cut selected items"
-          title="Cut selected items (Ctrl+X)"
+          title={compact ? 'Cut' : undefined}
         >
           <IconScissors {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -615,7 +619,7 @@ export function SelectionBatchBar({
           {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
           onClick={onCopySelected}
           aria-label="Copy selected items"
-          title="Copy selected items (Ctrl+C)"
+          title={compact ? 'Copy' : undefined}
         >
           <IconCopy {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -634,6 +638,7 @@ export function SelectionBatchBar({
           {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
           onClick={onShareSelected}
           aria-label="Share selected items"
+          title={compact ? 'Share' : undefined}
         >
           <IconShare {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -697,7 +702,7 @@ export function SelectionBatchBar({
           )}
           onClick={onDeleteSelected}
           aria-label={isTrashView ? 'Purge selected items' : 'Delete selected items'}
-          title="Delete selected (Delete)"
+          title={compact ? (isTrashView ? 'Purge' : 'Delete') : undefined}
         >
           <IconTrash {...stylex.props(actionButtonStyles.btnIcon)} />
           <span
@@ -754,7 +759,7 @@ export function ClipboardPasteBar({
         {...stylex.props(actionButtonStyles.secondaryBtn, actionButtonStyles.focusRing, compact && actionButtonStyles.iconOnlyBtn)}
         onClick={onPaste}
         aria-label={`Paste ${clipboard.items.length} item(s)`}
-        title={`Paste ${clipboard.items.length} item(s) (${clipboard.mode === 'cut' ? 'move' : 'copy'}) into ${cleanPath}`}
+        title={compact ? `Paste (${clipboard.items.length})` : undefined}
       >
         <IconClipboard {...stylex.props(actionButtonStyles.btnIcon)} />
         <span

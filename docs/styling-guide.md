@@ -220,6 +220,30 @@ Buttons use Dropbox-style pill geometry with high contrast.
 - **No toast notifications:** Floating toast stacks and snackbars are forbidden. Transient popups detach status from the control that triggered it and introduce timer and z-index management overhead. All feedback happens in place on the surface itself: buttons swap to inline confirmation states (`Copied`, `Fetching...`, disabled/busy spinners), rows reflect optimistic mutations and cut/transfer states directly, upload and sync drawers render live progress and per-item badges, and modals reserve inline status banners for errors.
 - **No undo stack or `Ctrl+Z` history:** Application-level undo queues and `Ctrl+Z` reversal shortcuts are forbidden. Tracking inverse operation state across local SQLite and asynchronous Google Drive writes adds brittle synchronization complexity for actions that are already reversible through standard controls. Trashed items are recovered through the Trash view's "Restore" action, and renames or moves are reversed directly by renaming or moving the item back.
 
+### Native tooltip (`title`) contract
+Native HTML `title` tooltips appear only on desktop pointer hover and never trigger on touchscreens or keyboard focus. Use `title` strictly to recover hidden or clipped text and clarify elements that are not self-explanatory at a glance. Never use `title` to narrate labeled controls or deliver destructive warnings.
+
+**Add `title` only for:**
+- **Hidden or icon-only labels.** Controls with no visible text, including icon-only table row buttons, sidebar icon buttons, and Action Portal controls whose labels drop in compact overflow mode. Set `title` only while the label is hidden.
+- **Overflowing text.** Single-line truncated strings (filenames, paths, breadcrumbs, account names, share batch names, error badges) only when the text actually overflows (`scrollWidth > clientWidth`).
+- **Non-obvious affordances and domain states.** Interactive elements that do not look clickable (such as the account selection pill that opens the Move Files modal), hidden context needed before acting (such as a trashed item's original path), and compact status pills whose meaning is specific to Tsubasa (`Full` at the 750 MB buffer, `Disabled` when excluded from the pool).
+- **Non-obvious disabled buttons.** Disabled buttons whose blocker is not visible next to the control (for example, `Start upload` blocked by a staged file that exceeds 14.25 GB or has no valid target account).
+
+**Never add `title` for:**
+- **Visible, untruncated controls.** Labeled buttons (`Upload file`, `Clear`, `Fetch Drive changes`, `Clear share pool`, `Remove`, `Changes`, `Rename`) and standard table sort headers (`Name`, `Size`, `Modified`).
+- **Keyboard shortcuts.** Do not append `(F2)`, `(Ctrl+C)`, `(Esc)`, or `(Delete)` to `title`.
+- **Narration or destructive warnings.** Do not explain what a labeled button does or warn about data loss inside a tooltip. Confirmation modals and inline UI own those messages.
+- **Self-evident disabled states or empty cells.** Omit `title` on `Empty trash` when trash is empty, on busy controls like `Fetching...`, or on `0 B` folder cells.
+- **Redacted emails on workspace surfaces.** Masked emails already unmask directly. Neighboring elements (such as account display names) must not expose the unredacted email in `title`.
+- **Disabled `<option>` elements.** Native `<select>` popups rarely render `<option title>`. Put the short blocker in the option label text instead.
+
+**Writing `title` text:**
+| Case | Rule | Example |
+| :--- | :--- | :--- |
+| **Hidden or dropped label** | Exact label that was hidden. Sentence case, no period, no extra words. | `Upload file`, `Paste (2)`, `Download` |
+| **Overflowing text** | Exact raw string with no prefix or wrapper copy. | `/Projects/2026/archive.tar.gz` |
+| **Non-obvious affordance, domain pill, or disabled blocker** | One short fragment. No `"Click to..."` filler, no trailing period. | `Move selected files to another account`, `750 MB buffer reached`, `No account with enough headroom` |
+
 ---
 
 ## 7. Touch interaction and tap physics (@media (pointer: coarse))
