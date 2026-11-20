@@ -20,7 +20,7 @@ import {
   IconUpload,
 } from './Icons.js';
 import { DitherDivider } from './DitherDivider.js';
-import brandLogo from '../assets/brand-mono.png';
+import brandLogo from '../assets/brand-mono_8c.png';
 
 const PLACEHOLDER_ROWS = [
   { nameWidth: '42%', isFolder: true, sizeWidth: '44px', dateWidth: '88px' },

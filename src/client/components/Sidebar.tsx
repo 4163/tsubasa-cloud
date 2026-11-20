@@ -11,7 +11,7 @@ import { sortPools } from '../utils/format.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
 import { rejectInvalidInternalDragOver, parseInternalDropItems, markDropHandled } from '../utils/virtualPath.js';
 import { formatGbCompact } from '../utils/accountTransfer.js';
-import brandLogo from '../assets/brand-mono.png';
+import brandLogo from '../assets/brand-mono_8c.png';
 import type {
   ClusterTransferOverview,
   PoolSummary,
