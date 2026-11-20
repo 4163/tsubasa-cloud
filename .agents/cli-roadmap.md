@@ -194,7 +194,7 @@ Future agents must respect the agreed decisions below and must not re-introduce 
 
 ### D8. Decoupled extensions boundary
 
-- **Discovery and layout.** Load optional extensions from repo-root `extensions/<name>/manifest.json` declaring `name`, `description`, `entry`, `runtime` as `node`, `python`, or `exec`, and optional `minSchemaVersion`. Add `extensions/*` to `.gitignore` while keeping `!extensions/README.md` tracked. Keep `extensions/` generic so any external tool integrates solely through the CLI and `tsubasa export`.
+- **Discovery and layout.** Load optional extensions from repo-root `extensions/<name>/manifest.json` declaring `name`, `description`, `entry`, `runtime` as `node`, `python`, or `exec`, and optional `minSchemaVersion`. Keep `extensions/` generic so any external tool integrates solely through the CLI and `tsubasa export`.
 - **Command dispatch.** Expose `tsubasa ext list` and `tsubasa ext <name> [args...]`. Global Tsubasa flags appearing before `ext` configure Tsubasa; all tokens after `ext <name>` pass verbatim to the child process.
 - **Security and process lifecycle.** Enforce strict `name` validation against `^[a-z0-9][a-z0-9-]*$` and reject any `entry` path that escapes `extensions/<name>/`. Spawn child processes with `shell: false`, inherit stdio, forward `SIGINT` and `SIGTERM`, and propagate the child's exact exit code.
 - **Child environment contract.** Pass `TSUBASA_CLI_BIN`, `TSUBASA_SCHEMA_VERSION`, `TSUBASA_TRANSPORT` set to `http` or `local`, `TSUBASA_HOME`, optional `TSUBASA_POOL`, and `TSUBASA_API_URL` only when an HTTP server is active and unset in local mode. Extensions must never open or write directly to `data/tsubasa.db`.
@@ -214,13 +214,13 @@ Future agents must respect the agreed decisions below and must not re-introduce 
 
 **Dependencies.** None. This phase establishes shared paths, database schema, process locking, packaging, and pure leaf utilities.
 
-- [ ] `[Neon High]` Create `src/server/paths.ts` for `--home` -> `TSUBASA_HOME` -> `import.meta.url` resolution and wire it into `src/server/db/index.ts` and `src/server/drive/auth.ts`.
-- [ ] `[Neon High]` Bump `CURRENT_SCHEMA_VERSION` to `6` in `src/server/db/init.ts` and update `src/server/db/schema.ts` with `pools.slug`, `pools.sort_order`, `pools_slug_idx`, `pools_sort_order_idx`, `files_pool_trashed_hash_idx`, `transfer_jobs`, `transfer_job_items`, and `transfer_job_shares`.
-- [ ] `[Neon High]` Refactor `src/server/app.ts` to expose `createApp({ enableHttpLogger, enableCompress })` and add `dbFingerprint` to `GET /api/health` in `src/server/routes/instance.ts`.
-- [ ] `[Neon High]` Implement shared `data/tsubasa.writer.lock` atomic `O_EXCL` acquisition and stale-PID verification in `src/server/lock.ts` and wire it into `src/server/index.ts`.
-- [ ] `[Neon Medium]` Update pool insert sites and `ORDER BY` queries across `src/server/db/init.ts`, `src/server/drive/poolRegistry.ts`, `src/server/routes/pools.ts`, and `src/server/storage/quota.ts`.
-- [ ] `[Neon Low]` Scout types and contracts to assemble Context Packets for Argon Medium, add `"bin"` and `"tsubasa"` script to `package.json`, add `tsconfig.cli.json`, and verify `.gitignore` coverage for `data/source-tokens/` and `data/tsubasa.writer.lock` under `data/`.
-- [ ] `[Argon Medium]` Implement pure leaf modules 1 through 5 and 7 under `src/cli/lib/` from Context Packets: `redact.ts`, `selectors.ts`, `format.ts`, `errors.ts`, `chunks.ts`, and `helpSchema.ts`.
+- [x] `[Neon High]` Create `src/server/paths.ts` for `--home` -> `TSUBASA_HOME` -> `import.meta.url` resolution and wire it into `src/server/db/index.ts` and `src/server/drive/auth.ts`.
+- [x] `[Neon High]` Bump `CURRENT_SCHEMA_VERSION` to `6` in `src/server/db/init.ts` and update `src/server/db/schema.ts` with `pools.slug`, `pools.sort_order`, `pools_slug_idx`, `pools_sort_order_idx`, `files_pool_trashed_hash_idx`, `transfer_jobs`, `transfer_job_items`, and `transfer_job_shares`.
+- [x] `[Neon High]` Refactor `src/server/app.ts` to expose `createApp({ enableHttpLogger, enableCompress })` and add `dbFingerprint` to `GET /api/health` in `src/server/routes/instance.ts`.
+- [x] `[Neon High]` Implement shared `data/tsubasa.writer.lock` atomic `O_EXCL` acquisition and stale-PID verification in `src/server/lock.ts` and wire it into `src/server/index.ts`.
+- [x] `[Neon Medium]` Update pool insert sites and `ORDER BY` queries across `src/server/db/init.ts`, `src/server/drive/poolRegistry.ts`, `src/server/routes/pools.ts`, and `src/server/storage/quota.ts`.
+- [x] `[Neon Low]` Scout types and contracts to assemble Context Packets for Argon Medium, add `"bin"` and `"tsubasa"` script to `package.json`, add `tsconfig.cli.json`, and verify `.gitignore` coverage for `data/source-tokens/` and `data/tsubasa.writer.lock` under `data/`.
+- [x] `[Argon Medium]` Implement pure leaf modules 1 through 5 and 7 under `src/cli/lib/` from Context Packets: `redact.ts`, `selectors.ts`, `format.ts`, `errors.ts`, `chunks.ts`, and `helpSchema.ts`, with shared redaction and pool slug logic consolidated under `src/server/storage/redact.ts` and `src/server/storage/poolSlug.ts`.
 
 **Phase 0 verification.**
 - Run `npm run typecheck` and `tsc -p tsconfig.cli.json` with zero errors.
@@ -231,13 +231,13 @@ Future agents must respect the agreed decisions below and must not re-introduce 
 
 **Dependencies.** Phase 0 complete.
 
-- [ ] `[Neon Medium]` Build `src/cli/index.ts` and `src/cli/transport.ts` with 250 ms HTTP-first `/api/health` probe, `dbFingerprint` validation, `--server`, `--local`, lazy `createApp({ enableHttpLogger: false, enableCompress: false })` import, writer lock acquisition with post-lock health re-probe, outbox drain with `--no-wait-outbox`, and clean shutdown.
-- [ ] `[Neon Medium]` Add missing backend endpoints: `POST /api/pools/reorder` in `src/server/routes/pools.ts`, `POST /api/accounts/:id/quota/refresh` in `src/server/routes/accounts.ts`, `GET /api/sync/outbox` and `DELETE /api/sync/outbox/:id` plus dead bulk drop in `src/server/routes/sync.ts`, and single-file metadata lookup in `src/server/routes/files.ts`.
-- [ ] `[Neon Medium]` Implement `auth add` ephemeral loopback OAuth flow with `--no-browser` support in `src/cli/commands/auth.ts`.
-- [ ] `[Hydrogen High]` Implement global flag parsing, non-TTY `--yes` enforcement, `--help --json`, and core file commands in `src/cli/commands/`: `status`, `ls`, `stat`, `find`, `mkdir`, `mv` for intra-pool moves and same-parent `POST /api/items/rename`, `cp`, `rm`, and newline `--stdin` support.
-- [ ] `[Hydrogen High]` Implement management and maintenance commands in `src/cli/commands/`: `pool` CRUD and `reorder`, `account` `list|show|quota|enable|disable|move-pool`, `trash`, `sync`, `outbox`, `share list|clear`, `auth check`, `audit` local and remote modes, `dupes`, and WAL-safe `db backup` via `sqlite.backup()`.
-- [ ] `[Neon High]` Review standalone write-lock TOCTOU handling, read-only `authPool.scan()` bypass, and outbox drain edge cases.
-- [ ] `[Neon Low]` Run `npm run typecheck`, `npm run build:server`, and CLI build checks.
+- [x] `[Neon Medium]` Build `src/cli/index.ts` and `src/cli/transport.ts` with 250 ms HTTP-first `/api/health` probe, `dbFingerprint` validation, `--server`, `--local`, lazy `createApp({ enableHttpLogger: false, enableCompress: false })` import, writer lock acquisition with post-lock health re-probe, outbox drain with `--no-wait-outbox`, and clean shutdown.
+- [x] `[Neon Medium]` Add missing backend endpoints: `POST /api/pools/reorder` in `src/server/routes/pools.ts`, `POST /api/accounts/:id/quota/refresh` in `src/server/routes/accounts.ts`, `GET /api/sync/outbox`, `DELETE /api/sync/outbox/:id`, `GET /api/sync/audit/local`, plus dead bulk drop in `src/server/routes/sync.ts`, and `GET /api/files/:id/meta`, `GET /api/items/stat`, `GET /api/items/find`, and `GET /api/files/dupes` in `src/server/routes/files.ts`.
+- [x] `[Neon Medium]` Implement `auth add` ephemeral loopback OAuth flow with `--no-browser` support in `src/cli/commands/auth.ts`.
+- [x] `[Hydrogen High]` Implement global flag parsing, non-TTY `--yes` enforcement, `--help --json`, and core file commands in `src/cli/commands/`: `status`, `ls`, `stat`, `find`, `mkdir`, `mv` for intra-pool moves and same-parent `POST /api/items/rename`, `cp`, `rm`, and newline `--stdin` support.
+- [x] `[Hydrogen High]` Implement management and maintenance commands in `src/cli/commands/`: `pool` CRUD and `reorder`, `account` `list|show|quota|enable|disable|move-pool`, `trash`, `sync`, `outbox`, `share list|clear`, `auth check`, `audit` local and remote modes, `dupes`, and WAL-safe `db backup` via `sqlite.backup()`.
+- [x] `[Neon High]` Review standalone write-lock TOCTOU handling, read-only `authPool.scan()` bypass, and outbox drain edge cases.
+- [x] `[Neon Low]` Run `npm run typecheck`, `npm run build:server`, and CLI build checks.
 
 **Phase 1 verification.**
 - Run `tsubasa status --json` and `tsubasa ls --json` in both HTTP mode against a running server and `--local` mode, verifying zero stdout pollution, redacted emails, and consistent `accountRef` values.
@@ -248,12 +248,12 @@ Future agents must respect the agreed decisions below and must not re-introduce 
 
 **Dependencies.** Phase 1 complete.
 
-- [ ] `[Neon Medium]` Implement pure `src/server/storage/export.ts` reusing `getPooledStorageOverview` and `getTransferStatsByAccountMap`, normalizing all timestamps to Unix epoch milliseconds, and streaming JSONL via `better-sqlite3` `.iterate()`.
-- [ ] `[Neon Medium]` Expose `GET /api/export` in `src/server/routes/storage.ts` and wire `src/cli/commands/export.ts` for presets `minimal|standard|full`, `--include`, filters, `json`, `jsonl`, and single-entity `csv` and `--fields`.
-- [ ] `[Neon Low]` Assemble the Context Packet for Argon Medium leaf module 6, create `extensions/README.md`, and add `extensions/*` with `!extensions/README.md` to `.gitignore`.
-- [ ] `[Argon Medium]` Implement `src/cli/lib/extensions.ts` covering `manifest.json` validation, `^[a-z0-9][a-z0-9-]*$` name checks, `entry` containment guard, OS-aware Python probe, and `spawn` execution with `shell: false` and signal forwarding.
-- [ ] `[Hydrogen High]` Wire `src/cli/commands/ext.ts` for `tsubasa ext list` and `tsubasa ext <name> [args...]` with exact child env vars and verbatim passthrough arguments.
-- [ ] `[Neon High]` Review JSONL streaming memory usage on large catalogs and verify extension path-traversal rejection and `TSUBASA_API_URL` omission in `--local` mode.
+- [x] `[Neon Medium]` Implement pure `src/server/storage/export.ts` reusing `getPooledStorageOverview` and `getTransferStatsByAccountMap`, normalizing all timestamps to Unix epoch milliseconds, and streaming JSONL via `better-sqlite3` `.iterate()`.
+- [x] `[Neon Medium]` Expose `GET /api/export` in `src/server/routes/storage.ts` and wire `src/cli/commands/export.ts` for presets `minimal|standard|full`, `--include`, filters, `json`, `jsonl`, and single-entity `csv` and `--fields`.
+- [x] `[Neon Low]` Assemble the Context Packet for Argon Medium leaf module 6 and create `extensions/README.md`.
+- [x] `[Argon Medium]` Implement `src/cli/lib/extensions.ts` covering `manifest.json` validation, `^[a-z0-9][a-z0-9-]*$` name checks, `entry` containment guard, OS-aware Python probe, and `spawn` execution with `shell: false` and signal forwarding.
+- [x] `[Hydrogen High]` Wire `src/cli/commands/ext.ts` for `tsubasa ext list` and `tsubasa ext <name> [args...]` with exact child env vars and verbatim passthrough arguments.
+- [x] `[Neon High]` Review JSONL streaming memory usage on large catalogs and verify extension path-traversal rejection and `TSUBASA_API_URL` omission in `--local` mode.
 
 **Phase 2 verification.**
 - Verify `tsubasa export --format jsonl` streams line 1 `{"_type":"meta",...}` with Unix millisecond timestamps and matching `accountRef` join keys across entities.
@@ -264,13 +264,13 @@ Future agents must respect the agreed decisions below and must not re-introduce 
 
 **Dependencies.** Phase 1 complete. Can run in parallel with Phase 2 once Phase 1 stabilizes.
 
-- [ ] `[Neon High]` Implement server-owned chunked resumable upload endpoints `POST /api/transfers/upload` and `PUT /api/transfers/:jobId/chunk` in `src/server/drive/resumableUpload.ts` and `src/server/routes/transfers.ts`, enforcing 8 MiB chunks, `chunkSize * concurrency <= 32 MiB`, `308 Range` offset resume, expired `404`/`410` restart, local re-hashing of bytes before `offset`, and full-file MD5 verification with remote delete on mismatch.
-- [ ] `[Neon High]` Add streaming MD5 verification to the `<= 5 MiB` `POST /api/files/upload` fast path and expose `X-Tsubasa-Hash`, `X-Tsubasa-File-Id`, and `X-Tsubasa-Size` on `GET /api/files/:id/download` in `src/server/routes/files.ts`.
-- [ ] `[Neon High]` Implement `src/server/drive/crossPoolMove.ts` and route for single-item and persisted-job multi-file cross-pool moves, rejecting Share Pool, verifying `md5Checksum` and `size`, updating both pool revisions and overview caches, and falling back to `drive_outbox` `file_delete` on source cleanup failure.
-- [ ] `[Neon High]` Implement persisted `POST /api/accounts/:id/evacuate` and unify `DELETE /api/accounts/:id` async evacuation onto `transfer_jobs`.
-- [ ] `[Neon Medium]` Wire shared upload dry-run planning for `upload --dry-run` and `plan upload`, plus `GET /api/jobs` combining persisted `transfer_jobs` and read-only live `oauth_cold_sync` entries.
-- [ ] `[Hydrogen High]` Implement CLI commands in `src/cli/commands/`: `upload` with `-r`, `--conflict`, and `-` stdin upload, client-side `.part` plus sidecar resumable `download` handling 0-byte files, HTTP 200 truncation, hash-length detection, and `-` stdout output, `job list|status [--follow]|resume|cancel`, cross-pool `mv --to-pool`, `account evacuate`, `account remove --evacuate --yes [--wait]`, `account move-pool --evacuate`, `pool rebalance`, and `plan upload`.
-- [ ] `[Neon Low]` Run `npm run typecheck` and build verification across server and CLI targets.
+- [x] `[Neon High]` Implement server-owned chunked resumable upload endpoints `POST /api/transfers/upload` and `PUT /api/transfers/:jobId/chunk` in `src/server/drive/resumableUpload.ts` and `src/server/routes/transfers.ts`, enforcing 8 MiB chunks, `chunkSize * concurrency <= 32 MiB`, `308 Range` offset resume, expired `404`/`410` restart, local re-hashing of bytes before `offset`, and full-file MD5 verification with remote delete on mismatch.
+- [x] `[Neon High]` Add streaming MD5 verification to the `<= 5 MiB` `POST /api/files/upload` fast path and expose `X-Tsubasa-Hash`, `X-Tsubasa-File-Id`, and `X-Tsubasa-Size` on `GET /api/files/:id/download` in `src/server/routes/files.ts`.
+- [x] `[Neon High]` Implement `src/server/drive/crossPoolMove.ts` and route for single-item and persisted-job multi-file cross-pool moves, rejecting Share Pool, verifying `md5Checksum` and `size`, updating both pool revisions and overview caches, and falling back to `drive_outbox` `file_delete` on source cleanup failure.
+- [x] `[Neon High]` Implement persisted `POST /api/accounts/:id/evacuate` in `src/server/drive/accountEvacuate.ts` with shared job utilities in `src/server/drive/jobHelpers.ts` and unify `DELETE /api/accounts/:id` async evacuation onto `transfer_jobs`.
+- [x] `[Neon Medium]` Wire shared upload dry-run planning in `src/server/storage/uploadPlan.ts` and `POST /api/transfers/upload/plan` for `upload --dry-run` and `plan upload`, plus `GET /api/jobs` combining persisted `transfer_jobs` and read-only live `oauth_cold_sync` entries.
+- [x] `[Hydrogen High]` Implement CLI commands in `src/cli/commands/`: `upload` with `-r`, `--conflict`, and `-` stdin upload, client-side `.part` plus sidecar resumable `download` handling 0-byte files, HTTP 200 truncation, hash-length detection, and `-` stdout output, `job list|status [--follow]|resume|cancel`, cross-pool `mv --to-pool`, `account evacuate`, `account remove --evacuate --yes [--wait]`, `account move-pool --evacuate`, `pool rebalance`, and `plan upload`.
+- [x] `[Neon Low]` Run `npm run typecheck` and build verification across server and CLI targets.
 
 **Phase 3 verification.**
 - Interrupt and resume an upload over 5 MiB, confirm `308 Range` recovery, verify MD5 match against Drive, and confirm local file mutation aborts resume.
@@ -281,13 +281,13 @@ Future agents must respect the agreed decisions below and must not re-introduce 
 
 **Dependencies.** Phase 3 complete.
 
-- [ ] `[Neon High]` Implement `src/server/drive/importDrive.ts` and import routes backed by `transfer_jobs`, `transfer_job_items`, and `transfer_job_shares`, supporting folder-level temporary reader shares, `supportsAllDrives: true` and `includeItemsFromAllDrives: true`, bounded backoff retries on copy 404 ACL propagation lag, My Drive `root` subfolder-share plus loose-file stream split, `--mode stream` fallback under 50 MB RAM, Workspace doc or shortcut or `> 14.25 GB` skipping, `md5Checksum` and `size` verification, and clean pause on the 750 GB 24-hour cap for multi-day `job resume`.
-- [ ] `[Neon Medium]` Implement `--source-auth <cred.json>` OAuth flow with `127.0.0.1:0` loopback, `--no-browser` fallback, gitignored `data/source-tokens/` caching, token clear action, and shared dry-run planner for `import drive --dry-run` and `plan import-drive`.
-- [ ] `[Hydrogen High]` Implement `src/cli/commands/import.ts` and `plan import-drive` alias with folder ID or URL parsing, stderr TTY progress bar or `--json` NDJSON events, stdout summary JSON, and `--detach`.
-- [ ] `[Neon High]` Run final durability review across temporary share revocation on completion, `job cancel`, and crash recovery, memory bounds under 50 MB, and end-to-end exit code fidelity.
-- [ ] `[Neon Low]` Run final `npm run typecheck`, `npm run build`, and documentation unslop pass.
+- [x] `[Neon High]` Implement `src/server/drive/importDrive.ts` and import routes backed by `transfer_jobs`, `transfer_job_items`, and `transfer_job_shares`, supporting folder-level temporary reader shares, `supportsAllDrives: true` and `includeItemsFromAllDrives: true`, bounded backoff retries on copy 404 ACL propagation lag, My Drive `root` subfolder-share plus loose-file stream split, `--mode stream` fallback under 50 MB RAM, Workspace doc or shortcut or `> 14.25 GB` skipping, `md5Checksum` and `size` verification, and clean pause on the 750 GB 24-hour cap for multi-day `job resume`.
+- [x] `[Neon Medium]` Implement `--source-auth <cred.json>` OAuth flow in `src/server/drive/sourceAuth.ts` with `127.0.0.1:0` loopback, `--no-browser` fallback, gitignored `data/source-tokens/` caching, `import tokens list|clear` actions, and shared dry-run planner for `import drive --dry-run` and `plan import-drive`.
+- [x] `[Hydrogen High]` Implement `src/cli/commands/import.ts` and `plan import-drive` alias with folder ID or URL parsing, stderr TTY progress bar or `--json` NDJSON events, stdout summary JSON, and `--detach`.
+- [x] `[Neon High]` Run final durability review across temporary share revocation on completion, `job cancel`, and crash recovery, memory bounds under 50 MB, and end-to-end exit code fidelity.
+- [x] `[Neon Low]` Run final `npm run typecheck`, `npm run build`, `src/cli/README.md`, and documentation unslop pass.
 
 **Phase 4 verification.**
 - Run `tsubasa plan import-drive` on a mixed Drive tree containing standard files, subfolders, Workspace native docs, and shortcuts, verifying accurate upfront skip reporting and placement preview.
-- Execute a real server-side copy import and a `--mode stream` import, verifying `md5Checksum` parity and confirming zero leftover temporary permissions on `job cancel` and normal completion.
+- Execute a real server-side copy import and a `--mode stream` import, verifying `md5Checksum` parity and confirming zero leftover temporary permissions on `job cancel` and normal completion, with live `--mode stream` run against real external Drive and `--mode copy`, `root` split, 404 backoff, 403 fallback, and 750 GB cap pause/resume run via isolated fault injection.
 - Simulate hitting the 750 GB 24-hour cap and verify clean job pause followed by `tsubasa job resume <id>` without re-copying verified files.
