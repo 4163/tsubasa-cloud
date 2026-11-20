@@ -4,9 +4,10 @@ import * as schema from './schema.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { computeDbFingerprint, resolveDbPath } from '../paths.js';
 
-const dbPath =
-  process.env.TSUBASA_DB_PATH || path.join(path.resolve(process.cwd(), 'data'), 'tsubasa.db');
+export const dbPath = resolveDbPath();
+export const dbFingerprint = computeDbFingerprint(dbPath);
 
 if (dbPath !== ':memory:') {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -88,6 +89,30 @@ function prepareRenameStatements() {
     ),
     updatePendingDriveSyncAccount: sqlite.prepare('UPDATE pending_drive_sync SET account_id = ? WHERE account_id = ?'),
     updateDriveOutboxAccount: sqlite.prepare('UPDATE drive_outbox SET account_id = ? WHERE account_id = ?'),
+    updateTransferJobsAccount: sqlite.prepare('UPDATE transfer_jobs SET account_id = ? WHERE account_id = ?'),
+    updateTransferJobItemsSourceAccount: sqlite.prepare(
+      'UPDATE transfer_job_items SET source_account_id = ? WHERE source_account_id = ?'
+    ),
+    updateTransferJobItemsTargetAccount: sqlite.prepare(
+      'UPDATE transfer_job_items SET target_account_id = ? WHERE target_account_id = ?'
+    ),
+    updateTransferJobSharesSourceAccount: sqlite.prepare(
+      'UPDATE transfer_job_shares SET source_account_id = ? WHERE source_account_id = ?'
+    ),
+    deleteConflictingTransferJobShares: sqlite.prepare(
+      `DELETE FROM transfer_job_shares
+       WHERE target_account_id = ?
+         AND EXISTS (
+           SELECT 1 FROM transfer_job_shares AS target
+           WHERE target.target_account_id = ?
+             AND target.job_id = transfer_job_shares.job_id
+             AND target.source_folder_id = transfer_job_shares.source_folder_id
+             AND target.permission_id = transfer_job_shares.permission_id
+         )`
+    ),
+    updateTransferJobSharesTargetAccount: sqlite.prepare(
+      'UPDATE transfer_job_shares SET target_account_id = ? WHERE target_account_id = ?'
+    ),
     deleteConflictingPendingDriveSync: sqlite.prepare(
       `DELETE FROM pending_drive_sync
        WHERE account_id = ?
@@ -113,11 +138,17 @@ function getRenameStatements(): RenameStatements {
 function reassignAccountRows(stmts: RenameStatements, oldId: string, targetId: string): number {
   stmts.deleteConflictingShareLinks.run(oldId, targetId);
   stmts.deleteConflictingPendingDriveSync.run(oldId, targetId);
+  stmts.deleteConflictingTransferJobShares.run(oldId, targetId);
   const filesRes = stmts.updateFilesAccount.run(targetId, oldId);
   stmts.updateTransferLogsAccount.run(targetId, oldId);
   stmts.updateShareLinksAccount.run(targetId, oldId);
   stmts.updatePendingDriveSyncAccount.run(targetId, oldId);
   stmts.updateDriveOutboxAccount.run(targetId, oldId);
+  stmts.updateTransferJobsAccount.run(targetId, oldId);
+  stmts.updateTransferJobItemsSourceAccount.run(targetId, oldId);
+  stmts.updateTransferJobItemsTargetAccount.run(targetId, oldId);
+  stmts.updateTransferJobSharesSourceAccount.run(targetId, oldId);
+  stmts.updateTransferJobSharesTargetAccount.run(targetId, oldId);
   return filesRes.changes;
 }
 

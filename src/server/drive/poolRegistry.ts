@@ -1,4 +1,9 @@
 import { sqlite } from '../db/index.js';
+import {
+  SHARE_POOL_SLUG,
+  SHARE_POOL_SORT_ORDER,
+  deriveUniquePoolSlug,
+} from '../storage/poolSlug.js';
 
 export const POOL_FOLDER_PREFIX = '_Tsubasa~ Pool ';
 export const SHARE_POOL_FOLDER_NAME = '_Tsubasa~ Pool share';
@@ -43,12 +48,32 @@ export function ensurePoolExistsInDb(poolId: number): void {
     ensureSharePoolExistsInDb();
     return;
   }
-  const folderName = getPoolDriveFolderName(poolId);
-  sqlite
-    .prepare(
-      `INSERT INTO pools (id, name, drive_folder_name) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING`
-    )
-    .run(poolId, `Pool ${poolId}`, folderName);
+  sqlite.transaction(() => {
+    const existing = sqlite
+      .prepare('SELECT 1 FROM pools WHERE id = ? LIMIT 1')
+      .get(poolId);
+    if (existing) {
+      return;
+    }
+
+    const poolName = `Pool ${poolId}`;
+    const folderName = getPoolDriveFolderName(poolId);
+    const existingSlugs = (
+      sqlite.prepare('SELECT slug FROM pools WHERE slug IS NOT NULL').all() as Array<{ slug: string }>
+    ).map((row) => row.slug);
+    const slug = deriveUniquePoolSlug(poolName, existingSlugs, poolId);
+
+    const maxSortRow = sqlite
+      .prepare('SELECT MAX(sort_order) as maxSort FROM pools WHERE is_share_pool = 0')
+      .get() as { maxSort: number | null } | undefined;
+    const sortOrder = (maxSortRow?.maxSort ?? 0) + 1;
+
+    sqlite
+      .prepare(
+        `INSERT INTO pools (id, name, slug, sort_order, drive_folder_name) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`
+      )
+      .run(poolId, poolName, slug, sortOrder, folderName);
+  })();
 }
 
 export function isSharePoolId(poolId: number): boolean {
@@ -77,9 +102,9 @@ export function ensureSharePoolExistsInDb(): number {
 
     sqlite
       .prepare(
-        `INSERT INTO pools (id, name, drive_folder_name, is_share_pool) VALUES (?, ?, ?, 1)`
+        `INSERT INTO pools (id, name, slug, sort_order, drive_folder_name, is_share_pool) VALUES (?, ?, ?, ?, ?, 1)`
       )
-      .run(nextId, 'Share Pool', SHARE_POOL_FOLDER_NAME);
+      .run(nextId, 'Share Pool', SHARE_POOL_SLUG, SHARE_POOL_SORT_ORDER, SHARE_POOL_FOLDER_NAME);
 
     return nextId;
   })();

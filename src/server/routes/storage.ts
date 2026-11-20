@@ -9,6 +9,16 @@ import {
   type UploadPlacementRequestItem,
 } from '../storage/index.js';
 import {
+  buildCanonicalExport,
+  ExportValidationError,
+  isExportEntityName,
+  iterateExportJsonl,
+  type ExportEntityName,
+  type ExportOptions,
+  type ExportPreset,
+  type ExportTrashedMode,
+} from '../storage/export.js';
+import {
   INVALID_POOL_ID_ERROR,
   mapDomainErrorToResponse,
   parseOptionalPoolId,
@@ -131,6 +141,114 @@ const router = new Hono()
         return mapDomainErrorToResponse(c, err);
       }
     }
-  );
+  )
+  .get('/api/export', async (c) => {
+    const rawFormat = (c.req.query('format') || 'json').trim().toLowerCase();
+    if (rawFormat !== 'json' && rawFormat !== 'jsonl') {
+      return c.json(
+        { error: `Invalid format '${rawFormat}'. Expected json or jsonl.`, code: 'VALIDATION_ERROR' },
+        400
+      );
+    }
+
+    const rawPreset = c.req.query('preset')?.trim().toLowerCase();
+    if (rawPreset && rawPreset !== 'minimal' && rawPreset !== 'standard' && rawPreset !== 'full') {
+      return c.json(
+        { error: `Invalid preset '${rawPreset}'. Expected minimal, standard, or full.`, code: 'VALIDATION_ERROR' },
+        400
+      );
+    }
+
+    const rawTrashed = c.req.query('trashed')?.trim().toLowerCase();
+    if (rawTrashed && rawTrashed !== 'exclude' && rawTrashed !== 'include' && rawTrashed !== 'only') {
+      return c.json(
+        { error: `Invalid trashed mode '${rawTrashed}'. Expected exclude, include, or only.`, code: 'VALIDATION_ERROR' },
+        400
+      );
+    }
+
+    const rawInclude = c.req.query('include')?.trim();
+    let include: ExportEntityName[] | undefined;
+    if (rawInclude) {
+      const parts = rawInclude
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      for (const part of parts) {
+        if (!isExportEntityName(part)) {
+          return c.json(
+            { error: `Unknown export entity '${part}'.`, code: 'VALIDATION_ERROR' },
+            400
+          );
+        }
+      }
+      include = parts as ExportEntityName[];
+    }
+
+    const rawShowEmails = c.req.query('showEmails')?.trim().toLowerCase();
+    const showEmails = rawShowEmails === 'true' || rawShowEmails === '1';
+
+    const options: ExportOptions = {
+      preset: (rawPreset as ExportPreset | undefined) ?? 'standard',
+      include,
+      pool: c.req.query('pool')?.trim() || undefined,
+      account: c.req.query('account')?.trim() || undefined,
+      path: c.req.query('path')?.trim() || undefined,
+      trashed: (rawTrashed as ExportTrashedMode | undefined) ?? 'exclude',
+      showEmails,
+    };
+
+    try {
+      if (rawFormat === 'jsonl') {
+        const generator = iterateExportJsonl(options);
+        const first = await generator.next();
+        const encoder = new TextEncoder();
+
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (!first.done) {
+              controller.enqueue(encoder.encode(first.value));
+            } else {
+              controller.close();
+            }
+          },
+          async pull(controller) {
+            try {
+              const next = await generator.next();
+              if (next.done) {
+                controller.close();
+              } else {
+                controller.enqueue(encoder.encode(next.value));
+              }
+            } catch (err) {
+              controller.error(err);
+            }
+          },
+          async cancel() {
+            await generator.return?.(undefined);
+          },
+        });
+
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+          },
+        });
+      }
+
+      const payload = await buildCanonicalExport(options);
+      return c.json(payload);
+    } catch (err) {
+      if (err instanceof ExportValidationError) {
+        return c.json(
+          { error: err.message, code: err.code },
+          err.status === 404 ? 404 : 400
+        );
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
 
 export default router;

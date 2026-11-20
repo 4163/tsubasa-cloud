@@ -223,3 +223,11 @@ flowchart TD
   - Any `localhost` browser tab opened while Electron is running receives a rejection from the backend before mounting the workspace and renders the same blocking modal so it cannot conflict with the desktop app.
 - [ ] Add native desktop features (tray icon, upload progress in taskbar).
 - [ ] Build production installer packages for Windows.
+
+### Phase 8: CLI, extensions, and future UI viewer hooks
+
+- [x] Implement the `tsubasa` CLI, canonical `tsubasa export` at `GET /api/export`, HTTP `Range` downloads with metadata headers, and the `extensions/<name>/manifest.json` CLI subprocess runner, documented in `src/cli/README.md` and `extensions/README.md`.
+- [ ] Add a thin client and server UI viewer hook when integrating an external web viewer directly into the React or Electron interface, because `extensions/` currently runs CLI subprocesses only and cannot intercept file clicks in `src/client/`.
+- [ ] Optionally extend `extensions/<name>/manifest.json` with a web or UI entry field if the server should serve or launch an extension's web bundle directly from the interface.
+- [ ] Add `accounts.rootFolderId` to `standard` and `full` `tsubasa export` account records if a future extension requires account root Drive folder IDs alongside per-file `driveFileId`.
+- [ ] Sync Google Drive `modifiedTime` into `files.updatedAt` if downstream tools require upstream Drive modification timestamps instead of local SQLite index time.

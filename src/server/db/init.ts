@@ -1,7 +1,13 @@
 import { sqlite } from './index.js';
+import {
+  deriveUniquePoolSlug,
+  isValidPoolSlug,
+  SHARE_POOL_SLUG,
+  SHARE_POOL_SORT_ORDER,
+} from '../storage/poolSlug.js';
 
 // init.ts owns runtime DDL and migrations; keep all table, column, and index definitions synchronized with src/server/db/schema.ts.
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 export function initializeDatabase(): void {
   const currentVersion = sqlite.pragma('user_version', { simple: true }) as number;
@@ -13,13 +19,13 @@ export function initializeDatabase(): void {
     CREATE TABLE IF NOT EXISTS pools (
       id INTEGER PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
+      slug TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       drive_folder_name TEXT NOT NULL UNIQUE,
       is_share_pool INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
-
-    INSERT OR IGNORE INTO pools (id, name, drive_folder_name) VALUES (1, 'Pool 1', '_Tsubasa~ Pool 1');
 
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY NOT NULL,
@@ -111,12 +117,75 @@ export function initializeDatabase(): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
+    CREATE TABLE IF NOT EXISTS transfer_jobs (
+      id TEXT PRIMARY KEY NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      pool_id INTEGER REFERENCES pools(id) ON DELETE SET NULL,
+      source_pool_id INTEGER REFERENCES pools(id) ON DELETE SET NULL,
+      account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+      conflict_policy TEXT NOT NULL DEFAULT 'reject',
+      mode TEXT,
+      total_items INTEGER NOT NULL DEFAULT 0,
+      completed_items INTEGER NOT NULL DEFAULT 0,
+      failed_items INTEGER NOT NULL DEFAULT 0,
+      skipped_items INTEGER NOT NULL DEFAULT 0,
+      total_bytes INTEGER NOT NULL DEFAULT 0,
+      transferred_bytes INTEGER NOT NULL DEFAULT 0,
+      pause_reason TEXT,
+      last_error TEXT,
+      metadata_json TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      completed_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS transfer_job_items (
+      id TEXT PRIMARY KEY NOT NULL,
+      job_id TEXT NOT NULL REFERENCES transfer_jobs(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      source_account_id TEXT,
+      target_account_id TEXT,
+      source_file_id TEXT,
+      source_drive_file_id TEXT,
+      source_parent_id TEXT,
+      dest_drive_file_id TEXT,
+      local_path TEXT,
+      virtual_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      transferred_bytes INTEGER NOT NULL DEFAULT 0,
+      mtime_ms INTEGER,
+      expected_hash TEXT,
+      verified_hash TEXT,
+      drive_session_uri TEXT,
+      transfer_mode TEXT,
+      skip_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS transfer_job_shares (
+      job_id TEXT NOT NULL REFERENCES transfer_jobs(id) ON DELETE CASCADE,
+      source_folder_id TEXT NOT NULL,
+      target_account_id TEXT NOT NULL,
+      permission_id TEXT NOT NULL,
+      source_account_id TEXT,
+      revoked_at INTEGER,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (job_id, source_folder_id, target_account_id, permission_id)
+    );
+
     CREATE INDEX IF NOT EXISTS accounts_pool_idx ON accounts(pool_id);
     CREATE UNIQUE INDEX IF NOT EXISTS folders_pool_path_idx ON folders(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS folders_pool_parent_idx ON folders(pool_id, parent_folder_id);
     CREATE UNIQUE INDEX IF NOT EXISTS files_pool_path_idx ON files(pool_id, virtual_path);
     CREATE INDEX IF NOT EXISTS files_pool_trashed_path_idx ON files(pool_id, is_trashed, virtual_path, account_id, size_bytes);
     CREATE INDEX IF NOT EXISTS files_pool_trashed_account_size_idx ON files(pool_id, is_trashed, account_id, size_bytes);
+    CREATE INDEX IF NOT EXISTS files_pool_trashed_hash_idx ON files(pool_id, is_trashed, hash);
     CREATE INDEX IF NOT EXISTS files_account_idx ON files(account_id);
     CREATE INDEX IF NOT EXISTS files_account_drive_file_idx ON files(account_id, drive_file_id);
     CREATE INDEX IF NOT EXISTS files_account_pool_trashed_idx ON files(account_id, pool_id, is_trashed);
@@ -131,6 +200,13 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS drive_outbox_status_retry_idx ON drive_outbox(status, next_retry_at, created_at);
     CREATE INDEX IF NOT EXISTS drive_outbox_account_status_idx ON drive_outbox(account_id, status);
     CREATE INDEX IF NOT EXISTS drive_outbox_account_drive_op_idx ON drive_outbox(account_id, drive_file_id, op_type, status);
+    CREATE INDEX IF NOT EXISTS transfer_jobs_status_idx ON transfer_jobs(status, updated_at);
+    CREATE INDEX IF NOT EXISTS transfer_jobs_kind_status_idx ON transfer_jobs(kind, status);
+    CREATE INDEX IF NOT EXISTS transfer_jobs_pool_idx ON transfer_jobs(pool_id);
+    CREATE INDEX IF NOT EXISTS transfer_jobs_account_idx ON transfer_jobs(account_id);
+    CREATE INDEX IF NOT EXISTS transfer_job_items_job_status_idx ON transfer_job_items(job_id, status);
+    CREATE INDEX IF NOT EXISTS transfer_job_items_job_path_idx ON transfer_job_items(job_id, virtual_path);
+    CREATE INDEX IF NOT EXISTS transfer_job_shares_job_revoked_idx ON transfer_job_shares(job_id, revoked_at);
 
     DROP INDEX IF EXISTS folders_parent_idx;
     DROP INDEX IF EXISTS folders_path_idx;
@@ -140,8 +216,18 @@ export function initializeDatabase(): void {
   `);
 
   const poolColumns = sqlite.pragma('table_info(pools)') as Array<{ name: string }>;
-  if (!poolColumns.some((col) => col.name === 'is_share_pool')) {
+  const hasIsSharePool = poolColumns.some((col) => col.name === 'is_share_pool');
+  const hasSlug = poolColumns.some((col) => col.name === 'slug');
+  const hasSortOrder = poolColumns.some((col) => col.name === 'sort_order');
+
+  if (!hasIsSharePool) {
     sqlite.exec('ALTER TABLE pools ADD COLUMN is_share_pool INTEGER NOT NULL DEFAULT 0;');
+  }
+  if (!hasSlug) {
+    sqlite.exec('ALTER TABLE pools ADD COLUMN slug TEXT;');
+  }
+  if (!hasSortOrder) {
+    sqlite.exec('ALTER TABLE pools ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;');
   }
 
   // Move any Share Pool created with a low sequential ID (< 1_000_000) to reserved ID 1_000_000
@@ -224,6 +310,14 @@ export function initializeDatabase(): void {
             .run(SHARE_POOL_RESERVE_ID, oldId);
 
           sqlite
+            .prepare('UPDATE transfer_jobs SET pool_id = ? WHERE pool_id = ?')
+            .run(SHARE_POOL_RESERVE_ID, oldId);
+
+          sqlite
+            .prepare('UPDATE transfer_jobs SET source_pool_id = ? WHERE source_pool_id = ?')
+            .run(SHARE_POOL_RESERVE_ID, oldId);
+
+          sqlite
             .prepare('UPDATE pools SET id = ? WHERE id = ?')
             .run(SHARE_POOL_RESERVE_ID, oldId);
         }).immediate();
@@ -237,7 +331,63 @@ export function initializeDatabase(): void {
     }
   }
 
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO pools (id, name, slug, sort_order, drive_folder_name)
+       VALUES (1, 'Pool 1', 'pool-1', 1, '_Tsubasa~ Pool 1')`
+    )
+    .run();
+
+  // Backfill pool slugs and sort_order inside a single transaction before creating the unique slug index.
+  sqlite.transaction(() => {
+    const rows = sqlite
+      .prepare(
+        `SELECT id, name, slug, sort_order as sortOrder, is_share_pool as isSharePool
+         FROM pools
+         ORDER BY is_share_pool DESC, id ASC`
+      )
+      .all() as Array<{
+      id: number;
+      name: string;
+      slug: string | null;
+      sortOrder: number;
+      isSharePool: number;
+    }>;
+
+    const usedSlugs = new Set<string>();
+    const updatePoolStmt = sqlite.prepare('UPDATE pools SET slug = ?, sort_order = ? WHERE id = ?');
+
+    for (const row of rows) {
+      if (Boolean(row.isSharePool)) {
+        const nextSlug = SHARE_POOL_SLUG;
+        const nextSortOrder = SHARE_POOL_SORT_ORDER;
+        usedSlugs.add(nextSlug);
+        if (row.slug !== nextSlug || row.sortOrder !== nextSortOrder) {
+          updatePoolStmt.run(nextSlug, nextSortOrder, row.id);
+        }
+        continue;
+      }
+
+      const existingSlug = row.slug?.trim();
+      const nextSlug =
+        existingSlug && isValidPoolSlug(existingSlug) && !usedSlugs.has(existingSlug)
+          ? existingSlug
+          : deriveUniquePoolSlug(row.name, usedSlugs, row.id);
+      usedSlugs.add(nextSlug);
+
+      const nextSortOrder =
+        (!hasSortOrder || currentVersion < 6) && row.sortOrder === 0 ? row.id : row.sortOrder;
+
+      if (row.slug !== nextSlug || row.sortOrder !== nextSortOrder) {
+        updatePoolStmt.run(nextSlug, nextSortOrder, row.id);
+      }
+    }
+  }).immediate();
+
+  sqlite.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS pools_slug_idx ON pools(slug);
+    CREATE INDEX IF NOT EXISTS pools_sort_order_idx ON pools(is_share_pool, sort_order, id);
+  `);
+
   sqlite.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
 }
-
-

@@ -8,24 +8,25 @@ import {
   switchAccountPool,
   isSharePoolId,
   startBackgroundJob,
-  listBackgroundJobs,
   getAccountsList,
   disableDriveAccount,
   enableDriveAccount,
-  removeDriveAccount,
 } from '../drive/index.js';
 import {
-  getEligibleAccounts,
-  simulateBatchPlacement,
-  FileExceedsCeilingError,
-  InsufficientStorageError,
+  EvacuationInProgressError,
+  startAccountEvacuation,
+} from '../drive/accountEvacuate.js';
+import {
+  calculateUsableLimit,
+  calculateHeadroom,
+  invalidatePooledStorageOverview,
 } from '../storage/index.js';
+import { refreshAccountLiveQuota } from '../drive/client.js';
 import {
   INVALID_POOL_ID_ERROR,
   parseStrictPoolId,
   parseOptionalPoolId,
   mapDomainErrorToResponse,
-  getAccountPoolId,
 } from './shared.js';
 
 const router = new Hono()
@@ -142,6 +143,79 @@ const router = new Hono()
       return mapDomainErrorToResponse(c, err);
     }
   })
+  .post('/api/accounts/:id/quota/refresh', async (c) => {
+    const accountId = c.req.param('id');
+    const existing = sqlite
+      .prepare(
+        `SELECT id, email, pool_id as poolId, quota_limit_bytes as quotaLimitBytes, quota_used_bytes as quotaUsedBytes, sync_state as syncState
+         FROM accounts WHERE id = ? LIMIT 1`
+      )
+      .get(accountId) as
+      | {
+          id: string;
+          email: string;
+          poolId: number;
+          quotaLimitBytes: number;
+          quotaUsedBytes: number;
+          syncState: string;
+        }
+      | undefined;
+
+    if (!existing) {
+      return c.json({ error: `Account '${accountId}' not found`, code: 'NOT_FOUND' }, 404);
+    }
+
+    if (!authPool.getRecord(accountId)?.authorized) {
+      return c.json(
+        { error: `Account '${accountId}' is not authorized`, code: 'AUTH_ERROR' },
+        401
+      );
+    }
+
+    try {
+      const updatedUsage = await refreshAccountLiveQuota(accountId);
+      if (updatedUsage === null) {
+        return c.json(
+          { error: `Failed to refresh live quota for account '${accountId}'`, code: 'UPSTREAM_ERROR' },
+          502
+        );
+      }
+      invalidatePooledStorageOverview(existing.poolId);
+
+      const refreshed = sqlite
+        .prepare(
+          `SELECT id, email, pool_id as poolId, quota_limit_bytes as quotaLimitBytes, quota_used_bytes as quotaUsedBytes, sync_state as syncState
+           FROM accounts WHERE id = ? LIMIT 1`
+        )
+        .get(accountId) as {
+        id: string;
+        email: string;
+        poolId: number;
+        quotaLimitBytes: number;
+        quotaUsedBytes: number;
+        syncState: string;
+      };
+
+      const usableLimitBytes = calculateUsableLimit(refreshed.quotaLimitBytes);
+      const headroomBytes = calculateHeadroom(refreshed.quotaLimitBytes, refreshed.quotaUsedBytes);
+
+      return c.json({
+        accountId: refreshed.id,
+        email: refreshed.email,
+        poolId: refreshed.poolId,
+        quotaLimitBytes: refreshed.quotaLimitBytes,
+        quotaUsedBytes: refreshed.quotaUsedBytes,
+        usableLimitBytes,
+        headroomBytes,
+        syncState: refreshed.syncState,
+      });
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err), code: 'UPSTREAM_ERROR' },
+        502
+      );
+    }
+  })
   .post(
     '/api/accounts/:id/pool',
     validator('json', (value, c) => {
@@ -163,87 +237,91 @@ const router = new Hono()
       }
     }
   )
+  .post('/api/accounts/:id/evacuate', async (c) => {
+    const accountId = c.req.param('id');
+    let wait = false;
+    let removeAfterEvacuate = false;
+
+    try {
+      const rawBody = await c.req.text();
+      if (rawBody.trim()) {
+        const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+        wait = parsed.wait === true;
+        removeAfterEvacuate = parsed.removeAfter === true || parsed.removeAfterEvacuate === true;
+      }
+    } catch {
+      return c.json({ error: 'Invalid JSON request body', code: 'VALIDATION_ERROR' }, 400);
+    }
+
+    if (c.req.query('wait') === 'true' || c.req.query('wait') === '1') {
+      wait = true;
+    }
+
+    try {
+      const result = await startAccountEvacuation(accountId, {
+        removeAfterEvacuate,
+        wait,
+      });
+      return c.json(result, result.queued ? 202 : 200);
+    } catch (err) {
+      if (err instanceof EvacuationInProgressError) {
+        return c.json(
+          { error: err.message, code: err.code, jobId: err.jobId },
+          409
+        );
+      }
+      return mapDomainErrorToResponse(c, err);
+    }
+  })
   .delete('/api/accounts/:id', async (c) => {
     const accountId = c.req.param('id');
+    const wait = c.req.query('wait') === 'true' || c.req.query('wait') === '1';
+
     try {
-      const existingEvacuation = listBackgroundJobs().find(
-        (job) => job.kind === 'account_evacuate' && job.targetId === accountId && job.status === 'running'
-      );
-      if (existingEvacuation) {
+      const result = await startAccountEvacuation(accountId, {
+        removeAfterEvacuate: true,
+        wait,
+      });
+
+      if (result.queued) {
         return c.json(
           {
-            error: 'Account evacuation is already in progress',
-            code: 'EVACUATION_IN_PROGRESS',
-            jobId: existingEvacuation.id,
+            sourceAccountId: result.sourceAccountId,
+            filesMoved: result.filesMoved,
+            bytesMoved: result.bytesMoved,
+            transfers: [],
+            removed: false,
+            queued: true,
+            jobId: result.jobId,
+            filesQueued: result.totalItems,
+          },
+          202
+        );
+      }
+
+      return c.json(
+        {
+          sourceAccountId: result.sourceAccountId,
+          filesMoved: result.filesMoved,
+          bytesMoved: result.bytesMoved,
+          transfers: [],
+          removed: result.removed,
+          queued: false,
+          jobId: result.jobId,
+        },
+        200
+      );
+    } catch (err) {
+      if (err instanceof EvacuationInProgressError) {
+        return c.json(
+          {
+            error: err.message,
+            code: err.code,
+            jobId: err.jobId,
           },
           409
         );
       }
-
-      const fileCountRow = sqlite
-        .prepare('SELECT COUNT(*) as cnt FROM files WHERE account_id = ?')
-        .get(accountId) as { cnt: number } | undefined;
-      const fileCount = Number(fileCountRow?.cnt ?? 0);
-
-      if (fileCount === 0) {
-        const result = await removeDriveAccount(accountId);
-        return c.json(result, 200);
-      }
-
-      const accountPoolId = getAccountPoolId(accountId);
-      const otherEligible =
-        accountPoolId !== undefined
-          ? (await getEligibleAccounts(accountPoolId)).filter((candidate) => candidate.id !== accountId)
-          : [];
-
-      if (otherEligible.length === 0) {
-        return c.json(
-          {
-            error: 'No other active account available in this pool to evacuate files to',
-            code: 'INSUFFICIENT_STORAGE',
-          },
-          507
-        );
-      }
-
-      const accountFiles = sqlite
-        .prepare('SELECT id, virtual_path as virtualPath, size_bytes as sizeBytes FROM files WHERE account_id = ?')
-        .all(accountId) as Array<{ id: string; virtualPath: string; sizeBytes: number }>;
-
-      try {
-        await simulateBatchPlacement(
-          accountFiles.map((f) => ({ virtualPath: f.virtualPath, sizeBytes: f.sizeBytes })),
-          otherEligible,
-          accountPoolId
-        );
-      } catch (simErr) {
-        if (simErr instanceof InsufficientStorageError || simErr instanceof FileExceedsCeilingError) {
-          return c.json(
-            {
-              error: simErr.message,
-              code: 'INSUFFICIENT_STORAGE',
-            },
-            507
-          );
-        }
-        throw simErr;
-      }
-
-      const job = startBackgroundJob('account_evacuate', accountId, () => removeDriveAccount(accountId));
-      return c.json(
-        {
-          sourceAccountId: accountId,
-          filesMoved: 0,
-          bytesMoved: 0,
-          transfers: [],
-          removed: false,
-          queued: true,
-          jobId: job.id,
-          filesQueued: fileCount,
-        },
-        202
-      );
-    } catch (err) {
       return mapDomainErrorToResponse(c, err);
     }
   })

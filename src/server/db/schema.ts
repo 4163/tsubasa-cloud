@@ -5,11 +5,16 @@ import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'driz
 export const pools = sqliteTable('pools', {
   id: integer('id').primaryKey(),
   name: text('name').notNull(),
+  slug: text('slug').notNull(),
+  sortOrder: integer('sort_order').notNull().default(0),
   driveFolderName: text('drive_folder_name').notNull().unique(),
   isSharePool: integer('is_share_pool', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-});
+}, (table) => [
+  uniqueIndex('pools_slug_idx').on(table.slug),
+  index('pools_sort_order_idx').on(table.isSharePool, table.sortOrder, table.id),
+]);
 
 export const accounts = sqliteTable('accounts', {
   id: text('id').primaryKey(),
@@ -61,6 +66,7 @@ export const files = sqliteTable('files', {
   uniqueIndex('files_pool_path_idx').on(table.poolId, table.virtualPath),
   index('files_pool_trashed_path_idx').on(table.poolId, table.isTrashed, table.virtualPath, table.accountId, table.sizeBytes),
   index('files_pool_trashed_account_size_idx').on(table.poolId, table.isTrashed, table.accountId, table.sizeBytes),
+  index('files_pool_trashed_hash_idx').on(table.poolId, table.isTrashed, table.hash),
   index('files_account_idx').on(table.accountId),
   index('files_account_drive_file_idx').on(table.accountId, table.driveFileId),
   index('files_account_pool_trashed_idx').on(table.accountId, table.poolId, table.isTrashed),
@@ -128,6 +134,78 @@ export const driveOutbox = sqliteTable('drive_outbox', {
   index('drive_outbox_account_drive_op_idx').on(table.accountId, table.driveFileId, table.opType, table.status),
 ]);
 
+export const transferJobs = sqliteTable('transfer_jobs', {
+  id: text('id').primaryKey(),
+  kind: text('kind', { enum: ['upload', 'import_drive', 'cross_pool_move', 'account_evacuate'] }).notNull(),
+  status: text('status', { enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'] }).notNull().default('pending'),
+  poolId: integer('pool_id').references(() => pools.id, { onDelete: 'set null' }),
+  sourcePoolId: integer('source_pool_id').references(() => pools.id, { onDelete: 'set null' }),
+  accountId: text('account_id').references(() => accounts.id, { onDelete: 'set null' }),
+  conflictPolicy: text('conflict_policy', { enum: ['reject', 'replace', 'keep_both', 'skip', 'overwrite'] }).notNull().default('reject'),
+  mode: text('mode'),
+  totalItems: integer('total_items').notNull().default(0),
+  completedItems: integer('completed_items').notNull().default(0),
+  failedItems: integer('failed_items').notNull().default(0),
+  skippedItems: integer('skipped_items').notNull().default(0),
+  totalBytes: integer('total_bytes').notNull().default(0),
+  transferredBytes: integer('transferred_bytes').notNull().default(0),
+  pauseReason: text('pause_reason'),
+  lastError: text('last_error'),
+  metadataJson: text('metadata_json'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  completedAt: integer('completed_at', { mode: 'timestamp' }),
+}, (table) => [
+  index('transfer_jobs_status_idx').on(table.status, table.updatedAt),
+  index('transfer_jobs_kind_status_idx').on(table.kind, table.status),
+  index('transfer_jobs_pool_idx').on(table.poolId),
+  index('transfer_jobs_account_idx').on(table.accountId),
+]);
+
+export const transferJobItems = sqliteTable('transfer_job_items', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id').notNull().references(() => transferJobs.id, { onDelete: 'cascade' }),
+  status: text('status', { enum: ['pending', 'running', 'paused', 'completed', 'failed', 'skipped', 'cancelled'] }).notNull().default('pending'),
+  sourceAccountId: text('source_account_id'),
+  targetAccountId: text('target_account_id'),
+  sourceFileId: text('source_file_id'),
+  sourceDriveFileId: text('source_drive_file_id'),
+  sourceParentId: text('source_parent_id'),
+  destDriveFileId: text('dest_drive_file_id'),
+  localPath: text('local_path'),
+  virtualPath: text('virtual_path').notNull(),
+  fileName: text('file_name').notNull(),
+  mimeType: text('mime_type').notNull().default('application/octet-stream'),
+  sizeBytes: integer('size_bytes').notNull().default(0),
+  transferredBytes: integer('transferred_bytes').notNull().default(0),
+  mtimeMs: integer('mtime_ms'),
+  expectedHash: text('expected_hash'),
+  verifiedHash: text('verified_hash'),
+  driveSessionUri: text('drive_session_uri'),
+  transferMode: text('transfer_mode'),
+  skipReason: text('skip_reason'),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  index('transfer_job_items_job_status_idx').on(table.jobId, table.status),
+  index('transfer_job_items_job_path_idx').on(table.jobId, table.virtualPath),
+]);
+
+export const transferJobShares = sqliteTable('transfer_job_shares', {
+  jobId: text('job_id').notNull().references(() => transferJobs.id, { onDelete: 'cascade' }),
+  sourceFolderId: text('source_folder_id').notNull(),
+  targetAccountId: text('target_account_id').notNull(),
+  permissionId: text('permission_id').notNull(),
+  sourceAccountId: text('source_account_id'),
+  revokedAt: integer('revoked_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (table) => [
+  primaryKey({ columns: [table.jobId, table.sourceFolderId, table.targetAccountId, table.permissionId] }),
+  index('transfer_job_shares_job_revoked_idx').on(table.jobId, table.revokedAt),
+]);
+
 export type Pool = typeof pools.$inferSelect;
 export type NewPool = typeof pools.$inferInsert;
 
@@ -151,5 +229,14 @@ export type NewPendingDriveSync = typeof pendingDriveSync.$inferInsert;
 
 export type DriveOutboxRecord = typeof driveOutbox.$inferSelect;
 export type NewDriveOutboxRecord = typeof driveOutbox.$inferInsert;
+
+export type TransferJob = typeof transferJobs.$inferSelect;
+export type NewTransferJob = typeof transferJobs.$inferInsert;
+
+export type TransferJobItem = typeof transferJobItems.$inferSelect;
+export type NewTransferJobItem = typeof transferJobItems.$inferInsert;
+
+export type TransferJobShare = typeof transferJobShares.$inferSelect;
+export type NewTransferJobShare = typeof transferJobShares.$inferInsert;
 
 

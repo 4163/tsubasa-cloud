@@ -567,7 +567,7 @@ export async function getEmptyAccountsAcrossAllPools(
     .from(accounts)
     .innerJoin(pools, eq(accounts.poolId, pools.id))
     .where(sql`NOT EXISTS (SELECT 1 FROM files WHERE files.account_id = accounts.id)`)
-    .orderBy(asc(pools.isSharePool), asc(pools.id), asc(accounts.email));
+    .orderBy(asc(pools.isSharePool), asc(pools.sortOrder), asc(pools.id), asc(accounts.email));
 
   const transferStatsByAccount = await getTransferStatsByAccountMap(
     emptyAccounts.map((acc) => acc.id),

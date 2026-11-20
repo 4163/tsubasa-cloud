@@ -3,13 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "tsubasa": "./dist/cli/index.js"
+  },
   "scripts": {
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "dev": "tsx watch src/server/index.ts",
+    "tsubasa": "tsx src/cli/index.ts",
     "typecheck": "tsc --noEmit",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
+    "build:cli": "tsc -p tsconfig.cli.json",
     "build": "npm run typecheck && npm run build:web && npm run build:server",
     "preview": "vite preview",
     "db:generate": "drizzle-kit generate",

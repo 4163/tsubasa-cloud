@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { validator } from 'hono/validator';
-import { sqlite } from '../db/index.js';
+import { dbFingerprint, sqlite } from '../db/index.js';
 
 const INSTANCE_LEASE_TTL_MS = 15_000;
 
@@ -39,6 +39,7 @@ const router = new Hono()
     return c.json({
       status: 'ok',
       service: 'tsubasa-backend',
+      dbFingerprint,
       timestamp: Date.now(),
       sqlite: {
         journalMode: String(pragmaRes ?? 'wal'),
