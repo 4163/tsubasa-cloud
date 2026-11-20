@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveWriterLockPath } from './paths.js';
@@ -7,6 +8,7 @@ export interface WriterLockMetadata {
   startedAt: string;
   command: string;
   cwd: string;
+  execName?: string;
 }
 
 export interface AcquireWriterLockOptions {
@@ -42,6 +44,8 @@ const MAX_ACQUIRE_ATTEMPTS = 20;
 const PARTIAL_WRITE_GRACE_MS = 1_000;
 const RECOVER_LOCK_STALE_MS = 5_000;
 const RETRY_DELAY_MS = 25;
+const PROCESS_PROBE_TIMEOUT_MS = 2_000;
+const START_TIME_SKEW_MS = 5_000;
 
 const SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 
@@ -79,6 +83,172 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+function extractExpectedExecName(holder: WriterLockMetadata): string | null {
+  if (holder.execName && holder.execName.trim().length > 0) {
+    return path.basename(holder.execName.trim());
+  }
+
+  const command = holder.command.trim();
+  if (!command) {
+    return null;
+  }
+
+  // Handle Windows executable paths that contain spaces (e.g. "C:\Program Files\nodejs\node.exe ...").
+  const winExeMatch = /^"?(.+?\.exe)(?:"|\s|$)/i.exec(command);
+  if (winExeMatch?.[1]) {
+    return path.win32.basename(winExeMatch[1]);
+  }
+
+  const quotedMatch = /^"([^"]+)"/.exec(command);
+  if (quotedMatch?.[1]) {
+    return path.basename(quotedMatch[1]);
+  }
+
+  const firstToken = command.split(/\s+/, 1)[0];
+  return firstToken ? path.basename(firstToken) : null;
+}
+
+function getWindowsProcessImageName(pid: number): string | null | undefined {
+  try {
+    const output = execFileSync(
+      'tasklist',
+      ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'],
+      {
+        encoding: 'utf8',
+        timeout: PROCESS_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }
+    );
+
+    const lines = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    for (const line of lines) {
+      const match = /^"([^"]+)","(\d+)"/.exec(line);
+      if (match && Number(match[2]) === pid) {
+        return match[1];
+      }
+    }
+
+    // tasklist prints a non-CSV info line when no process matches the PID filter.
+    return lines.length > 0 ? null : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getWindowsProcessStartTimeMs(pid: number): number | undefined {
+  try {
+    const output = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }`,
+      ],
+      {
+        encoding: 'utf8',
+        timeout: PROCESS_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }
+    ).trim();
+
+    if (!output) {
+      return undefined;
+    }
+    const parsed = Date.parse(output);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getPosixProcessExecName(pid: number): string | null | undefined {
+  if (process.platform === 'linux') {
+    try {
+      const exePath = fs.readlinkSync(`/proc/${pid}/exe`);
+      return path.posix.basename(exePath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') {
+        return null;
+      }
+    }
+    try {
+      const comm = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
+      return comm || undefined;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') {
+        return null;
+      }
+      return undefined;
+    }
+  }
+
+  try {
+    const output = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
+      encoding: 'utf8',
+      timeout: PROCESS_PROBE_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return output ? path.posix.basename(output) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Fail-closed: returns true unless the OS proves the PID is dead, belongs to a different
+// executable (PID reuse), or started after the lockfile was written.
+function isLockHolderAlive(holder: WriterLockMetadata): boolean {
+  if (!isProcessAlive(holder.pid)) {
+    return false;
+  }
+  if (holder.pid === process.pid) {
+    return true;
+  }
+
+  const expectedExecName = extractExpectedExecName(holder);
+
+  if (process.platform === 'win32') {
+    const actualImageName = getWindowsProcessImageName(holder.pid);
+    if (actualImageName === null) {
+      return false;
+    }
+    if (
+      actualImageName &&
+      expectedExecName &&
+      actualImageName.toLowerCase() !== expectedExecName.toLowerCase()
+    ) {
+      return false;
+    }
+
+    const lockStartedAtMs = Date.parse(holder.startedAt);
+    if (Number.isFinite(lockStartedAtMs)) {
+      const processStartMs = getWindowsProcessStartTimeMs(holder.pid);
+      if (processStartMs !== undefined && processStartMs > lockStartedAtMs + START_TIME_SKEW_MS) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const actualExecName = getPosixProcessExecName(holder.pid);
+  if (actualExecName === null) {
+    return false;
+  }
+  if (actualExecName && expectedExecName && actualExecName !== expectedExecName) {
+    return false;
+  }
+
+  return true;
+}
+
 function parseLockMetadata(raw: string): WriterLockMetadata | null {
   try {
     const parsed = JSON.parse(raw) as Partial<WriterLockMetadata>;
@@ -97,6 +267,9 @@ function parseLockMetadata(raw: string): WriterLockMetadata | null {
       startedAt: parsed.startedAt,
       command: parsed.command,
       cwd: parsed.cwd,
+      ...(typeof parsed.execName === 'string' && parsed.execName.length > 0
+        ? { execName: parsed.execName }
+        : {}),
     };
   } catch {
     return null;
@@ -184,7 +357,7 @@ function inspectExistingLock(lockPath: string): InspectLockResult {
     return { state: 'stale', holder: null };
   }
 
-  if (isProcessAlive(holder.pid)) {
+  if (isLockHolderAlive(holder)) {
     return { state: 'live', holder };
   }
 
@@ -198,7 +371,7 @@ function tryCleanupStaleRecoveryLock(recoverPath: string): void {
     const holder = parseLockMetadata(raw);
     const ageMs = Math.max(0, Date.now() - stat.mtimeMs);
 
-    if ((holder && !isProcessAlive(holder.pid)) || ageMs >= RECOVER_LOCK_STALE_MS) {
+    if ((holder && !isLockHolderAlive(holder)) || ageMs >= RECOVER_LOCK_STALE_MS) {
       fs.unlinkSync(recoverPath);
     }
   } catch {
@@ -244,6 +417,7 @@ export function acquireWriterLock(options: AcquireWriterLockOptions = {}): Write
     startedAt: new Date().toISOString(),
     command: options.command ?? process.argv.join(' '),
     cwd: options.cwd ?? process.cwd(),
+    execName: path.basename(process.execPath),
   };
   const payload = `${JSON.stringify(metadata, null, 2)}\n`;
 
