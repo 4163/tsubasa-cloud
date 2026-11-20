@@ -18,6 +18,8 @@ Read agent guidelines and project documentation only. No codebase exploration.
 - `.agents/skills/unslop/SKILL.md`
 - `docs/roadmap.md`
 - `docs/styling-guide.md`
+- `extensions/README.md`
+- `src/cli/README.md`
 - `README.md` (if present)
 
 Do not read source files, config files, or directory trees.
