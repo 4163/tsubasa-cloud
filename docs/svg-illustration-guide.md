@@ -2,7 +2,7 @@
 
 ## 1. Philosophy and intent
 
-Vectorizing brand artwork for Tsubasa~ Cloud follows a hand-authored illustration model rather than algorithmic conversion. The 8-color monochrome target ([brand-mono_8c.png](./brand-mono_8c.png), `822x884`) carries rough manga sketch noise, dithered brush edges, and pixelated anti-aliasing. The goal in the active portrait SVG (currently [svg-v35.svg](./svg-v35.svg)) is strong visual parity with that stylized monochrome target while stripping away raster noise so every edge reads as clean, deliberate vector art.
+Vectorizing brand artwork for Tsubasa~ Cloud follows a hand-authored illustration model rather than algorithmic conversion. The 8-color monochrome target ([brand-mono_8c.png](./brand-mono_8c.png), `822x884`) carries rough manga sketch noise, dithered brush edges, and pixelated anti-aliasing. The goal in the active portrait SVG (currently [svg-r42.svg](./svg-r42.svg)) is strong visual parity with that stylized monochrome target while stripping away raster noise so every edge reads as clean, deliberate vector art.
 
 Six core rules govern every pass:
 
@@ -10,7 +10,7 @@ Six core rules govern every pass:
 2. **Dual-reference balance.** Use [brand-mono_8c.png](./brand-mono_8c.png) as the primary reference for stylized monochrome parity, cel-shaded value grouping, and broad light-and-shadow planes. Use [brand.png](./brand.png) as the anatomical reference whenever the user asks for finer detail accuracy (eye gaze alignment, iris proportions, lash shapes and attachment points, eyelid crease tapers, or subtle negative-space pockets), translating those details strictly into the 8-color monochrome palette.
 3. **Coarse-to-fine construction.** Build broad silhouettes first, lay down large lighting and shadow planes next, and only then spend path budget on fine facial geometry, tapered lashes, catchlights, and micro-glints.
 4. **Human attention drives precision.** Generalized rules for stroke weight, shadow offset, and curve smoothing are starting points, not the full standard. Viewers forgive simplified cleanup in outer hair, but immediately catch a 2px misalignment, clipped highlight, cross-eyed gaze, or blunt cap on an eye or nose.
-5. **Negative space carries equal weight to dark ink.** Facial likeness depends just as much on the cream (`#dfdfbd`) and grey (`#9ea09d`) pockets framed by lashes, bangs, glasses rims, and hair curtains. When porting finer linework from a manual baseline (such as [svg-v1.svg](./svg-v1.svg)), audit and adjust the underlying sclera and shadow shapes instead of overlaying the path blindly.
+5. **Negative space carries equal weight to dark ink.** Facial likeness depends just as much on the cream (`#dfdfbd`) and grey (`#9ea09d`) pockets framed by lashes, bangs, glasses rims, and hair curtains. When porting finer linework from a manual baseline (such as [svg-r1.svg](./svg-r1.svg)), audit and adjust the underlying sclera and shadow shapes instead of overlaying the path blindly.
 6. **Strict palette with artistic intent.** Use only the 8 colors in `brand-mono_8c.png`. Never add off-palette hues or opacity hacks, and never insert invisible or dead shapes solely to check off a palette slot.
 
 ```mermaid
