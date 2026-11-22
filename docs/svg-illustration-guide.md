@@ -17,10 +17,12 @@ Six core rules govern every pass:
 flowchart TD
     Base["1. Broad Silhouettes<br/>Lower-back hair, face base, upper & lower hair, glasses frames"] --> Planes["2. Lighting & Shadow Planes<br/>Clipped face shadows, crown/bang lit shapes, hair volume"]
     Planes --> Focus["3. High-Sensitivity Anatomy<br/>Eyes, nose, lashes, creases, and surrounding negative space"]
-    Focus --> Verify["4. Raster, Gap & Overlay Verification<br/>Headless Chrome at 822x884, magenta hole check, 50/50 overlays"]
-    Verify --> Diag["5. Parity, Scale & AI-Tell Audit<br/>10px Red/Cyan grids, 1x gaze check, 10x-15x seam crops"]
-    Diag -->|Issues remain| Split["6. Targeted Swarm / Surgical Pass<br/>Disjoint region owners report drop-in paths"]
-    Split --> Focus
+    Focus --> Verify["4. Raster & Parity Verification<br/>Headless Chrome at 822x884, 10px Red/Cyan diffs, 50/50 overlays"]
+    Verify --> Split["5. Targeted Parity Pass<br/>Disjoint region owners lock shapes and tonal planes"]
+    Split -->|Parity climbing| Verify
+    Verify -->|Parity high| Gate["6. User Parity Sign-Off<br/>Present render and confirm visual parity"]
+    Gate -->|Needs more parity| Split
+    Gate -->|Approved| Cleanup["7. AI-Tell Cleanup Pass<br/>Magenta hole checks, AA masks, 10x-15x seam crops, taper polish"]
 ```
 
 ---
@@ -67,7 +69,7 @@ Layer order solves overlapping depth without brittle boolean path subtraction. K
 | 1 | `#hair-lower-back` | None | Dark lower-back hair strands behind the neck. Tuck top edges under `#face-base` and bottom edges past `#portrait-circle-clip`. |
 | 2 | `#glasses-right` | None | Far-side temple and full `#lens-right` ellipse behind `#hair-lower-left` so the lower-left hair curtain drapes over the middle of the lens. |
 | 3 | `#hair-lower-left` | None | Single owner of the lower-left hair curtain and its secondary volume planes. Tuck its base silhouette generously under `#face-base`. |
-| 4 | `#face-layer` | `#face-clip` on `#face-shading` | Lit `#face-base`, broad face/neck/ear shadows, clipped tapered jaw contour, nose bridge shadow, glasses skin cast shadows, cheek highlights, and `#mouth`. |
+| 4 | `#face-layer` | `#face-mask` on `#face-layer` | Lit `#face-base`, broad face/neck/ear shadows, clipped tapered jaw contour, nose bridge shadow, glasses skin cast shadows, cheek highlights, and `#mouth`. |
 | 5 | `#eyes-layer` | `#right-iris-clip`, `#left-iris-clip` | `#eye-right` (far-side oblique eye) and `#eye-left` (near-side focal eye), including brows, creases, sclera, layered irises, catchlights, and lashes. Layered above `#face-layer` so dark ink masks underlying skin shadows. |
 | 6 | `#glasses-left-and-bridge` | Targeted clip paths on rim arcs and bevels | Foreground `#414546` wireframe layered below upper hair: clipped front arc of `#lens-right`, foreground nose occlusion (`#nose-foreground` where the nose bridge overlaps the right lens), `#glasses-bridge`, `#temple-left`, `#lens-left`, and stylized rim glints. |
 | 7 | `#hair-upper-layer` | `#upper-hair-clip` on `#hair-lit-planes` | Layered above foreground glasses so bangs and side locks naturally drape over frames and temples. Holds upper hair base, lit planes, `#cat-ear-inner`, and `#hair-clip`. |
@@ -78,7 +80,7 @@ Layer order solves overlapping depth without brittle boolean path subtraction. K
 2. **True 3D occlusion over fake path pinching.** When a foreground form overlaps a glasses rim (such as the nose tip over the right lens or bangs over the left lens), layer the occluding shape cleanly above the rim rather than hand-pinching or severing the frame stroke.
 3. **Reuse exact mathematical geometry for paired strokes.** Derive clipped foreground rim arcs and glasses bevels from the exact underlying `<ellipse>` or cubic Bezier (via de Casteljau splits and `<clipPath>` masks) rather than eyeballing parallel hand curves that drift lopsided.
 4. **Preserve `USER-INTENTIONAL` baselines.** Tag approved manual paths and intentional stylistic overrides (such as manual brows, face contours, lower-left hair strands, verbatim lashes, cel-shaded hair clip shapes, and approved `#9c9c88` accents) with `USER-INTENTIONAL` XML comments. Treat tagged elements as read-only unless the user explicitly requests changes to them.
-5. **Single-owner boundaries and zero-drift relative paths.** Never duplicate a hair layer inside an eye group to patch a gap, and never leave unclipped strokes outside `#face-clip`. When editing a mid-path relative segment on a long shared path (such as `#shadow-forehead-and-sideburn`), keep the segment `dx/dy` sum invariant so downstream coordinates shift by `0.000px`.
+5. **Single-owner boundaries and zero-drift relative paths.** Never duplicate a hair layer inside an eye group to patch a gap, and never leave unclipped strokes outside `#face-mask`. When editing a mid-path relative segment on a long shared path (such as `#shadow-forehead-and-sideburn`), keep the segment `dx/dy` sum invariant so downstream coordinates shift by `0.000px`.
 
 ---
 
@@ -109,16 +111,17 @@ Translating rough manga hair into clean cel vector art relies on layered, tapere
 
 ## 6. Eliminating AI tells in hand-authored SVG
 
-High pixel-parity scores do not guarantee human-looking vector art. Chasing raw pixel counts often creates machine tells: floating seams, fake anti-aliasing fringes, eye confetti, and geometric primitives. Enforce these eight rules on every pass:
+High pixel-parity scores do not guarantee human-looking vector art. Chasing raw pixel counts often creates machine tells: floating seams, fake anti-aliasing fringes, eye confetti, and geometric primitives. Mixing cleanup into parity climbing produces timid, over-smoothed shapes that stall progress. Lock in shapes and tonal planes first, present the render and ask the user if visual parity is close enough, then enforce these nine rules in a dedicated cleanup pass:
 
 1. **Overlap blocking over edge-to-edge seam chasing.** Tuck lower layers generously underneath upper layers instead of tracing two fills edge-to-edge along a shared curve and hoping anti-aliasing hides the seam.
 2. **Zero transparent interior seams.** White or checkerboard previews hide 1px holes. Composite every render over flat `#ff00ff` magenta and run a connected-component check to confirm `0 px` unintended interior holes.
-3. **Exact geometric clip masks for hard boundaries.** Use one shared `<clipPath>` (`#portrait-circle-clip`) for circular portrait edges and extend clipped layers 2 to 5px past the mask.
-4. **No abrupt cutoffs or dangling ends.** Tuck open ends cleanly into overlapping masses or taper them to 0px inside a shadow transition.
-5. **Artistic intent over parity-quota stacking.** Build focal areas from coherent anatomical layers rather than disconnected polygon shards or axis-aligned rectangles added to bump pixel counts.
-6. **No unrequested fake AA halos or dead quota tokens.** Never add 1 to 3px fringe strokes just to mimic raster quantization edges, and never insert invisible 0px elements to fill a palette slot. Use stylized `#9c9c88` accents only where intentionally designed and approved.
-7. **Organic Bezier craft over mechanical primitives.** Replace straight `L` staircases, uniform round-capped detail tubes, ruler-straight shadow lines, geometric bullseye `<circle>`/`<ellipse>` catchlights, and blunt sausage tips with smooth, tapered cubic Beziers.
-8. **Natural foreground and background occlusion.** Maintain strict depth order across hair, glasses, face, and eyes so bangs drape over frames and light glints never sit awkwardly on top of unrelated dark ink.
+3. **No double-edge anti-aliasing hairlines.** Clipping an overlay to the same contour as a contrasting unclipped base fill anti-aliases both edges separately and leaks a lighter hairline along the rim. Wrap the base (with a matching-color bleed stroke) and its overlays in one shared `<mask>` so the outer boundary anti-aliases once.
+4. **Exact geometric clip masks for hard boundaries.** Use one shared `<clipPath>` (`#portrait-circle-clip`) for circular portrait edges and extend clipped layers 2 to 5px past the mask.
+5. **No abrupt cutoffs or dangling ends.** Tuck open ends cleanly into overlapping masses or taper them to 0px inside a shadow transition.
+6. **Artistic intent over parity-quota stacking.** Build focal areas from coherent anatomical layers rather than disconnected polygon shards or axis-aligned rectangles added to bump pixel counts.
+7. **No unrequested fake AA halos or dead quota tokens.** Never add 1 to 3px fringe strokes just to mimic raster quantization edges, and never insert invisible 0px elements to fill a palette slot. Use stylized `#9c9c88` accents only where intentionally designed and approved.
+8. **Organic Bezier craft over mechanical primitives.** Replace straight `L` staircases, uniform round-capped detail tubes, ruler-straight shadow lines, geometric bullseye `<circle>`/`<ellipse>` catchlights, and blunt sausage tips with smooth, tapered cubic Beziers.
+9. **Natural foreground and background occlusion.** Maintain strict depth order across hair, glasses, face, and eyes so bangs drape over frames and light glints never sit awkwardly on top of unrelated dark ink.
 
 ---
 
@@ -160,5 +163,5 @@ Assign roles by failure mode and live quota headroom rather than habit. Check li
 1. **Pre-pack exact paths, commands, and references in briefs.** Include the active SVG path, exact headless Chrome command, target reference image (`brand-mono_8c.png` vs `brand.png`), and any annotated user screenshots so workers start on geometry on turn 1.
 2. **Keep auditors read-only on disjoint regions.** Run auditors in parallel only on non-overlapping regions or layers (for example, Layer 4 rim bevels vs Layer 5 right eye) and route every live file write through the sole SVG writer.
 3. **Batch candidate checks in scratch.** Test candidate `<path>` adjustments in scratch copies using one batched Python script (render, 50/50 overlay, ROI pixel diff, magenta gap check) instead of burning separate turns per coordinate tweak.
-4. **Declare shared-boundary invariants upfront.** When editing shared paths (`#shadow-forehead-and-sideburn`, `#face-clip`, `#upper-hair-clip`), verify and report exact `dx/dy` zero-drift invariants before handoff.
+4. **Declare shared-boundary invariants upfront.** When editing shared paths (`#shadow-forehead-and-sideburn`, `#face-mask`, `#upper-hair-clip`), verify and report exact `dx/dy` zero-drift invariants before handoff.
 5. **Skip full swarms for trivial single edits.** For an obvious 1-path revert or simple coordinate swap, route directly to the sole writer and verify `0` unintended pixel drift rather than waking multiple auditors.
