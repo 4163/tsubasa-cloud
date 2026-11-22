@@ -14,7 +14,8 @@ Coding standards, architecture rules, and agent workflow for Tsubasa~.
   6. **Storage placement and headroom checks.** Never write files without verifying account headroom against the strict 750 MB reserve ceiling (14.25 GB maximum on 15 GB accounts). Respect the 14.25 GB single-file limit and path-affinity rules before allocating.
   7. **Rolling transfer window tracking.** Track Google upload limits (750 GB per rolling 24-hour window per account) in the SQLite `transfer_logs` ledger to prevent account-level rate lockouts.
   8. **Pre-computed database lookups.** Keep SQLite queries inside indexed columns (`account_id`, `virtual_path`, `parent_id`). Run SQLite with WAL mode and avoid synchronous blocking queries in hot request loops.
-- **Measure twice, cut once.** Prefer small, deliberate changes over broad refactors. Before writing new logic, search the codebase for an existing helper that already does the job. Prefer intuitive shared helpers over inlining repeated lines of code for identical operations. If a change duplicates logic across callsites, extract it into a shared helper instead.
+- **Measure twice, cut once.** Read the surrounding code, verify assumptions, and trace downstream impact before editing so changes land cleanly on the first pass. Prefer small, deliberate changes over broad refactors.
+- **Reuse existing helpers.** Before writing new logic, search the codebase for an existing helper that already does the job. Prefer intuitive shared helpers over inlining repeated lines of code for identical operations. If a change duplicates logic across callsites, extract it into a shared helper instead.
 - **Work in logical slices.** Prioritize small, precise code changes rather than big blocks to prevent tooling and scope failures, especially during large refactors. Be surgical!
 - **YAGNI.** Do not add abstractions, features, or complexity without a clear need.
 
