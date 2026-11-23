@@ -2,7 +2,7 @@
 
 ## 1. Philosophy and intent
 
-Vectorizing brand artwork for Tsubasa~ Cloud follows a hand-authored illustration model rather than algorithmic conversion. The 8-color monochrome target ([brand-mono_8c.png](./brand-mono_8c.png), `822x884`) carries rough manga sketch noise, dithered brush edges, and pixelated anti-aliasing. The goal in the active portrait SVG (currently [svg-r42.svg](./svg-r42.svg)) is strong visual parity with that stylized monochrome target while stripping away raster noise so every edge reads as clean, deliberate vector art.
+Vectorizing brand artwork for Tsubasa~ Cloud follows a hand-authored illustration model rather than algorithmic conversion. The 8-color monochrome target ([brand-mono_8c.png](./brand-mono_8c.png), `822x884`) carries rough manga sketch noise, dithered brush edges, and pixelated anti-aliasing. The goal in the active portrait SVG (currently [svg-r44.svg](./svg-r44.svg)) is strong visual parity with that stylized monochrome target while stripping away raster noise so every edge reads as clean, deliberate vector art.
 
 Six core rules govern every pass:
 
