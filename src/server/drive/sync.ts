@@ -4,7 +4,7 @@ import {
   refreshAccountLiveQuota,
 } from './client.js';
 import { resolveRemoteFolderTree } from './remoteTree.js';
-import { withDriveRetry } from './errors.js';
+import { runBoundedConcurrency, withDriveRetry } from './errors.js';
 import { db, sqlite, bumpPoolRevision } from '../db/index.js';
 import { getPendingOutboxDeleteDriveIds, getPendingOutboxDriveIds } from './outboxQueue.js';
 import { accounts, files } from '../db/schema.js';
@@ -19,8 +19,11 @@ export function formatFolderId(poolId: number, virtualPath: string): string {
 }
 
 // Drive file IDs accepted locally whose Tsubasa appProperties are still being stamped in the background.
-// Cold reconciliation lists only stamped files, so it must not prune these rows mid-flight.
+// Cold reconciliation must not prune or clobber these rows with pre-stamp Drive metadata mid-flight.
 export const pendingAppPropertyDriveIds = new Set<string>();
+
+const COLD_SCAN_FOLDER_CHUNK_SIZE = 20;
+const COLD_SCAN_CHUNK_CONCURRENCY = 5;
 
 export interface ColdSyncReport {
   accountId: string;
@@ -360,7 +363,6 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
     const poolId = accountRecord.poolId ?? 1;
     const folderTree = await resolveRemoteFolderTree(drive, accountRecord.rootFolderId);
     const validFolderIds = folderTree.folderIds;
-    const discoveredFiles: DiscoveredFile[] = [];
     const discoveredFolderPaths = new Set<string>();
     const orphanDriveIds: string[] = [];
 
@@ -368,60 +370,132 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
       discoveredFolderPaths.add(normalizeVirtualPath(folder.virtualPath));
     }
 
-    let pageToken: string | undefined = undefined;
+    const folderIdList = Array.from(validFolderIds);
+    const folderChunks: Array<{ chunk: string[]; index: number }> = [];
+    for (let i = 0; i < folderIdList.length; i += COLD_SCAN_FOLDER_CHUNK_SIZE) {
+      folderChunks.push({
+        chunk: folderIdList.slice(i, i + COLD_SCAN_FOLDER_CHUNK_SIZE),
+        index: folderChunks.length,
+      });
+    }
 
-    do {
-      const res: any = await withDriveRetry(() =>
-        drive.files.list({
-          q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder'",
-          fields: 'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, parents, appProperties)',
-          pageSize: 1000,
-          pageToken,
-          spaces: 'drive',
-          supportsAllDrives: false,
-        })
-      );
+    const chunkResults: Array<Array<{ file: DiscoveredFile; isStamped: boolean }>> = Array.from(
+      { length: folderChunks.length },
+      () => []
+    );
 
-      for (const item of res.data.files || []) {
-        if (!item.id || !item.name) continue;
+    const scanMirroredFolders = runBoundedConcurrency(
+      folderChunks,
+      COLD_SCAN_CHUNK_CONCURRENCY,
+      async ({ chunk, index }) => {
+        const parentQuery = chunk.map((id) => `'${id}' in parents`).join(' or ');
+        const query = `(${parentQuery}) and mimeType != 'application/vnd.google-apps.folder'`;
+        let pageToken: string | undefined = undefined;
 
-        const isInside = Boolean(item.parents?.some((p: string) => validFolderIds.has(p)));
-        if (!isInside) {
-          orphanDriveIds.push(item.id);
-          continue;
+        do {
+          const res: any = await withDriveRetry(() =>
+            drive.files.list({
+              q: query,
+              fields:
+                'nextPageToken, files(id, name, size, mimeType, md5Checksum, sha256Checksum, trashed, parents, appProperties)',
+              pageSize: 1000,
+              pageToken,
+              spaces: 'drive',
+              supportsAllDrives: false,
+            })
+          );
+
+          for (const item of res.data.files || []) {
+            if (!item.id || !item.name) continue;
+
+            const sizeBytes = Number(item.size || 0);
+            if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+              continue;
+            }
+
+            const parentFolderPath =
+              item.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
+            const computedPath = parentFolderPath === '/' ? `/${item.name}` : `${parentFolderPath}/${item.name}`;
+            const virtualPath = normalizeVirtualPath(item.appProperties?.tsubasa_virtual_path || computedPath);
+            const fileId = item.appProperties?.tsubasa_virtual_id || item.id;
+            const hash = item.appProperties?.tsubasa_checksum || item.md5Checksum || item.sha256Checksum || null;
+
+            chunkResults[index].push({
+              file: {
+                id: fileId,
+                virtualPath,
+                name: item.name,
+                sizeBytes,
+                mimeType: item.mimeType || 'application/octet-stream',
+                hash,
+                accountId,
+                driveFileId: item.id,
+                isTrashed: Boolean(item.trashed),
+                poolId,
+              },
+              isStamped: item.appProperties?.tsubasa_managed === 'true',
+            });
+          }
+
+          pageToken = res.data.nextPageToken || undefined;
+        } while (pageToken);
+      }
+    );
+
+    const scanOrphanStampedFiles = (async () => {
+      let pageToken: string | undefined = undefined;
+
+      do {
+        const res: any = await withDriveRetry(() =>
+          drive.files.list({
+            q: "appProperties has { key='tsubasa_managed' and value='true' } and mimeType != 'application/vnd.google-apps.folder'",
+            fields: 'nextPageToken, files(id, parents)',
+            pageSize: 1000,
+            pageToken,
+            spaces: 'drive',
+            supportsAllDrives: false,
+          })
+        );
+
+        for (const item of res.data.files || []) {
+          if (!item.id) continue;
+          const isInside = Boolean(item.parents?.some((p: string) => validFolderIds.has(p)));
+          if (!isInside) {
+            orphanDriveIds.push(item.id);
+          }
         }
 
-        const sizeBytes = Number(item.size || 0);
-        if (sizeBytes > MAX_SINGLE_FILE_BYTES) {
+        pageToken = res.data.nextPageToken || undefined;
+      } while (pageToken);
+    })();
+
+    await Promise.all([scanMirroredFolders, scanOrphanStampedFiles]);
+
+    const discoveredDriveIds = new Set<string>();
+    const stampedDiscoveredDriveIds = new Set<string>();
+    const stampedEntries: DiscoveredFile[] = [];
+    const unstampedEntries: DiscoveredFile[] = [];
+
+    for (const entries of chunkResults) {
+      for (const entry of entries) {
+        if (discoveredDriveIds.has(entry.file.driveFileId)) {
           continue;
         }
+        discoveredDriveIds.add(entry.file.driveFileId);
+        if (entry.isStamped) {
+          stampedDiscoveredDriveIds.add(entry.file.driveFileId);
+          stampedEntries.push(entry.file);
+        } else {
+          unstampedEntries.push(entry.file);
+        }
 
-        const parentFolderPath = item.parents?.map((p: string) => folderTree.folderPathById.get(p)).find(Boolean) || '/';
-        const computedPath = parentFolderPath === '/' ? `/${item.name}` : `${parentFolderPath}/${item.name}`;
-        const virtualPath = normalizeVirtualPath(item.appProperties?.tsubasa_virtual_path || computedPath);
-        const fileId = item.appProperties?.tsubasa_virtual_id || item.id;
-        const hash = item.appProperties?.tsubasa_checksum || item.md5Checksum || item.sha256Checksum || null;
-
-        discoveredFiles.push({
-          id: fileId,
-          virtualPath,
-          name: item.name,
-          sizeBytes,
-          mimeType: item.mimeType || 'application/octet-stream',
-          hash,
-          accountId,
-          driveFileId: item.id,
-          isTrashed: Boolean(item.trashed),
-          poolId,
-        });
-
-        for (const folder of extractFolderPaths(virtualPath)) {
+        for (const folder of extractFolderPaths(entry.file.virtualPath)) {
           discoveredFolderPaths.add(folder);
         }
       }
+    }
 
-      pageToken = res.data.nextPageToken || undefined;
-    } while (pageToken);
+    const discoveredFiles: DiscoveredFile[] = [...stampedEntries, ...unstampedEntries];
 
     await clearOrphanAppProperties(drive, orphanDriveIds);
 
@@ -434,7 +508,6 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
     const pendingOutboxDeleteIds = getPendingOutboxDeleteDriveIds(accountId);
     const pendingOutboxDriveIds = getPendingOutboxDriveIds(accountId);
 
-    const discoveredDriveIds = new Set(discoveredFiles.map((f) => f.driveFileId));
     let indexedCount = 0;
     let conflictsDetected = 0;
     let indexedActiveBytes = 0;
@@ -455,7 +528,7 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
         }
       }
 
-      for (const driveFileId of discoveredDriveIds) {
+      for (const driveFileId of stampedDiscoveredDriveIds) {
         if (pendingDbDriveIds.has(driveFileId)) {
           getDeletePendingDriveSyncStmt().run(accountId, driveFileId);
         }
@@ -471,6 +544,12 @@ async function executeColdReconciliation(accountId: string): Promise<ColdSyncRep
 
       for (const f of discoveredFiles) {
         if (pendingOutboxDeleteIds.has(f.driveFileId) || pendingOutboxDriveIds.has(f.driveFileId)) {
+          continue;
+        }
+        if (
+          !stampedDiscoveredDriveIds.has(f.driveFileId) &&
+          (pendingAppPropertyDriveIds.has(f.driveFileId) || pendingDbDriveIds.has(f.driveFileId))
+        ) {
           continue;
         }
         const status = upsertFileRecord(f);
