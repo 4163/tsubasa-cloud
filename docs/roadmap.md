@@ -171,6 +171,7 @@ flowchart TD
   - Create client ID with Application Type: **Desktop app** (not Web app).
   - Eliminates `redirect_uri_mismatch` errors on loopback/localhost ports without requiring pre-registered URIs in Google Cloud Console.
   - A single Desktop OAuth Client ID authorizes multiple personal Google accounts.
+  - Step by step guidelines per console.cloud.google.com surfaces. (see and decide if screenshots is the better call) 
 
 ### Phase 3: Storage pool and folder-cohesion placement
 - [x] Build dynamic headroom calculator enforcing the 750 MB buffer.
@@ -198,20 +199,21 @@ flowchart TD
   - Extract scale-adaptive sprite geometry, dither palettes, and bubble physics from Hanekawa (`docs/teardowns/hanekawa.md`).
   - Extract 20px table row metrics, panel docking ranges, and sage-mint tokens from QuiviT (`docs/teardowns/quivit-sage-mint.md`).
   - Formulate StyleX design systems (color tokens, AAA contrast, spacing scales, dark and light modes in `docs/reference-tokens/tokens.google-drive.stylex.ts`, `docs/reference-tokens/tokens.mega.stylex.ts`, `docs/reference-tokens/tokens.dropbox.stylex.ts`, `docs/reference-tokens/tokens.hanekawa.stylex.ts`, and `docs/reference-tokens/tokens.quivit-sage-mint.stylex.ts`).
-- [~] **Phase 5.2: Application shell and views**
-  - [x] Build main layout shell (sidebar, breadcrumbs, search bar, zero-pop-in theme mode switcher).
-  - [x] Build pool status sidebar (isolated Tsubasa storage meter, per-account headroom cards, 24-hour transfer status).
-  - [x] Build virtualized file explorer table using TanStack Virtual (fixed 32px rows, folder navigation, inline actions).
+- [x] **Phase 5.2: Application shell and views**
+  - [x] Build main layout shell (desktop grid and responsive mobile drawer, breadcrumbs with drop targets, search bar, Bayer dither dividers, zero-pop-in 3-way theme switcher, and single-tab browser lock modal).
+  - [x] Build pool and account sidebar (multi-pool management, Share Pool view, isolated Tsubasa storage meter, per-account headroom cards with masked emails, 24-hour transfer gauges, and account lifecycle modals).
+  - [x] Build virtualized file explorer table using TanStack Virtual (fixed 32px desktop / 64px mobile rows, folder navigation, marquee and keyboard selection, cut/copy/paste, drag-and-drop moves with conflict resolution, rename/new-folder/account-move modals, and inline actions).
   - [x] Build buffer breach warning banners for locked over-ceiling accounts.
-  - [~] Build drag-and-drop upload drawer with allocation preview and transfer progress bars.
-  - [~] Build external modification notification drawer with "Accept into Tsubasa", "Move to root", and "Rebalance" actions.
-  - [~] Build trash management modal with restore and purge actions.
+  - [x] Build drag-and-drop upload drawer with file and folder staging, virtualized queue, allocation preview, 14.25 GB ceiling checks, and transfer progress bars.
+  - [x] Build external modification drawer with discrepancy review (over-ceiling "Accept into Tsubasa" and "Move to root", path conflicts, unindexed/modified/missing-remote items, and account rebalance).
+  - [x] Build trash view and permanent purge confirmation modal with single/batch restore and purge actions.
+  - [x] Build Share Pool workflow and share modal for copying selected items into public Drive batch folders.
 
 ### Phase 6: Durability verification and performance tuning
-- [ ] Benchmark local SQLite query latency under 100,000 file records.
-- [ ] Test cold recovery by wiping the local SQLite file and rebuilding state from Drive accounts.
-- [ ] Verify handling of expired tokens, revoked access, and quota limits.
-- [ ] Validate DOM frame rate during rapid virtualized scrolling.
+- [x] Benchmark local SQLite query latency under 100,000 file records.
+- [x] Test cold recovery by wiping the local SQLite file and rebuilding state from Drive accounts.
+- [x] Verify handling of expired tokens, revoked access, and quota limits.
+- [x] Validate DOM frame rate during rapid virtualized scrolling.
 
 ### Phase 7: Electron desktop packaging
 - [ ] Implement Electron main process to launch the background Hono service on a private port.
