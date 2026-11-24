@@ -187,19 +187,24 @@ export interface PoolFolderAffinityMap {
   recordAssignment(virtualPath: string, accountId: string): void;
 }
 
+function normalizeAffinityDirectory(startDir: string): string {
+  if (!startDir || startDir === '.') return '';
+  return startDir.replace(/\/+$/, '') || '/';
+}
+
 function getAffinityAccountsForDirectory(
   dirCounts: Map<string, Map<string, number>>,
   startDir: string
 ): string[] {
-  let currentDir = startDir;
-  while (currentDir && currentDir !== '.') {
+  let currentDir = normalizeAffinityDirectory(startDir);
+  // Stop before '/' so root-level files and new top-level folders fall back to Best-Fit.
+  while (currentDir && currentDir !== '.' && currentDir !== '/') {
     const accountCounts = dirCounts.get(currentDir);
     if (accountCounts && accountCounts.size > 0) {
       return Array.from(accountCounts.entries())
         .sort((a, b) => b[1] - a[1])
         .map(([accountId]) => accountId);
     }
-    if (currentDir === '/') break;
     currentDir = path.posix.dirname(currentDir);
   }
   return [];
@@ -211,7 +216,7 @@ function incrementDirectoryCounts(
   accountId: string
 ): void {
   let currentDir = path.posix.dirname(virtualPath);
-  while (currentDir && currentDir !== '.') {
+  while (currentDir && currentDir !== '.' && currentDir !== '/') {
     let accountCounts = dirCounts.get(currentDir);
     if (!accountCounts) {
       accountCounts = new Map<string, number>();
@@ -219,7 +224,6 @@ function incrementDirectoryCounts(
     }
     accountCounts.set(accountId, (accountCounts.get(accountId) ?? 0) + 1);
 
-    if (currentDir === '/') break;
     currentDir = path.posix.dirname(currentDir);
   }
 }
@@ -255,9 +259,10 @@ export async function findFolderAffinityAccountsForDirectory(
   startDir: string,
   poolId = 1
 ): Promise<string[]> {
-  let currentDir = startDir;
+  let currentDir = normalizeAffinityDirectory(startDir);
 
-  while (currentDir && currentDir !== '.') {
+  // Stop before '/' to avoid full-pool prefix scans and keep root/new top-level folders on Best-Fit.
+  while (currentDir && currentDir !== '.' && currentDir !== '/') {
     const { lower, upper } = buildDirectoryPrefixBounds(currentDir);
 
     const affinityRows = await db
@@ -281,7 +286,6 @@ export async function findFolderAffinityAccountsForDirectory(
       return affinityRows.map((r) => r.accountId);
     }
 
-    if (currentDir === '/') break;
     currentDir = path.posix.dirname(currentDir);
   }
 
