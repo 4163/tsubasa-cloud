@@ -111,6 +111,86 @@ interface DupesResponse {
 }
 
 const VALID_OUTBOX_STATUSES = new Set(['pending', 'processing', 'failed', 'dead']);
+const COLD_SYNC_HYDRATION_CONCURRENCY = 4;
+
+interface SyncAccountSummary {
+  accountId: string;
+  authorized: boolean;
+  poolId: number;
+}
+
+interface HydratedAccountResult {
+  accountId: string;
+  email: string;
+  poolId: number;
+  rootFolderId: string;
+}
+
+interface ColdSyncAccountError {
+  accountRef: string;
+  accountId: string;
+  error: string;
+}
+
+async function hydrateAccountsBounded(
+  ctx: CliContext,
+  accountsToHydrate: readonly SyncAccountSummary[]
+): Promise<{
+  hydrated: HydratedAccountResult[];
+  errors: ColdSyncAccountError[];
+}> {
+  const results: Array<{ ok: true; data: HydratedAccountResult } | { ok: false; error: ColdSyncAccountError }> =
+    new Array(accountsToHydrate.length);
+  let nextIndex = 0;
+
+  const workerCount = Math.min(COLD_SYNC_HYDRATION_CONCURRENCY, accountsToHydrate.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < accountsToHydrate.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const acc = accountsToHydrate[index];
+        try {
+          // Omit ?poolId so hydrateAccount discovers each account's actual Drive pool folder
+          // without retargeting empty non-Pool-1 folders to Pool 1.
+          const data = await ctx.transport.requestJson<HydratedAccountResult>(
+            `/api/accounts/hydrate/${encodeURIComponent(acc.accountId)}`,
+            { method: 'POST' }
+          );
+          results[index] = { ok: true, data };
+        } catch (err) {
+          results[index] = {
+            ok: false,
+            error: {
+              accountRef: toAccountRef(acc.accountId),
+              accountId: acc.accountId,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+    })
+  );
+
+  const hydrated: HydratedAccountResult[] = [];
+  const errors: ColdSyncAccountError[] = [];
+  const seenAccountIds = new Set<string>();
+
+  for (const entry of results) {
+    if (!entry) continue;
+    if (!entry.ok) {
+      errors.push(entry.error);
+      continue;
+    }
+    if (seenAccountIds.has(entry.data.accountId)) {
+      continue;
+    }
+    seenAccountIds.add(entry.data.accountId);
+    hydrated.push(entry.data);
+  }
+
+  return { hydrated, errors };
+}
 
 export async function handleTrash(ctx: CliContext, args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
@@ -254,8 +334,25 @@ export async function handleSync(ctx: CliContext, args: string[]): Promise<void>
     });
   }
 
+  let accountFlagSelector: string | undefined;
   const positionals: string[] = [];
-  for (const token of rest) {
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i];
+    if (token === '--account') {
+      accountFlagSelector = readFlagValue(rest, i, '--account').trim();
+      i += 1;
+      continue;
+    }
+    if (token.startsWith('--account=')) {
+      const value = token.slice('--account='.length).trim();
+      if (!value) {
+        throw new CliError('USAGE_ERROR', 'Flag --account requires a non-empty value.', {
+          exitCode: EXIT_CODES.USAGE,
+        });
+      }
+      accountFlagSelector = value;
+      continue;
+    }
     if (token.startsWith('-')) {
       throw new CliError('USAGE_ERROR', `Unknown flag '${token}' for sync ${subcommand}.`, {
         exitCode: EXIT_CODES.USAGE,
@@ -263,14 +360,15 @@ export async function handleSync(ctx: CliContext, args: string[]): Promise<void>
     }
     positionals.push(token);
   }
-  if (positionals.length > 1) {
+  if (positionals.length > 1 || (positionals.length === 1 && accountFlagSelector)) {
     throw new CliError('USAGE_ERROR', `Usage: tsubasa sync ${subcommand} [account]`, {
       exitCode: EXIT_CODES.USAGE,
     });
   }
 
-  if (positionals.length === 1) {
-    const acc = await resolveAccountArg(ctx, positionals[0]);
+  const accountSelector = accountFlagSelector ?? positionals[0];
+  if (accountSelector) {
+    const acc = await resolveAccountArg(ctx, accountSelector);
     const masked = ctx.flags.showEmails ? acc.email : maskEmail(acc.email);
 
     if (ctx.flags.dryRun) {
@@ -287,31 +385,54 @@ export async function handleSync(ctx: CliContext, args: string[]): Promise<void>
       return;
     }
 
-    const endpoint =
-      subcommand === 'delta'
-        ? `/api/sync/${encodeURIComponent(acc.accountId)}`
-        : `/api/sync/${encodeURIComponent(acc.accountId)}/cold`;
-    const report = await ctx.transport.requestJson<Record<string, unknown>>(endpoint, {
-      method: 'POST',
-    });
+    if (subcommand === 'cold') {
+      if (!acc.authorized) {
+        throw new CliError(
+          'AUTH_ERROR',
+          `Account ${acc.accountRef} (${masked}) is not authorized.`,
+          { exitCode: EXIT_CODES.AUTH_UPSTREAM }
+        );
+      }
+      const hydrated = await ctx.transport.requestJson<HydratedAccountResult>(
+        `/api/accounts/hydrate/${encodeURIComponent(acc.accountId)}`,
+        { method: 'POST' }
+      );
+      const canonicalRef = toAccountRef(hydrated.accountId);
+      const canonicalMasked = ctx.flags.showEmails ? hydrated.email : maskEmail(hydrated.email);
+      const report = await ctx.transport.requestJson<Record<string, unknown>>(
+        `/api/sync/${encodeURIComponent(hydrated.accountId)}/cold`,
+        { method: 'POST' }
+      );
+      emitSuccess(
+        ctx,
+        { mode: 'cold', accountRef: canonicalRef, accountId: hydrated.accountId, report },
+        `Completed cold sync for ${canonicalRef} (${canonicalMasked}).`
+      );
+      return;
+    }
+
+    const report = await ctx.transport.requestJson<Record<string, unknown>>(
+      `/api/sync/${encodeURIComponent(acc.accountId)}`,
+      { method: 'POST' }
+    );
     emitSuccess(
       ctx,
-      { mode: subcommand, accountRef: acc.accountRef, accountId: acc.accountId, report },
-      `Completed ${subcommand} sync for ${acc.accountRef} (${masked}).`
+      { mode: 'delta', accountRef: acc.accountRef, accountId: acc.accountId, report },
+      `Completed delta sync for ${acc.accountRef} (${masked}).`
     );
     return;
   }
 
-  const pool = await resolvePoolArg(ctx);
-  if (pool.isSharePool) {
-    throw new CliError(
-      'SHARE_POOL_READ_ONLY',
-      `Sync ${subcommand} is disabled on Share Pool '${pool.slug}'.`,
-      { exitCode: EXIT_CODES.CONFLICT }
-    );
-  }
-
   if (subcommand === 'delta') {
+    const pool = await resolvePoolArg(ctx);
+    if (pool.isSharePool) {
+      throw new CliError(
+        'SHARE_POOL_READ_ONLY',
+        `Sync delta is disabled on Share Pool '${pool.slug}'.`,
+        { exitCode: EXIT_CODES.CONFLICT }
+      );
+    }
+
     if (ctx.flags.dryRun) {
       emitSuccess(
         ctx,
@@ -358,12 +479,19 @@ export async function handleSync(ctx: CliContext, args: string[]): Promise<void>
     return;
   }
 
-  const accountsRes = await ctx.transport.requestJson<{
-    accounts: Array<{ accountId: string; authorized: boolean; poolId: number }>;
-  }>(`/api/accounts?poolId=${pool.id}`);
-  const authorizedAccounts = (accountsRes.accounts ?? []).filter((a) => a.authorized);
-
   if (ctx.flags.dryRun) {
+    const pool = await resolvePoolArg(ctx);
+    if (pool.isSharePool) {
+      throw new CliError(
+        'SHARE_POOL_READ_ONLY',
+        `Sync cold is disabled on Share Pool '${pool.slug}'.`,
+        { exitCode: EXIT_CODES.CONFLICT }
+      );
+    }
+    const accountsRes = await ctx.transport.requestJson<{ accounts: SyncAccountSummary[] }>(
+      `/api/accounts?poolId=${pool.id}`
+    );
+    const authorizedAccounts = (accountsRes.accounts ?? []).filter((a) => a.authorized);
     emitSuccess(
       ctx,
       {
@@ -381,10 +509,147 @@ export async function handleSync(ctx: CliContext, args: string[]): Promise<void>
     return;
   }
 
-  const reports: Array<{ accountRef: string; accountId: string; report: unknown }> = [];
-  const errors: Array<{ accountRef: string; accountId: string; error: string }> = [];
+  const hasExplicitPoolSelector = Boolean(
+    ctx.flags.pool?.trim() || process.env.TSUBASA_POOL?.trim()
+  );
+  const initialPoolsRes = await ctx.transport.requestJson<{ pools: PoolInfo[] }>('/api/pools');
+  const initialPools = initialPoolsRes.pools ?? [];
+  const isColdDb = initialPools.every((p) => p.accountCount === 0);
 
-  for (const acc of authorizedAccounts) {
+  if (!hasExplicitPoolSelector && isColdDb) {
+    const allAccountsRes = await ctx.transport.requestJson<{ accounts: SyncAccountSummary[] }>(
+      '/api/accounts'
+    );
+    const authorizedAccounts = (allAccountsRes.accounts ?? []).filter((a) => a.authorized);
+    const { hydrated, errors } = await hydrateAccountsBounded(ctx, authorizedAccounts);
+
+    const postPoolsRes = await ctx.transport.requestJson<{ pools: PoolInfo[] }>('/api/pools');
+    const postPools = postPoolsRes.pools ?? [];
+    const standardPools = postPools.filter((p) => !p.isSharePool);
+    const standardPoolById = new Map(standardPools.map((p) => [p.id, p]));
+    const targets = hydrated.filter((acc) => standardPoolById.has(acc.poolId));
+
+    const poolStats = new Map<
+      number,
+      { poolId: number; poolSlug: string; completed: number; errors: number }
+    >();
+    for (const pool of standardPools) {
+      if (targets.some((acc) => acc.poolId === pool.id)) {
+        poolStats.set(pool.id, { poolId: pool.id, poolSlug: pool.slug, completed: 0, errors: 0 });
+      }
+    }
+
+    const reports: Array<{ accountRef: string; accountId: string; report: unknown }> = [];
+    for (const acc of targets) {
+      const stat = poolStats.get(acc.poolId)!;
+      try {
+        const report = await ctx.transport.requestJson(
+          `/api/sync/${encodeURIComponent(acc.accountId)}/cold`,
+          { method: 'POST' }
+        );
+        reports.push({
+          accountRef: toAccountRef(acc.accountId),
+          accountId: acc.accountId,
+          report,
+        });
+        stat.completed += 1;
+      } catch (err) {
+        errors.push({
+          accountRef: toAccountRef(acc.accountId),
+          accountId: acc.accountId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        stat.errors += 1;
+      }
+    }
+
+    const recoveredPools = Array.from(poolStats.values());
+    if (recoveredPools.length > 1) {
+      const primary = recoveredPools[0];
+      emitSuccess(
+        ctx,
+        {
+          mode: 'cold',
+          poolId: primary.poolId,
+          poolSlug: primary.poolSlug,
+          pools: recoveredPools,
+          reports,
+          errors,
+        },
+        `Cold sync across ${recoveredPools.length} pool(s) (${recoveredPools.map((p) => p.poolSlug).join(', ')}): completed ${reports.length} account(s), errors=${errors.length}.`
+      );
+      return;
+    }
+
+    const targetPool =
+      recoveredPools.length === 1
+        ? standardPoolById.get(recoveredPools[0].poolId)!
+        : await resolvePoolArg(ctx);
+    emitSuccess(
+      ctx,
+      { mode: 'cold', poolId: targetPool.id, poolSlug: targetPool.slug, reports, errors },
+      `Cold sync for pool '${targetPool.slug}': completed ${reports.length} account(s), errors=${errors.length}.`
+    );
+    return;
+  }
+
+  let hydratedAll: HydratedAccountResult[] | null = null;
+  let hydrationErrors: ColdSyncAccountError[] = [];
+  let pool: PoolInfo;
+
+  if (hasExplicitPoolSelector && isColdDb) {
+    const allAccountsRes = await ctx.transport.requestJson<{ accounts: SyncAccountSummary[] }>(
+      '/api/accounts'
+    );
+    const authorizedAll = (allAccountsRes.accounts ?? []).filter((a) => a.authorized);
+    const hydratedRes = await hydrateAccountsBounded(ctx, authorizedAll);
+    hydratedAll = hydratedRes.hydrated;
+    hydrationErrors = hydratedRes.errors;
+    pool = await resolvePoolArg(ctx);
+  } else {
+    try {
+      pool = await resolvePoolArg(ctx);
+    } catch (err) {
+      if (hasExplicitPoolSelector && err instanceof CliError && err.code === 'POOL_NOT_FOUND') {
+        const allAccountsRes = await ctx.transport.requestJson<{ accounts: SyncAccountSummary[] }>(
+          '/api/accounts'
+        );
+        const authorizedAll = (allAccountsRes.accounts ?? []).filter((a) => a.authorized);
+        const hydratedRes = await hydrateAccountsBounded(ctx, authorizedAll);
+        hydratedAll = hydratedRes.hydrated;
+        hydrationErrors = hydratedRes.errors;
+        pool = await resolvePoolArg(ctx);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  if (pool.isSharePool) {
+    throw new CliError(
+      'SHARE_POOL_READ_ONLY',
+      `Sync cold is disabled on Share Pool '${pool.slug}'.`,
+      { exitCode: EXIT_CODES.CONFLICT }
+    );
+  }
+
+  let targets: HydratedAccountResult[];
+  if (hydratedAll !== null) {
+    targets = hydratedAll.filter((acc) => acc.poolId === pool.id);
+  } else {
+    const accountsRes = await ctx.transport.requestJson<{ accounts: SyncAccountSummary[] }>(
+      `/api/accounts?poolId=${pool.id}`
+    );
+    const authorizedPoolAccounts = (accountsRes.accounts ?? []).filter((a) => a.authorized);
+    const hydratedRes = await hydrateAccountsBounded(ctx, authorizedPoolAccounts);
+    hydrationErrors = hydratedRes.errors;
+    targets = hydratedRes.hydrated.filter((acc) => acc.poolId === pool.id);
+  }
+
+  const reports: Array<{ accountRef: string; accountId: string; report: unknown }> = [];
+  const errors: ColdSyncAccountError[] = [...hydrationErrors];
+
+  for (const acc of targets) {
     try {
       const report = await ctx.transport.requestJson(
         `/api/sync/${encodeURIComponent(acc.accountId)}/cold`,
