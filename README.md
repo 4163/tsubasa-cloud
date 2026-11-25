@@ -52,9 +52,11 @@ npm run build:cli && npm link   # Install `tsubasa` globally on PATH
 ```bash
 npm run dev:server   # Start Hono backend with watch reload (PORT defaults to 3000)
 npm run dev:web      # Start Vite dev server on port 5173
+npm run dev:electron # Build web, server, and Electron shell, then launch desktop app
 npm run typecheck    # Run TypeScript check
 npm run build        # Typecheck, build frontend, and compile server
 npm run build:cli    # Compile the CLI to dist/cli/index.js
+npm run package:win  # Package Windows NSIS installer and portable zip into release/
 ```
 
 Architecture notes and styling rules live in [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md).
@@ -70,6 +72,7 @@ Architecture notes and styling rules live in [docs/roadmap.md](docs/roadmap.md),
 | **Backend** | [Hono](https://hono.dev) / [`@hono/node-server`](https://github.com/honojs/node-server) | Local HTTP API, streaming proxy, and typed RPC |
 | **Database** | [SQLite](https://www.sqlite.org) / [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) / [Drizzle ORM](https://orm.drizzle.team) | WAL-mode catalog, transfer ledger, outbox, and job state |
 | **Google Drive** | [`googleapis`](https://github.com/googleapis/google-api-nodejs-client) | OAuth 2.0 client pool and Drive v3 API |
+| **Desktop** | [Electron](https://www.electronjs.org) / [`electron-builder`](https://www.electron.build) | Windows desktop shell, tray lifecycle, NSIS installer, and portable zip |
 | **CLI and runtime** | [Node.js](https://nodejs.org) / [`tsx`](https://tsx.is) / [`dotenv`](https://github.com/motdotla/dotenv) | Server execution, TypeScript CLI runner, and `.env` loading |
 
 ## Project structure
@@ -78,12 +81,14 @@ Architecture notes and styling rules live in [docs/roadmap.md](docs/roadmap.md),
 tsubasa-cloud/
 ├─ src/
 │  ├─ client/      # React 19 + StyleX UI, virtualized table, Hono RPC client
+│  ├─ electron/    # Electron main process, preload bridge, tray, and server host
 │  ├─ server/
 │  │  ├─ db/       # SQLite WAL connection, Drizzle schema, runtime migrations
 │  │  ├─ drive/    # OAuth pool, delta sync, outbox, streaming transfers, sharing
 │  │  ├─ routes/   # Hono API routes
 │  │  └─ storage/  # Headroom math, folder-cohesion placement, catalog export
 │  └─ cli/         # `tsubasa` CLI commands, transport routing, extension runner
+├─ build/          # Desktop icons and NSIS installer include
 ├─ extensions/     # Extension contract docs and local subprocess extensions
 ├─ docs/           # Roadmap, styling guide, UI teardowns, brand assets
 ├─ .oauths/        # OAuth client credentials and *.tokens.json (gitignored)

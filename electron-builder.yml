@@ -1,0 +1,48 @@
+appId: com.tsubasa.cloud
+productName: Tsubasa~ Cloud
+
+directories:
+  buildResources: build
+  output: release
+
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+
+npmRebuild: true
+
+# Explicit inclusions prevent local credentials, SQLite data, docs, and source files
+# from entering app.asar while still shipping build/icon.{ico,png} for the tray icon.
+files:
+  - dist/**/*
+  - package.json
+  - from: build
+    to: build
+    filter:
+      - icon.ico
+      - icon.png
+  - "!**/*.map"
+
+win:
+  icon: build/icon.ico
+  signAndEditExecutable: true
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Tsubasa~ Cloud
+  deleteAppDataOnUninstall: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  include: build/installer.nsh
