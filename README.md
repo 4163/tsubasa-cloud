@@ -116,8 +116,8 @@ tsubasa-cloud/
 
 ## Attributions
 
-- Icons: [Lucide](https://lucide.dev) and [Material Icons](https://fonts.google.com/icons)
 - Brand filter: [Vayce Comic Book Effect (Manga Ink)](https://vayce.app/tools/comic-book-effect/?profile=manga-ink&finish=0&str=0)
+- Icons: [Lucide](https://lucide.dev) and [Material Icons](https://fonts.google.com/icons)
 - Fonts: [Montserrat](https://fonts.google.com/specimen/Montserrat) and [Pixelify Sans](https://fonts.google.com/specimen/Pixelify+Sans)
 
 ## License
