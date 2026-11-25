@@ -20,7 +20,7 @@ tsubasa <command>
 
 ## Transport and locking
 
-By default, the CLI probes `GET /api/health` on `http://127.0.0.1:${PORT:-3000}` with a 250 ms timeout and routes over HTTP when `service === "tsubasa-backend"` and `dbFingerprint` matches the local database path hash.
+By default, the CLI reads the bound `port` recorded in `data/tsubasa.writer.lock` if present and probes `GET /api/health` there alongside `http://127.0.0.1:${PORT:-28300}` with a 250 ms timeout. Reading the lockfile lets the CLI find an Electron-hosted server even when it falls back to an ephemeral port. The CLI routes over HTTP when `service === "tsubasa-backend"` and `dbFingerprint` matches the local database path hash.
 
 - `--server <url>` or `TSUBASA_API_URL`: skip the `dbFingerprint` check and fail fast with exit code `5` if unreachable, with no local fallback.
 - `--local`: skip HTTP probing and run standalone in-process against SQLite and Drive.

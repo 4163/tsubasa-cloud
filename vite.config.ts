@@ -1,9 +1,18 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import stylexPlugin from 'unplugin-stylex/vite';
+import fs from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_SERVER_PORT, DEFAULT_WEB_DEV_PORT } from './src/server/ports.js';
+
+const pkg = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, './package.json'), 'utf8'),
+) as { version: string };
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     stylexPlugin({
       stylex: {
@@ -43,13 +52,13 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: DEFAULT_WEB_DEV_PORT,
     fs: {
       strict: false,
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: `http://localhost:${DEFAULT_SERVER_PORT}`,
         changeOrigin: true,
       },
     },

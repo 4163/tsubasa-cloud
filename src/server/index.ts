@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { serve, type ServerType } from '@hono/node-server';
 import { acquireWriterLock, WriterLockError, type WriterLockHandle } from './lock.js';
 import { getPackageRootDir, setTsubasaHomeOverride } from './paths.js';
+import { getDefaultServerPort } from './ports.js';
 import type { AuthCompletedEvent } from './routes/accounts.js';
 
 export interface StartTsubasaServerOptions {
@@ -165,10 +166,7 @@ export async function startTsubasaServer(
     onAuthCompleted: options.onAuthCompleted,
   });
 
-  const rawEnvPort = process.env.PORT?.trim();
-  const parsedEnvPort = rawEnvPort ? Number(rawEnvPort) : NaN;
-  const preferredPort =
-    options.port ?? (Number.isInteger(parsedEnvPort) && parsedEnvPort >= 0 ? parsedEnvPort : 3000);
+  const preferredPort = options.port ?? getDefaultServerPort(true);
   const hostname = options.hostname?.trim() || undefined;
   const fallbackToEphemeralPort = options.fallbackToEphemeralPort ?? false;
 
@@ -193,6 +191,7 @@ export async function startTsubasaServer(
   }
 
   const { server, port: boundPort, hostname: boundHostname } = bound;
+  writerLock.updateMetadata({ port: boundPort, hostname: boundHostname });
   const url = formatServerUrl(boundHostname, boundPort);
 
   console.log(`Tsubasa server listening on ${url}`);

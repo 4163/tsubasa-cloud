@@ -22,6 +22,7 @@ import {
   invalidatePooledStorageOverview,
 } from '../storage/index.js';
 import { refreshAccountLiveQuota } from '../drive/client.js';
+import { DEFAULT_SERVER_PORT, getDefaultWebDevUrl } from '../ports.js';
 import {
   INVALID_POOL_ID_ERROR,
   parseStrictPoolId,
@@ -382,8 +383,8 @@ export function createAccountsRouter(options: AccountsRouterOptions = {}) {
         ? envClientUrl
         : options.serveStatic
           ? url.origin
-          : url.port === '3000'
-            ? 'http://localhost:5173'
+          : url.port === String(DEFAULT_SERVER_PORT)
+            ? getDefaultWebDevUrl()
             : url.origin;
       return c.redirect(
         `${clientOrigin}/?auth=success&account=${encodeURIComponent(hydRes.accountId)}&poolId=${hydRes.poolId}&conflicts=${conflictsCount}`
