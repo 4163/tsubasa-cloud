@@ -247,6 +247,7 @@ export const CLI_HELP_SCHEMA: CliHelpSchema = {
           flags: [
             { name: '--evacuate', description: 'Evacuate stored files before removing the account.' },
             { name: '--wait', description: 'Wait for evacuation and removal to finish.' },
+            { name: '--detach', description: 'Queue evacuation and removal and return jobId immediately (HTTP mode only).' },
           ],
         },
       ],
