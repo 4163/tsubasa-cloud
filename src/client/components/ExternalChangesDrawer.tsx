@@ -680,7 +680,7 @@ export function ExternalChangesDrawer({
         return (
           <div {...stylex.props(styles.sectionSubBar)}>
             <p {...stylex.props(styles.cardDesc)}>
-              Files between 14.25 GB and 15 GB breach the 750 MB reserve ceiling. Accept into Tsubasa or eject outside the Tsubasa pool folder to preserve incoming email delivery.
+              Files over 14.25 GB exceed the single-file ceiling and cannot be indexed into Tsubasa. Eject them to Drive root to keep them outside the pool folder.
             </p>
           </div>
         );
@@ -709,13 +709,6 @@ export function ExternalChangesDrawer({
             </div>
 
             <div {...stylex.props(styles.actionsRow)}>
-              <DrawerButton
-                variant="primary"
-                onClick={() => handleAccept(item)}
-                disabled={isLocked}
-              >
-                Accept (Over-ceiling)
-              </DrawerButton>
               <DrawerButton
                 variant="danger"
                 onClick={() => handleMoveToRoot(item)}
