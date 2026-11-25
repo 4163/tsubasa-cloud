@@ -97,20 +97,21 @@ Each launch mode resolves one `<homeDir>` holding `.oauths/` and `data/tsubasa.d
 ```text
 tsubasa-cloud/
 ├─ src/
-│  ├─ client/      # React 19 + StyleX UI, virtualized table, Hono RPC client
-│  ├─ electron/    # Electron main process, preload bridges, tray menu, server host
+│  ├─ client/             # React 19 + StyleX UI, virtualized table, Hono RPC client
+│  ├─ electron/           # Electron main process, preload bridges, tray menu, server host
 │  ├─ server/
-│  │  ├─ db/       # SQLite WAL connection, Drizzle schema, runtime migrations
-│  │  ├─ drive/    # OAuth pool, delta sync, outbox, transfers, sharing, discrepancies
-│  │  ├─ routes/   # Hono API route modules
-│  │  └─ storage/  # Headroom math, folder-cohesion placement, catalog export
-│  └─ cli/         # tsubasa CLI commands, transport routing, extension runner
-├─ scripts/        # Dev runner, static start wrapper, Windows packaging script
-├─ build/          # Desktop icons and NSIS installer include
-├─ extensions/     # Extension contract docs and local subprocess extensions
-├─ docs/           # Roadmap, styling guide, UI teardowns, brand assets
-├─ .oauths/        # OAuth client credentials and *.tokens.json (gitignored)
-├─ data/           # Local SQLite database and runtime state (gitignored)
+│  │  ├─ db/              # SQLite WAL connection, Drizzle schema, runtime migrations
+│  │  ├─ drive/           # OAuth pool, delta sync, outbox, transfers, sharing, discrepancies
+│  │  ├─ routes/          # Hono API route modules
+│  │  └─ storage/         # Headroom math, folder-cohesion placement, catalog export
+│  └─ cli/                # tsubasa CLI commands, transport routing, extension runner
+├─ site/ (orphan branch)  # Static homepage and data policy
+├─ scripts/               # Dev runner, static start wrapper, Windows packaging script
+├─ build/                 # Desktop icons and NSIS installer include
+├─ extensions/            # Extension contract docs and local subprocess extensions
+├─ docs/                  # Roadmap, styling guide, UI teardowns, brand assets
+├─ .oauths/               # OAuth client credentials and *.tokens.json (gitignored)
+├─ data/                  # Local SQLite database and runtime state (gitignored)
 └─ package.json
 ```
 

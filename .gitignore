@@ -29,3 +29,7 @@ venv/
 
 .agents/frontend-audit/**/*.png
 .agents/frontend-audit/*.json
+
+# Static website lives on the dedicated orphan 'site' branch.
+# Ignore the local site/ worktree so it stays untracked on application branches.
+site/
