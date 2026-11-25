@@ -5,9 +5,11 @@ import {
 } from '../server/paths.js';
 import {
   acquireWriterLock,
+  readWriterLock,
   WriterLockError,
   type WriterLockHandle,
 } from '../server/lock.js';
+import { getDefaultServerPort, isValidPort } from '../server/ports.js';
 import { CliError, EXIT_CODES, mapErrorCodeToExitCode } from './lib/errors.js';
 
 export interface TransportOptions {
@@ -43,8 +45,36 @@ function normalizeBaseUrl(rawUrl: string): string {
 }
 
 function getDefaultServerUrl(): string {
-  const port = process.env.PORT?.trim() || '3000';
-  return `http://127.0.0.1:${port}`;
+  return `http://127.0.0.1:${getDefaultServerPort()}`;
+}
+
+function getAutoProbeCandidateUrls(writerLockPath: string): string[] {
+  const defaultUrl = getDefaultServerUrl();
+  const lockPort = readWriterLock(writerLockPath)?.port;
+  const lockUrl = isValidPort(lockPort) ? `http://127.0.0.1:${lockPort}` : null;
+  const hasExplicitEnvPort = Boolean(process.env.PORT?.trim());
+
+  const ordered = hasExplicitEnvPort ? [defaultUrl, lockUrl] : [lockUrl, defaultUrl];
+  const unique: string[] = [];
+  for (const url of ordered) {
+    if (url && !unique.includes(url)) {
+      unique.push(url);
+    }
+  }
+  return unique;
+}
+
+async function probeAutoServer(
+  writerLockPath: string,
+  expectedFingerprint: string
+): Promise<string | null> {
+  for (const candidateUrl of getAutoProbeCandidateUrls(writerLockPath)) {
+    const probe = await probeHealth(candidateUrl, AUTO_PROBE_TIMEOUT_MS);
+    if (probe.ok && probe.dbFingerprint === expectedFingerprint) {
+      return candidateUrl;
+    }
+  }
+  return null;
 }
 
 async function probeHealth(
@@ -210,11 +240,10 @@ export async function createProbeOnlyTransport(
     mode = 'http';
     serverUrl = explicitUrl;
   } else if (!options.local) {
-    const defaultServerUrl = getDefaultServerUrl();
-    const probe = await probeHealth(defaultServerUrl, AUTO_PROBE_TIMEOUT_MS);
-    if (probe.ok && probe.dbFingerprint === dbFingerprint) {
+    const discoveredUrl = await probeAutoServer(paths.writerLockPath, dbFingerprint);
+    if (discoveredUrl) {
       mode = 'http';
-      serverUrl = defaultServerUrl;
+      serverUrl = discoveredUrl;
     }
   }
 
@@ -269,11 +298,10 @@ export async function createCliTransport(options: TransportOptions = {}): Promis
     return createHttpTransport(explicitUrl, paths.homeDir, paths.dbPath, dbFingerprint);
   }
 
-  const defaultServerUrl = getDefaultServerUrl();
   if (!options.local) {
-    const probe = await probeHealth(defaultServerUrl, AUTO_PROBE_TIMEOUT_MS);
-    if (probe.ok && probe.dbFingerprint === dbFingerprint) {
-      return createHttpTransport(defaultServerUrl, paths.homeDir, paths.dbPath, dbFingerprint);
+    const discoveredUrl = await probeAutoServer(paths.writerLockPath, dbFingerprint);
+    if (discoveredUrl) {
+      return createHttpTransport(discoveredUrl, paths.homeDir, paths.dbPath, dbFingerprint);
     }
   }
 
@@ -299,9 +327,9 @@ export async function createCliTransport(options: TransportOptions = {}): Promis
       if (err instanceof WriterLockError) {
         // If a server finished binding HTTP right after our initial probe, forward to it.
         if (!options.local) {
-          const recheck = await probeHealth(defaultServerUrl, AUTO_PROBE_TIMEOUT_MS);
-          if (recheck.ok && recheck.dbFingerprint === dbFingerprint) {
-            return createHttpTransport(defaultServerUrl, paths.homeDir, paths.dbPath, dbFingerprint);
+          const discoveredUrl = await probeAutoServer(paths.writerLockPath, dbFingerprint);
+          if (discoveredUrl) {
+            return createHttpTransport(discoveredUrl, paths.homeDir, paths.dbPath, dbFingerprint);
           }
         }
         throw new CliError('WRITER_LOCK_HELD', err.message, {
@@ -316,10 +344,10 @@ export async function createCliTransport(options: TransportOptions = {}): Promis
     // Re-probe once after acquiring the writer lock to close the TOCTOU window
     // against a concurrently starting Tsubasa server.
     if (!options.local) {
-      const recheck = await probeHealth(defaultServerUrl, AUTO_PROBE_TIMEOUT_MS);
-      if (recheck.ok && recheck.dbFingerprint === dbFingerprint) {
+      const discoveredUrl = await probeAutoServer(paths.writerLockPath, dbFingerprint);
+      if (discoveredUrl) {
         releaseWriterLock();
-        return createHttpTransport(defaultServerUrl, paths.homeDir, paths.dbPath, dbFingerprint);
+        return createHttpTransport(discoveredUrl, paths.homeDir, paths.dbPath, dbFingerprint);
       }
     }
   }

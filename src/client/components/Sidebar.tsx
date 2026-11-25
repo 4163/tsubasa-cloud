@@ -148,6 +148,12 @@ const styles = stylex.create({
     gap: '2px',
     minWidth: 0,
   },
+  brandTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+  },
   brandWordmark: {
     fontFamily: typography.fontFamilyBrand,
     fontSize: typography.fontSizeBrand,
@@ -156,6 +162,25 @@ const styles = stylex.create({
     letterSpacing: '0.02em',
     margin: 0,
     lineHeight: '1.2',
+  },
+  brandVersionBadge: {
+    fontFamily: typography.fontFamilyBrand,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: typography.fontWeightBrand,
+    lineHeight: typography.lineHeightBadge,
+    letterSpacing: '0.02em',
+    color: colors.secondaryText,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.compact,
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
   brandSubtitle: {
     fontSize: typography.fontSizeMeta,
@@ -706,7 +731,10 @@ export function Sidebar({
               <img src={brandLogo} alt="Tsubasa" draggable={false} {...stylex.props(styles.brandLogoImage)} />
             </div>
             <div {...stylex.props(styles.brandTitleGroup)}>
-              <h1 {...stylex.props(styles.brandWordmark)}>Tsubasa~</h1>
+              <div {...stylex.props(styles.brandTitleRow)}>
+                <h1 {...stylex.props(styles.brandWordmark)}>Tsubasa~</h1>
+                <span {...stylex.props(styles.brandVersionBadge)}>v{__APP_VERSION__}</span>
+              </div>
               <div {...stylex.props(styles.brandSubtitle)}>Pooled Google Drive Cluster</div>
             </div>
           </div>

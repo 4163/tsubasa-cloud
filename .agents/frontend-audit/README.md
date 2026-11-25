@@ -32,12 +32,12 @@ Run the script with Node 22 or newer from the repository root.
 node .agents/frontend-audit/server.mjs
 ```
 
-Open `http://localhost:4173` in a browser.
+Open `http://localhost:28302` in a browser.
 
 Pass `--dir` or `AUDIT_ROOT` to inspect screenshots stored in another folder, and pass `--port` or `PORT` to change the listening port.
 
 ```powershell
-node .agents/frontend-audit/server.mjs --dir "D:\path\to\captures" --port 4180
+node .agents/frontend-audit/server.mjs --dir "D:\path\to\captures" --port 28303
 ```
 
 The server binds to `127.0.0.1` and uses Node built-in modules only.

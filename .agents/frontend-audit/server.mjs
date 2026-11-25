@@ -12,7 +12,7 @@ function readCliOption(flag) {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const AUDIT_ROOT = path.resolve(readCliOption('--dir') || process.env.AUDIT_ROOT || SCRIPT_DIR);
 const NOTES_FILE = path.join(AUDIT_ROOT, 'audit-notes.json');
-const rawPort = readCliOption('--port') || process.env.PORT || '4173';
+const rawPort = readCliOption('--port') || process.env.PORT || '28302';
 const PORT = Number.parseInt(rawPort, 10);
 if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
   throw new Error(`Invalid port: ${rawPort}`);

@@ -6,6 +6,14 @@ export const THEME_STORAGE_KEY = 'tsubasa-theme-choice';
 export function readThemeChoice(): ThemeChoice {
   if (typeof window === 'undefined') return 'auto';
   try {
+    const desktopChoice = window.tsubasaDesktop?.getThemeChoice?.();
+    if (desktopChoice === 'light' || desktopChoice === 'dark' || desktopChoice === 'auto') {
+      return desktopChoice;
+    }
+  } catch {
+    // Fall through to localStorage if the desktop bridge is unavailable.
+  }
+  try {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
     if (saved === 'light' || saved === 'dark' || saved === 'auto') {
       return saved;

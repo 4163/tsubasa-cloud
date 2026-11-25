@@ -3,7 +3,6 @@ import { flushSync } from 'react-dom';
 import {
   type EffectiveTheme,
   type ThemeChoice,
-  THEME_STORAGE_KEY,
   readInitialTheme,
   readThemeChoice,
   saveThemeChoice,
@@ -17,6 +16,7 @@ export function useThemeChoice() {
 
   const handleThemeChange = useCallback((newTheme: ThemeChoice) => {
     saveThemeChoice(newTheme);
+    window.tsubasaDesktop?.setThemeChoice(newTheme);
     runWithViewTransition(() => {
       flushSync(() => {
         setThemeChoice(newTheme);
@@ -51,13 +51,7 @@ export function useResolvedTheme(): EffectiveTheme {
   const [effectiveTheme, setEffectiveTheme] = useState<EffectiveTheme>(readInitialTheme);
 
   useEffect(() => {
-    let saved: string | null = null;
-    try {
-      saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-    } catch {
-      saved = null;
-    }
-
+    const saved = readThemeChoice();
     if (saved === 'light' || saved === 'dark') {
       setEffectiveTheme(saved);
       applyDocumentTheme(saved);

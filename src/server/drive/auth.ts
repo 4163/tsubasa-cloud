@@ -5,6 +5,7 @@ import type { OAuth2Client, Credentials } from 'google-auth-library';
 import dotenv from 'dotenv';
 import { renameAccountInDb } from '../db/index.js';
 import { resolveOAuthsDir } from '../paths.js';
+import { getDefaultAuthCallbackUrl } from '../ports.js';
 
 export function safeRenameFile(srcPath: string, destPath: string): void {
   const resolvedSrc = path.resolve(srcPath);
@@ -420,9 +421,9 @@ class AuthPool {
         }
 
         const isInstalled = Boolean(content.installed);
-        let redirectUris = target.redirect_uris || ['http://localhost:3000/api/auth/callback'];
+        let redirectUris = target.redirect_uris || [getDefaultAuthCallbackUrl()];
         if (isInstalled && (!redirectUris.length || redirectUris[0] === 'http://localhost' || redirectUris[0] === 'urn:ietf:wg:oauth:2.0:oob')) {
-          redirectUris = ['http://localhost:3000/api/auth/callback'];
+          redirectUris = [getDefaultAuthCallbackUrl()];
         }
 
         return {
@@ -450,7 +451,7 @@ class AuthPool {
         }
 
         const refreshToken = env.GOOGLE_REFRESH_TOKEN || env.REFRESH_TOKEN;
-        const redirectUri = env.GOOGLE_REDIRECT_URI || env.REDIRECT_URI || 'http://localhost:3000/api/auth/callback';
+        const redirectUri = env.GOOGLE_REDIRECT_URI || env.REDIRECT_URI || getDefaultAuthCallbackUrl();
 
         let tokens = this.readTokenFile(baseName);
         if (!tokens && refreshToken) {
@@ -474,7 +475,7 @@ class AuthPool {
   }
 
   private registerAccount(cred: AccountCredentials): AccountAuthRecord {
-    const defaultRedirect = cred.redirectUris[0] || 'http://localhost:3000/api/auth/callback';
+    const defaultRedirect = cred.redirectUris[0] || getDefaultAuthCallbackUrl();
     const oauth2Client = new google.auth.OAuth2(cred.clientId, cred.clientSecret, defaultRedirect);
 
     const record: AccountAuthRecord = {

@@ -43,6 +43,7 @@ import { usePoolManagement } from './hooks/usePoolManagement.js';
 import { useShareActions } from './hooks/useShareActions.js';
 import { invalidateShareInspectCache } from './utils/queryCache.js';
 import { useBeforeUnload, useMediaQuery } from './utils/useBeforeUnload.js';
+import { applyWindowTitle, formatWorkspaceTitle } from './utils/windowTitle.js';
 
 const styles = stylex.create({
   shell: {
@@ -742,6 +743,17 @@ export function App() {
       clearTimeout(resizeTimer);
     };
   }, []);
+
+  useEffect(() => {
+    applyWindowTitle(
+      formatWorkspaceTitle({
+        poolName: activePool?.name,
+        isSharePool: isSharePoolActive,
+        currentNav,
+        currentPath,
+      })
+    );
+  }, [activePool?.name, isSharePoolActive, currentNav, currentPath]);
 
   useEffect(() => {
     if (currentNav === 'trash') {

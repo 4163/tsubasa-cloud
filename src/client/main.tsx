@@ -4,6 +4,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors } from './tokens.stylex.js';
 import { useResolvedTheme } from './hooks/useResolvedTheme.js';
 import { useTabLock } from './utils/useTabLock.js';
+import { applyWindowTitle, BASE_WINDOW_TITLE } from './utils/windowTitle.js';
 import './global.css';
 
 const App = React.lazy(() => import('./App.js'));
@@ -21,6 +22,11 @@ const gateStyles = stylex.create({
 
 function CheckingShell() {
   const effectiveTheme = useResolvedTheme();
+
+  React.useEffect(() => {
+    applyWindowTitle(BASE_WINDOW_TITLE);
+  }, []);
+
   return (
     <div
       {...stylex.props(gateStyles.checkingShell, effectiveTheme === 'dark' && darkColors)}

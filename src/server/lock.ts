@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveWriterLockPath } from './paths.js';
+import { isValidPort } from './ports.js';
 
 export interface WriterLockMetadata {
   pid: number;
@@ -9,6 +10,8 @@ export interface WriterLockMetadata {
   command: string;
   cwd: string;
   execName?: string;
+  port?: number;
+  hostname?: string;
 }
 
 export interface AcquireWriterLockOptions {
@@ -21,6 +24,7 @@ export interface AcquireWriterLockOptions {
 export interface WriterLockHandle {
   lockPath: string;
   metadata: WriterLockMetadata;
+  updateMetadata(patch: Partial<Pick<WriterLockMetadata, 'port' | 'hostname'>>): void;
   release(): void;
 }
 
@@ -262,6 +266,7 @@ function parseLockMetadata(raw: string): WriterLockMetadata | null {
     ) {
       return null;
     }
+    const trimmedHostname = typeof parsed.hostname === 'string' ? parsed.hostname.trim() : '';
     return {
       pid: parsed.pid,
       startedAt: parsed.startedAt,
@@ -270,6 +275,8 @@ function parseLockMetadata(raw: string): WriterLockMetadata | null {
       ...(typeof parsed.execName === 'string' && parsed.execName.length > 0
         ? { execName: parsed.execName }
         : {}),
+      ...(isValidPort(parsed.port) ? { port: parsed.port } : {}),
+      ...(trimmedHostname.length > 0 ? { hostname: trimmedHostname } : {}),
     };
   } catch {
     return null;
@@ -379,12 +386,75 @@ function tryCleanupStaleRecoveryLock(recoverPath: string): void {
   }
 }
 
+function writeLockPayloadSafely(lockPath: string, payload: string): void {
+  const tmpPath = `${lockPath}.${process.pid}.${Date.now()}.tmp`;
+  let tmpCreated = false;
+  try {
+    const fd = fs.openSync(
+      tmpPath,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+      0o600
+    );
+    tmpCreated = true;
+    try {
+      fs.writeFileSync(fd, payload, 'utf8');
+      try {
+        fs.fsyncSync(fd);
+      } catch {
+        // Ignore filesystems that do not support fsync on regular files.
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    fs.renameSync(tmpPath, lockPath);
+    tmpCreated = false;
+  } catch (renameErr) {
+    if (tmpCreated) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // Best-effort cleanup of temp file.
+      }
+    }
+    try {
+      fs.writeFileSync(lockPath, payload, { encoding: 'utf8', mode: 0o600 });
+    } catch (fallbackErr) {
+      console.warn(`Failed to update writer lock ${lockPath}:`, fallbackErr ?? renameErr);
+    }
+  }
+}
+
 function createLockHandle(lockPath: string, metadata: WriterLockMetadata): WriterLockHandle {
   let released = false;
 
   return {
     lockPath,
     metadata,
+    updateMetadata(patch: Partial<Pick<WriterLockMetadata, 'port' | 'hostname'>>): void {
+      if (released) {
+        return;
+      }
+
+      const current = readWriterLock(lockPath);
+      if (
+        !current ||
+        current.pid !== metadata.pid ||
+        current.startedAt !== metadata.startedAt
+      ) {
+        return;
+      }
+
+      if (isValidPort(patch.port)) {
+        metadata.port = patch.port;
+      }
+      if (typeof patch.hostname === 'string' && patch.hostname.trim().length > 0) {
+        metadata.hostname = patch.hostname.trim();
+      }
+
+      const payload = `${JSON.stringify(metadata, null, 2)}\n`;
+      writeLockPayloadSafely(lockPath, payload);
+    },
     release(): void {
       if (released) {
         return;

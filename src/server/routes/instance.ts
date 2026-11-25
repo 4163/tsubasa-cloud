@@ -23,6 +23,10 @@ function getLiveInstanceLease(now = Date.now()): ActiveInstanceLease | null {
   return activeInstanceLease;
 }
 
+function canSupersedeLease(live: ActiveInstanceLease, ownerKind: InstanceOwnerKind): boolean {
+  return ownerKind === 'electron' && live.ownerKind !== 'electron';
+}
+
 function parseInstanceOwnerKind(raw: unknown): InstanceOwnerKind {
   return raw === 'electron' ? 'electron' : 'browser';
 }
@@ -81,7 +85,7 @@ const router = new Hono()
         live !== null &&
         (live.instanceId === payload.instanceId ||
           (payload.replaceInstanceId !== undefined && live.instanceId === payload.replaceInstanceId) ||
-          (payload.ownerKind === 'electron' && live.ownerKind !== 'electron'));
+          canSupersedeLease(live, payload.ownerKind));
 
       if (live && !canReplace) {
         return c.json(
@@ -139,7 +143,7 @@ const router = new Hono()
       const now = Date.now();
       const live = getLiveInstanceLease(now);
 
-      if (live && live.instanceId !== payload.instanceId) {
+      if (live && live.instanceId !== payload.instanceId && !canSupersedeLease(live, payload.ownerKind)) {
         return c.json(
           {
             active: false,

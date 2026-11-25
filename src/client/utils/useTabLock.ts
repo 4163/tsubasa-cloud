@@ -47,6 +47,12 @@ interface TabLockSingleton {
   authListeners: Set<(payload: AuthCompletedPayload) => void>;
 }
 
+function getCurrentOwnerKind(): TabOwnerKind {
+  return typeof window !== 'undefined' && window.tsubasaDesktop?.isElectron === true
+    ? 'electron'
+    : 'browser';
+}
+
 function createInstanceId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -80,7 +86,7 @@ function writeStoredLease(instanceId: string): void {
   try {
     const lease: StoredLease = {
       instanceId,
-      ownerKind: 'browser',
+      ownerKind: getCurrentOwnerKind(),
       updatedAt: Date.now(),
     };
     window.localStorage.setItem(STORAGE_LEASE_KEY, JSON.stringify(lease));
@@ -136,7 +142,7 @@ function getSingleton(): TabLockSingleton {
   let singleton = host[SINGLETON_KEY];
   if (!singleton) {
     singleton = {
-      state: { status: 'checking', ownerKind: 'browser', authCompleted: null },
+      state: { status: 'checking', ownerKind: getCurrentOwnerKind(), authCompleted: null },
       started: false,
       listeners: new Set(),
       authListeners: new Set(),
@@ -217,14 +223,38 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
   singleton.started = true;
 
   const instanceId = createInstanceId();
+  const selfOwnerKind = getCurrentOwnerKind();
   let releaseLock: (() => void) | null = null;
   let activeChannel: BroadcastChannel | null = null;
+  let unsubscribeDesktopAuth: (() => void) | null = null;
   let heartbeatTimer: number | null = null;
   let serverHeartbeatTimer: number | null = null;
   let probeTimer: number | null = null;
   let serverClaimAttempted = false;
   let heartbeatInFlight = false;
   let isUnloading = false;
+
+  const subscribeDesktopAuth = () => {
+    if (unsubscribeDesktopAuth || !window.tsubasaDesktop?.onAuthCompleted) return;
+    unsubscribeDesktopAuth = window.tsubasaDesktop.onAuthCompleted((payload) => {
+      const normalized: AuthCompletedPayload = {
+        account: payload.account,
+        poolId: payload.poolId,
+        conflicts: payload.conflicts,
+      };
+      for (const listener of singleton.authListeners) {
+        listener(normalized);
+      }
+    });
+  };
+
+  const teardownDesktopAuth = () => {
+    if (unsubscribeDesktopAuth) {
+      const unsubscribe = unsubscribeDesktopAuth;
+      unsubscribeDesktopAuth = null;
+      unsubscribe();
+    }
+  };
 
   const closeChannel = () => {
     if (activeChannel) {
@@ -276,7 +306,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
           channel.postMessage({
             type: 'PONG',
             instanceId,
-            ownerKind: 'browser',
+            ownerKind: selfOwnerKind,
           } satisfies InstanceMessage);
           return;
         }
@@ -304,7 +334,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
       const res = await client.api.instance.heartbeat.$post({
         json: {
           instanceId,
-          ownerKind: 'browser',
+          ownerKind: selfOwnerKind,
         },
       });
       if (res.status === 409) {
@@ -336,7 +366,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
       const res = await client.api.instance.claim.$post({
         json: {
           instanceId,
-          ownerKind: 'browser',
+          ownerKind: selfOwnerKind,
           replaceInstanceId,
         },
       });
@@ -372,7 +402,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
 
     openActiveChannel();
     startServerHeartbeat();
-    publishState(singleton, { status: 'active', ownerKind: 'browser', authCompleted: null });
+    publishState(singleton, { status: 'active', ownerKind: selfOwnerKind, authCompleted: null });
   };
 
   const acquireLockAndLease = () => {
@@ -459,6 +489,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
   const handlePageHide = () => {
     isUnloading = true;
     clearTimers();
+    teardownDesktopAuth();
     releaseSameBrowserLock();
     if (serverClaimAttempted) {
       serverClaimAttempted = false;
@@ -476,6 +507,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
     if (!event.persisted) return;
     isUnloading = false;
     heartbeatInFlight = false;
+    subscribeDesktopAuth();
     if (singleton.state.status !== 'blocked' && (releaseLock !== null || serverHeartbeatTimer !== null)) {
       void sendServerHeartbeat();
       return;
@@ -487,6 +519,7 @@ function startTabLockOnce(singleton: TabLockSingleton): void {
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('pageshow', handlePageShow);
 
+  subscribeDesktopAuth();
   acquireLockAndLease();
 }
 
