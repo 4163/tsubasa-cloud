@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   app,
-  BrowserWindow,
   dialog,
   ipcMain,
   nativeImage,
@@ -23,6 +22,7 @@ import {
 } from './paths.js';
 import { startServerHost, type ServerHostHandle } from './serverHost.js';
 import { TrayMenuController } from './trayMenu.js';
+import { createRimmedWindow, RIM_INSET_PX, type RimmedWindowHandle } from './windowRim.js';
 
 const APP_NAME = 'Tsubasa~ Cloud';
 const APP_USER_MODEL_ID = 'com.tsubasa.cloud';
@@ -42,7 +42,7 @@ if (process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: RimmedWindowHandle | null = null;
 let tray: Tray | null = null;
 let trayMenu: TrayMenuController | null = null;
 let serverHost: ServerHostHandle | null = null;
@@ -53,16 +53,20 @@ let teardownComplete = false;
 let teardownPromise: Promise<void> | null = null;
 
 function restoreMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  if (!mainWindow || mainWindow.win.isDestroyed()) {
     return;
   }
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
+  const { win, webContents } = mainWindow;
+  if (win.isMinimized()) {
+    win.restore();
   }
-  if (!mainWindow.isVisible()) {
-    mainWindow.show();
+  if (!win.isVisible()) {
+    win.show();
   }
-  mainWindow.focus();
+  win.focus();
+  if (!webContents.isDestroyed()) {
+    webContents.focus();
+  }
 }
 
 function tryParseUrl(rawUrl: string): URL | null {
@@ -225,8 +229,8 @@ function registerIpcHandlers(): void {
   ipcMain.on('tsubasa:set-title', (_event, rawTitle: unknown) => {
     if (typeof rawTitle !== 'string') return;
     const trimmed = rawTitle.trim();
-    if (!trimmed || !mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.setTitle(trimmed);
+    if (!trimmed || !mainWindow || mainWindow.win.isDestroyed()) return;
+    mainWindow.win.setTitle(trimmed);
   });
 
   ipcMain.on('tsubasa:get-theme-choice', (event) => {
@@ -238,42 +242,31 @@ function registerIpcHandlers(): void {
     currentThemeChoice = rawChoice;
     nativeTheme.themeSource = mapThemeChoiceToNativeSource(rawChoice);
     writeDesktopPrefs(homeDir, { themeChoice: rawChoice });
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setBackgroundColor(
-        resolveShellBackgroundColor(rawChoice, nativeTheme.shouldUseDarkColors)
-      );
-    }
+    mainWindow?.refresh();
     trayMenu?.syncState();
   });
 
   nativeTheme.on('updated', () => {
     if (currentThemeChoice !== 'auto') return;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setBackgroundColor(
-        resolveShellBackgroundColor('auto', nativeTheme.shouldUseDarkColors)
-      );
-    }
+    mainWindow?.refresh();
     trayMenu?.syncState();
   });
 }
 
-function createMainWindow(host: ServerHostHandle): BrowserWindow {
-  const initialBackgroundColor = resolveShellBackgroundColor(
-    currentThemeChoice,
-    nativeTheme.shouldUseDarkColors
-  );
+function createMainWindow(host: ServerHostHandle): RimmedWindowHandle {
   const useEmbeddedExeIcon = process.platform === 'win32' && app.isPackaged;
 
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 640,
-    minHeight: 480,
-    show: false,
-    title: APP_NAME,
-    backgroundColor: initialBackgroundColor,
-    ...(useEmbeddedExeIcon ? {} : { icon: APP_ICON_PATH }),
-    autoHideMenuBar: true,
+  const rim = createRimmedWindow({
+    windowOptions: {
+      width: 1280 + RIM_INSET_PX * 2,
+      height: 800 + RIM_INSET_PX * 2,
+      minWidth: 640 + RIM_INSET_PX * 2,
+      minHeight: 480 + RIM_INSET_PX * 2,
+      show: false,
+      title: APP_NAME,
+      ...(useEmbeddedExeIcon ? {} : { icon: APP_ICON_PATH }),
+      autoHideMenuBar: true,
+    },
     webPreferences: {
       preload: PRELOAD_PATH,
       contextIsolation: true,
@@ -281,7 +274,12 @@ function createMainWindow(host: ServerHostHandle): BrowserWindow {
       sandbox: true,
       backgroundThrottling: false,
     },
+    isDark: resolveIsDarkTheme,
+    resolveContentBg: () =>
+      resolveShellBackgroundColor(currentThemeChoice, nativeTheme.shouldUseDarkColors),
   });
+
+  const { win, webContents } = rim;
 
   win.removeMenu();
 
@@ -296,9 +294,12 @@ function createMainWindow(host: ServerHostHandle): BrowserWindow {
         fallbackRevealTimer = null;
       }
       win.show();
+      if (!webContents.isDestroyed()) {
+        webContents.focus();
+      }
     };
     fallbackRevealTimer = setTimeout(showOnce, FALLBACK_REVEAL_MS);
-    win.once('ready-to-show', showOnce);
+    webContents.once('did-finish-load', showOnce);
   }
 
   const allowedOrigins = new Set<string>();
@@ -307,7 +308,7 @@ function createMainWindow(host: ServerHostHandle): BrowserWindow {
   if (rendererOrigin) allowedOrigins.add(rendererOrigin);
   if (serverOrigin) allowedOrigins.add(serverOrigin);
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  webContents.setWindowOpenHandler(({ url }) => {
     const parsed = tryParseUrl(url);
     if (parsed && isHttpProtocol(parsed)) {
       const isInternal = allowedOrigins.has(parsed.origin);
@@ -321,7 +322,7 @@ function createMainWindow(host: ServerHostHandle): BrowserWindow {
     return { action: 'deny' };
   });
 
-  win.webContents.on('will-navigate', (event, url) => {
+  webContents.on('will-navigate', (event, url) => {
     const parsed = tryParseUrl(url);
     if (parsed && isHttpProtocol(parsed) && !allowedOrigins.has(parsed.origin)) {
       event.preventDefault();
@@ -341,13 +342,13 @@ function createMainWindow(host: ServerHostHandle): BrowserWindow {
       clearTimeout(fallbackRevealTimer);
       fallbackRevealTimer = null;
     }
-    if (mainWindow === win) {
+    if (mainWindow === rim) {
       mainWindow = null;
     }
   });
 
-  void win.loadURL(host.rendererUrl);
-  return win;
+  void webContents.loadURL(host.rendererUrl);
+  return rim;
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -417,7 +418,7 @@ if (!gotSingleInstanceLock) {
         homeDir,
         packageRoot: PACKAGE_ROOT,
         onAuthCompleted: (payload) => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow && !mainWindow.webContents.isDestroyed()) {
             mainWindow.webContents.send('tsubasa:auth-completed', payload);
           }
         },
