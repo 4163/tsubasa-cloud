@@ -727,7 +727,7 @@ class AuthPool {
       if (json.web && !json.installed) {
         return {
           success: false,
-          error: "The uploaded file has Application Type 'web'. Tsubasa requires credentials created with Application Type: 'Desktop app' (see docs/roadmap.md lines 170-173) to support loopback authentication without pre-registered redirect URIs.",
+          error: "The uploaded file has Application Type 'web'. Tsubasa requires credentials created with Application Type: 'Desktop app' (see Setup in README.md) to support loopback authentication without pre-registered redirect URIs.",
         };
       }
 
@@ -770,7 +770,7 @@ class AuthPool {
       if (declaredType === 'web' || declaredType === 'web_app' || declaredType === 'web_application') {
         return {
           success: false,
-          error: "The .env file specifies Application Type: 'web'. Tsubasa requires a 'Desktop app' credential (see docs/roadmap.md lines 170-173).",
+          error: "The .env file specifies Application Type: 'web'. Tsubasa requires a 'Desktop app' credential (see Setup in README.md).",
         };
       }
 
@@ -850,7 +850,7 @@ export async function verifyDesktopAppClientId(clientId: string): Promise<{ isDe
     ) {
       return {
         isDesktop: false,
-        error: "Google rejected the loopback redirect URI: this Client ID is registered as a 'Web application' in Google Cloud Console. Please create credentials with Application Type set to 'Desktop app' (see docs/roadmap.md lines 170-173).",
+        error: "Google rejected the loopback redirect URI: this Client ID is registered as a 'Web application' in Google Cloud Console. Please create credentials with Application Type set to 'Desktop app' (see Setup in README.md).",
       };
     }
 

@@ -1,10 +1,24 @@
 # Tsubasa extensions
 
-Extensions live in subdirectories under `<home>/extensions/<name>/` and run as external subprocesses through `tsubasa ext`. Tsubasa resolves `<home>` from `--home` or `TSUBASA_HOME`, defaulting to the package root and never `process.cwd()`.
+Runner for local scripts and companion tools built on top of Tsubasa, such as custom catalog exporters, external image and video viewers, or custom file viewers. Extensions live in `<home>/extensions/<name>/` and run as external subprocesses through `tsubasa ext`.
+
+> **Home directory:** `<home>` resolves from `--home` or `TSUBASA_HOME`, defaulting to the package root and never `process.cwd()`.
+
+## Running extensions
+
+```bash
+tsubasa ext list                     # List valid and invalid extensions
+tsubasa ext list --json
+tsubasa ext <name> [args...]         # Run an extension
+tsubasa --dry-run --json ext <name>  # Validate manifest and print resolved env without spawning
+```
+
+- Global flags placed before `ext` configure Tsubasa. Every token after `ext <name>` passes verbatim to the child process.
+- `tsubasa ext` only probes `/api/health`. It never opens SQLite or holds `data/tsubasa.writer.lock`, so extensions can run `tsubasa` read and write commands without lock conflicts.
 
 ## Manifest contract
 
-Each extension requires `extensions/<name>/manifest.json` with these fields:
+Each extension requires `extensions/<name>/manifest.json`:
 
 ```json
 {
@@ -16,50 +30,35 @@ Each extension requires `extensions/<name>/manifest.json` with these fields:
 }
 ```
 
-- `name`: lowercase alphanumeric with hyphens matching `^[a-z0-9][a-z0-9-]*$`. Must match the directory name.
-- `description`: non-empty string shown in `tsubasa ext list`.
-- `entry`: relative path inside `extensions/<name>/`. The loader rejects any path that traverses outside the extension directory or resolves outside it through symlinks.
-- `runtime`: one of `node`, `python`, or `exec`. The `exec` runtime spawns `entry` directly with `shell: false` and requires a native executable or a `+x` script with a shebang on POSIX.
-- `minSchemaVersion`: optional positive integer declaring the minimum `tsubasa export` schema version required.
+- `name`: lowercase alphanumeric with hyphens (`^[a-z0-9][a-z0-9-]*$`), matching the directory name. `list` is reserved.
+- `description`: non-empty string shown by `tsubasa ext list`.
+- `entry`: relative path inside `extensions/<name>/`. Paths escaping the directory directly or via symlinks fail validation.
+- `runtime`: `node`, `python`, or `exec`. `exec` spawns `entry` directly with `shell: false` (native binary or `+x` script with a shebang on POSIX).
+- `minSchemaVersion`: optional positive integer declaring the minimum `tsubasa export` schema version (currently `1`).
 
-## Running extensions
-
-List installed extensions:
-
-```bash
-tsubasa ext list
-tsubasa ext list --json
-```
-
-Run an extension:
-
-```bash
-tsubasa ext <name> [args...]
-```
-
-Global Tsubasa flags placed before `ext` configure Tsubasa. Every token after `ext <name>` passes verbatim to the child process. Run `tsubasa --dry-run ext <name>` to validate the manifest and print the resolved command and child environment without spawning.
-
-`tsubasa ext` only probes `/api/health` and never opens SQLite or holds `data/tsubasa.writer.lock`, so extensions can run `tsubasa` read and write commands without lock conflicts. The CLI spawns extensions with `shell: false`, inherits stdio, forwards `SIGINT` and `SIGTERM`, and exits with the child exit code. If a signal terminates the child, Tsubasa exits `130` for `SIGINT`, `143` for `SIGTERM`, or `1` for other signals. Pre-spawn failures use standard CLI exit codes: `6` for a missing `manifest.json`, `2` for an invalid manifest, missing `entry`, or conflicting `--server` and `--local`, `5` for an unreachable explicit `--server` or `TSUBASA_API_URL`, and `1` for a missing Python 3 interpreter or spawn failure.
+> **Database boundary:** Extensions must never open or write to `data/tsubasa.db` directly. Read catalog data via `tsubasa export` (JSON, streaming JSONL, or CSV) and run mutations through `tsubasa` CLI commands.
 
 ## Child environment variables
 
-Tsubasa sets these environment variables for the child process:
+| Variable | Value |
+|---|---|
+| `TSUBASA_CLI_BIN` | Resolved CLI entrypoint script, not `node`. Run `node "$TSUBASA_CLI_BIN"` for compiled builds (`dist/cli/index.js`) when `tsubasa` is not on `PATH`; under `npm run tsubasa` it resolves to `src/cli/index.ts`. |
+| `TSUBASA_SCHEMA_VERSION` | Current export schema version (`1`). |
+| `TSUBASA_TRANSPORT` | `http` when connected to a running server, or `local` in standalone mode. |
+| `TSUBASA_HOME` | Resolved Tsubasa home directory. |
+| `TSUBASA_POOL` | Set when `--pool` or `TSUBASA_POOL` is active. |
+| `TSUBASA_API_URL` | Set only in `http` mode; unset in `local` mode. |
 
-- `TSUBASA_CLI_BIN`: resolved CLI entrypoint script path such as `dist/cli/index.js`, not the `node` binary. Non-Node extensions should invoke `node "$TSUBASA_CLI_BIN"` when `tsubasa` is not on `PATH`.
-- `TSUBASA_SCHEMA_VERSION`: current export schema version, `1`.
-- `TSUBASA_TRANSPORT`: `http` when connected to a running server, or `local` in standalone mode.
-- `TSUBASA_HOME`: resolved Tsubasa home directory.
-- `TSUBASA_POOL`: set when `--pool` or `TSUBASA_POOL` is active.
-- `TSUBASA_API_URL`: set only when `TSUBASA_TRANSPORT` is `http`. Unset in `local` mode.
+## Runtime and exit codes
 
-## Python interpreter resolution
+- Children spawn with `shell: false`, inherit stdio, and receive forwarded `SIGINT` and `SIGTERM` signals.
+- For `runtime: "python"`, Tsubasa checks `--version` in order and picks the first exit `0`: `TSUBASA_PYTHON` (if set), then `py -3`, `python3`, `python` on Windows, or `python3`, `python` on POSIX.
 
-When `runtime` is `python`, Tsubasa checks candidate interpreters with `--version` and uses the first one that exits `0`:
-
-1. `TSUBASA_PYTHON` environment variable, if set.
-2. On Windows: `py -3`, then `python3`, then `python`.
-3. On POSIX: `python3`, then `python`.
-
-## Database boundary
-
-Extensions must never open or write to `data/tsubasa.db` directly. Read catalog state through `tsubasa export` in JSON or streaming JSONL format and perform actions through `tsubasa` CLI commands.
+| Condition | Exit code |
+|---|---|
+| Child process exited normally | Child exit code |
+| Child terminated by `SIGINT` / `SIGTERM` / other signal | `130` / `143` / `1` |
+| Missing Python 3 interpreter or spawn error | `1` |
+| Invalid name or manifest, missing `entry`, or `--server` / `TSUBASA_API_URL` with `--local` | `2` |
+| Explicit `--server` or `TSUBASA_API_URL` unreachable | `5` |
+| Missing `manifest.json` | `6` |

@@ -6,90 +6,91 @@
 
 <p>
   <img src="docs/svg-r44-readme.svg" alt="Tsubasa~ Cloud mark" align="left" width="67" />
-  Tsubasa~ Cloud pools multiple personal Google Drive accounts into one virtual drive backed by a local SQLite index. Files stay intact on single accounts without splitting or striping, and each pool mirrors its folder hierarchy inside Google Drive so accounts remain browsable on drive.google.com.
+  Tsubasa~ Cloud pools personal Google Drive accounts into one virtual drive backed by a local index. Files stay whole on single accounts without splitting or striping, and each pool mirrors its folder tree in Google Drive so accounts stay browsable on drive.google.com.
 </p>
 
-## How it works
+## Features
 
-- **Local SQLite index.** Navigation, directory listings, and searches query a local SQLite database (`data/tsubasa.db`) in WAL mode instead of hitting the Google Drive API.
-- **Folder-cohesion placement.** Files stay whole up to a 14.25 GB single-file ceiling, and Tsubasa reserves 750 MB per account so Gmail and Google Photos do not hit storage limits. Single-file uploads prefer the account holding sibling files in the parent folder and fall back to best-fit allocation. Folder uploads size branches bottom-up, check folder affinity, and fall back to best-fit per branch. Directories mirror inside each account's `_Tsubasa~ Pool <N>` folder, or `_Tsubasa~ Pool share` for the Share Pool.
-- **Streaming transfers.** Downloads proxy through Hono as Web Streams with HTTP `Range` support. Uploads stream directly to Google Drive without buffering whole files to disk, using a verified single-shot path up to 5 MiB and resumable uploads above that. A rolling 24-hour `transfer_logs` table tracks Google's 750 GB daily per-account upload cap.
-- **Outbox and delta sync.** Virtual renames, moves, and soft-trashes commit to SQLite first, then `drive_outbox` pushes remote Drive updates and `appProperties` (`tsubasa_managed`, `tsubasa_virtual_path`, `tsubasa_virtual_id`, `tsubasa_checksum`) in the background. Incremental refreshes use `drive.changes.list` page tokens, and cold recovery rebuilds `data/tsubasa.db` from Drive metadata.
-- **Pools, sharing, and discrepancy handling.** Accounts group into isolated pools. Sharing copies selected files into public Drive batch folders on a read-only Share Pool. Discrepancy scans catch edits made directly on drive.google.com so you can accept them, eject them to Drive root, or rebalance across accounts.
+- **Pooled storage.** Combine personal Google Drive accounts into separate storage pools.
+- **Synced folder structure.** Files in the same folder stay grouped on one account when space allows, and folder structure syncs between Tsubasa and Google Drive for parity.
+- **File manager interface.** Standard workspace with expected file actions (file and folder uploads, downloads, rename, move, copy, trash) and fine-grained control over files, accounts, and pools.
+- **Public sharing.** Share individual files or batches of files publicly by copying them into shareable folders on a dedicated read-only Share Pool.
+- **External Drive changes and recovery.** Detect edits made directly on drive.google.com to accept them, move over-limit files to Drive root, or rebalance files across accounts. On a new machine, Tsubasa rebuilds your file list directly from your Google Drive accounts.
+- **Desktop app, localhost web app, and CLI.** Run the Windows desktop app, open it in a browser on localhost, or use the `tsubasa` CLI for resumable transfers, Google Drive folder imports, and extensions.
+
+> **14.25 GB direct upload limit:** Files stay whole on a single Google account rather than splitting across accounts. Tsubasa reserves 750 MB per 15 GB account so Gmail and Google Photos do not run out of space.
+
+> **750 GB daily upload tracking:** Google Drive caps uploads at 750 GB per account over a rolling 24-hour window, so Tsubasa tracks transfer volume per account to avoid hitting that limit.
 
 ## Setup
 
-Requires [Node.js](https://nodejs.org/) with `npm`.
-
-1. **Create a Desktop OAuth client.** In Google Cloud Console, enable the Google Drive API and create an OAuth 2.0 Client ID with Application Type set to **Desktop app**. Tsubasa uses loopback redirects and rejects Web application clients. One Desktop client ID authorizes multiple pooled Google accounts.
-2. **Publish the consent screen.** Switch the OAuth consent screen publishing status from **Testing** to **In Production**. Testing mode expires refresh tokens after 7 days regardless of API activity. Unverified apps in Production allow up to 100 unique authorized accounts over the project lifetime, which covers personal pools without formal Google verification. Production refresh tokens stay valid as long as each account refreshes at least once every 6 months; routine syncs such as `tsubasa sync delta` or Drive quota refreshes reset that clock, so periodic dummy uploads are unnecessary. Re-authorize any account whose token was issued while the app was still in Testing.
-3. **Install dependencies and start the app.**
-   ```bash
-   npm install
-   npm run dev          # Hono API on http://localhost:28300 and Vite UI on http://localhost:28301
-   ```
-   Press `Ctrl+C` to stop both servers, or run `npm run dev:server` and `npm run dev:web` in separate terminals. To serve the compiled `dist/` bundle directly through Hono on `http://localhost:28300`, run `npm run build` followed by `npm start`.
-4. **Add Google accounts.** Prepare a Desktop OAuth JSON file, or a `.env` file defining `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Import it from the web UI sidebar, copy it into `.oauths/`, or run:
+1. **Install or run Tsubasa.**
+   - **Windows desktop app:** Run `Tsubasa~ Cloud Setup.exe` (NSIS installer) or extract the portable `.zip` and launch `Tsubasa~ Cloud.exe`.
+   - **From source:** Requires [Node.js](https://nodejs.org/) with `npm`.
+     ```bash
+     npm install
+     npm run dev        # API on http://localhost:28300, UI on http://localhost:28301
+     ```
+     Or build and serve the static bundle on `http://localhost:28300` with `npm run build && npm start`.
+2. **Set up Google Drive OAuth.** In Google Cloud Console, enable the Google Drive API, create a **Desktop app** OAuth 2.0 Client ID (Web clients are rejected), and publish the consent screen to **In Production** so refresh tokens do not expire after 7 days. See [temp/](temp/) for the full walkthrough, screenshots, and details.
+3. **Add Google accounts.** Use a Desktop OAuth JSON file, or a `.env` file with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Import it from the sidebar, place it in `.oauths/`, or run:
    ```bash
    npm run tsubasa -- auth add <credentials.json>
    ```
-   Completing browser sign-in writes `<email>.tokens.json` in `.oauths/` and hydrates the account into the pool.
+   Browser sign-in writes `<email>.tokens.json` to `.oauths/` and hydrates the account.
 
 ## CLI and extensions
 
-The `tsubasa` CLI shares the server's SQLite index, placement rules, and Drive engine. It checks `data/tsubasa.writer.lock` for the server's bound port alongside `127.0.0.1:${PORT:-28300}`, probes `GET /api/health`, and routes over HTTP when a running server matches the local `dbFingerprint`. Without a matching server, it runs standalone under `data/tsubasa.writer.lock`.
+The `tsubasa` CLI lets you manage pools, accounts, transfers, external Drive imports, and extensions from the terminal, whether the app is running or not.
 
 ```bash
 npm run tsubasa -- status
 npm run build:cli && npm link   # Install `tsubasa` globally on PATH
 ```
 
-- CLI commands, flags, exit codes, and external Drive imports: [src/cli/README.md](src/cli/README.md)
+- CLI commands, flags, transfers, imports, and exit codes: [src/cli/README.md](src/cli/README.md)
 - Subprocess extensions under `extensions/<name>/`: [extensions/README.md](extensions/README.md)
-
-## Data and OAuth locations
-
-Tsubasa resolves a single home directory (`<homeDir>`) per launch mode and stores OAuth credentials under `.oauths/` and runtime state under `data/`.
-
-| Launch mode | `<homeDir>` | `.oauths/` | SQLite database |
-|---|---|---|---|
-| **Development** (`npm run dev`, `dev:server`, `dev:electron`) | Repository root | `<repo>/.oauths/` | `<repo>/data/tsubasa.db` |
-| **CLI** (`tsubasa`, `npm run tsubasa`) | Package root resolved from `import.meta.url`, never `process.cwd()` | `<packageRoot>/.oauths/` | `<packageRoot>/data/tsubasa.db` |
-| **Windows NSIS installer** (`Tsubasa~ Cloud Setup.exe`) | `%AppData%\Tsubasa~ Cloud\` | `%AppData%\Tsubasa~ Cloud\.oauths\` | `%AppData%\Tsubasa~ Cloud\data\tsubasa.db` |
-| **Windows portable `.zip`** | Directory containing `Tsubasa~ Cloud.exe` | `<exeDir>\.oauths\` | `<exeDir>\data\tsubasa.db` |
-| **`TSUBASA_HOME` override** (any mode) | Resolved `TSUBASA_HOME` path | `<TSUBASA_HOME>/.oauths/` | `<TSUBASA_HOME>/data/tsubasa.db` |
-
-Portable mode activates automatically when a `.portable` marker file sits next to `Tsubasa~ Cloud.exe`, which the portable zip bundles by default, or when an adjacent `data/` or `.oauths/` folder already exists. For the CLI, `--home <dir>` overrides the package root in the same way as `TSUBASA_HOME`. Alongside `tsubasa.db`, the `data/` directory holds `tsubasa.writer.lock`, which records the active server's bound port and writer lock state, and `desktop-prefs.json` for Electron theme preferences.
 
 ## Development
 
 ```bash
-npm run dev          # Start Hono API (:28300) and Vite UI (:28301) together; Ctrl+C stops both
-npm run dev:server   # Start Hono backend with watch reload (PORT defaults to 28300)
-npm run dev:web      # Start Vite dev server on port 28301 (proxies /api to :28300)
+npm run dev          # API (:28300) + Vite UI (:28301) via dev:server and dev:web
 npm run dev:electron # Build web, server, and Electron shell, then launch desktop app
-npm start            # Serve compiled dist/ bundle through Hono on :28300 (TSUBASA_SERVE_STATIC=1)
-npm run typecheck    # Run TypeScript check
-npm run build        # Typecheck, build frontend, and compile server
-npm run build:cli    # Compile the CLI to dist/cli/index.js
-npm run package:win  # Package Windows NSIS installer and portable zip into release/
+npm run build        # Typecheck, build frontend, and compile server into dist/
+npm start            # Serve compiled dist/ on :28300 in browser mode (no Vite/Electron)
+npm run typecheck    # TypeScript check without emitting files
+npm run package:win  # Build all targets (incl. CLI) and package NSIS + portable zip in release/
 ```
 
-Architecture notes and styling rules live in [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md).
+Architecture and styling docs: [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md).
+
+## Data and OAuth locations
+
+Each launch mode resolves one `<homeDir>` holding `.oauths/` and `data/tsubasa.db`:
+
+| Launch mode | `<homeDir>` |
+|---|---|
+| **Windows NSIS installer** (release) | `%AppData%\Tsubasa~ Cloud\` |
+| **Windows portable `.zip`** | Folder containing `Tsubasa~ Cloud.exe` |
+| **CLI** (`tsubasa`, `npm run tsubasa`) | Package root from `import.meta.url` (never `process.cwd()`) |
+| **Development** (`dev`, `dev:server`, `dev:electron`, `start`) | Repository root |
+| **Override** (`TSUBASA_HOME` or CLI `--home <dir>`) | Resolved override path |
+
+> **Portable mode:** The portable `.zip` includes a `.portable` marker file next to `Tsubasa~ Cloud.exe`. If `.portable`, `data/`, or `.oauths/` exists in the same folder as the `.exe`, Tsubasa keeps credentials and data in that folder instead of `%AppData%\Tsubasa~ Cloud\`.
 
 ## Stack
 
-| Component | Technology | Purpose |
+| Layer | Technology | Role |
 |---|---|---|
 | **Frontend** | [React 19](https://react.dev) / [TypeScript](https://www.typescriptlang.org) | File explorer UI and client state |
-| **Styling** | [StyleX](https://stylexjs.com) / [`unplugin-stylex`](https://github.com/eryue0220/unplugin-stylex) | Compile-time atomic CSS and light/dark theme tokens |
-| **Virtualization** | [TanStack Virtual](https://tanstack.com/virtual) | Fixed-row virtualized file table rendering |
-| **Build tool** | [Vite](https://vite.dev) | Dev server, HMR, `/api` proxy, and frontend bundle |
-| **Backend** | [Hono](https://hono.dev) / [`@hono/node-server`](https://github.com/honojs/node-server) | Local HTTP API, streaming proxy, and typed RPC |
-| **Database** | [SQLite](https://www.sqlite.org) / [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) / [Drizzle ORM](https://orm.drizzle.team) | WAL-mode catalog, transfer ledger, outbox, and job state |
-| **Google Drive** | [`googleapis`](https://github.com/googleapis/google-api-nodejs-client) | OAuth 2.0 client pool and Drive v3 API |
-| **Desktop** | [Electron](https://www.electronjs.org) / [`electron-builder`](https://www.electron.build) | Windows desktop shell, tray lifecycle, NSIS installer, and portable zip |
-| **CLI and runtime** | [Node.js](https://nodejs.org) / [`tsx`](https://tsx.is) / [`dotenv`](https://github.com/motdotla/dotenv) | Server execution, TypeScript CLI runner, and `.env` loading |
+| **Styling** | [StyleX](https://stylexjs.com) / [`unplugin-stylex`](https://github.com/eryue0220/unplugin-stylex) | Compile-time atomic CSS and light/dark tokens |
+| **Virtualization** | [TanStack Virtual](https://tanstack.com/virtual) | Virtualized file table, drawers, and modal lists |
+| **Build tool** | [Vite](https://vite.dev) | Dev server, HMR, `/api` proxy, frontend bundle |
+| **Backend** | [Hono](https://hono.dev) / [`@hono/node-server`](https://github.com/honojs/node-server) | Local HTTP API, streaming proxy, typed RPC |
+| **Database** | [SQLite](https://www.sqlite.org) / [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) / [Drizzle ORM](https://orm.drizzle.team) | WAL-mode catalog, transfer ledger, outbox, jobs |
+| **Google Drive** | [`googleapis`](https://github.com/googleapis/google-api-nodejs-client) | OAuth 2.0 pool and Drive v3 API |
+| **Desktop** | [Electron](https://www.electronjs.org) / [`electron-builder`](https://www.electron.build) | Windows shell, tray menu, NSIS installer, portable zip |
+| **Runtime / CLI** | [Node.js](https://nodejs.org) / [`tsx`](https://tsx.is) / [`dotenv`](https://github.com/motdotla/dotenv) | Server/CLI runtime, TypeScript dev runner, `.env` loading |
 
 ## Project structure
 
@@ -97,23 +98,25 @@ Architecture notes and styling rules live in [docs/roadmap.md](docs/roadmap.md),
 tsubasa-cloud/
 ├─ src/
 │  ├─ client/      # React 19 + StyleX UI, virtualized table, Hono RPC client
-│  ├─ electron/    # Electron main process, preload bridge, tray, and server host
+│  ├─ electron/    # Electron main process, preload bridges, tray menu, server host
 │  ├─ server/
 │  │  ├─ db/       # SQLite WAL connection, Drizzle schema, runtime migrations
-│  │  ├─ drive/    # OAuth pool, delta sync, outbox, streaming transfers, sharing
-│  │  ├─ routes/   # Hono API routes
+│  │  ├─ drive/    # OAuth pool, delta sync, outbox, transfers, sharing, discrepancies
+│  │  ├─ routes/   # Hono API route modules
 │  │  └─ storage/  # Headroom math, folder-cohesion placement, catalog export
-│  └─ cli/         # `tsubasa` CLI commands, transport routing, extension runner
+│  └─ cli/         # tsubasa CLI commands, transport routing, extension runner
+├─ scripts/        # Dev runner, static start wrapper, Windows packaging script
 ├─ build/          # Desktop icons and NSIS installer include
 ├─ extensions/     # Extension contract docs and local subprocess extensions
 ├─ docs/           # Roadmap, styling guide, UI teardowns, brand assets
 ├─ .oauths/        # OAuth client credentials and *.tokens.json (gitignored)
-├─ data/           # Local SQLite database (tsubasa.db) and writer lock (gitignored)
+├─ data/           # Local SQLite database and runtime state (gitignored)
 └─ package.json
 ```
 
 ## Attributions
 
+- Icons: [Lucide](https://lucide.dev) and [Material Icons](https://fonts.google.com/icons)
 - Brand filter: [Vayce Comic Book Effect (Manga Ink)](https://vayce.app/tools/comic-book-effect/?profile=manga-ink&finish=0&str=0)
 - Fonts: [Montserrat](https://fonts.google.com/specimen/Montserrat) and [Pixelify Sans](https://fonts.google.com/specimen/Pixelify+Sans)
 

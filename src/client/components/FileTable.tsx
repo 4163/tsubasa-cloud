@@ -151,7 +151,7 @@ const styles = stylex.create({
     borderLeftColor: 'transparent',
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
-    // Intentionally widened Account/Date/Actions columns vs docs/styling-guide.md for inline transfer selects and action buttons
+    // Widened Account/Date/Actions columns for inline transfer selects and action buttons
     gridTemplateColumns: '16px 40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'stretch',
     marginLeft: layout.ditherStripHeight,

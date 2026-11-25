@@ -1,235 +1,136 @@
 # Tsubasa~ Cloud technical roadmap
 
-## 1. Executive summary
+## 1. Architecture overview
 
-Tsubasa pools multiple personal Google accounts into a single, high-performance virtual storage drive. It provides a centralized web and desktop interface for managing files across accounts, while keeping files intact without striping or splitting. 
-
-The system operates on a **local-first, zero-latency architecture**: all navigation, search, and directory manipulation query an indexed local SQLite cache, eliminating network latency and keeping Google API calls to the absolute minimum.
+Tsubasa pools personal Google Drive accounts into one virtual drive backed by a local SQLite WAL index (`data/tsubasa.db`). Files stay whole on single accounts without striping or splitting, and all navigation, search, and directory queries hit indexed local tables. One Desktop app OAuth client (`installed`) can authorize multiple accounts across pools using loopback redirects without pre-registered redirect URIs. See [README.md](../README.md#stack) for the full technology stack.
 
 ```mermaid
 graph TD
     UI["Vite + React + StyleX (Virtualized DOM)"]
+    CLI["tsubasa CLI & Subprocess Extensions"]
     RPC["Hono RPC Client (Type-Safe)"]
-    Hono["Hono Web Server (@hono/node-server)"]
-    Cache[("SQLite WAL Cache (Drizzle ORM)")]
+    Hono["Hono Server (@hono/node-server)"]
+    Cache[("SQLite WAL Index (Drizzle ORM)")]
     Engine["Storage Placement Engine (Folder-Cohesion Best-Fit)"]
     Stream["Zero-Copy Streaming Pipeline"]
-    Delta["Delta Sync & External Changes Detector"]
-    
+    Sync["Outbox, Delta Sync & Discrepancy Detector"]
+
     subgraph Google Accounts Pool
-        Acc1["Account 1 (Tsubasa Storage/)"]
-        Acc2["Account 2 (Tsubasa Storage/)"]
-        AccN["Account N (Tsubasa Storage/)"]
+        Acc1["Account 1 (_Tsubasa~ Pool N/)"]
+        Acc2["Account 2 (_Tsubasa~ Pool N/)"]
+        AccN["Account N (_Tsubasa~ Pool N/)"]
     end
 
     UI --> RPC
     RPC --> Hono
+    CLI --> Hono
     Hono <--> Cache
     Hono --> Engine
     Hono --> Stream
-    Hono <--> Delta
-    Delta <-->|changes.list| Acc1
-    Delta <-->|changes.list| Acc2
-    Delta <-->|changes.list| AccN
+    Hono <--> Sync
+    Sync <-->|changes.list & outbox| Acc1
+    Sync <-->|changes.list & outbox| Acc2
+    Sync <-->|changes.list & outbox| AccN
     Stream <-->|Resumable HTTP Stream| Acc1
     Stream <-->|Resumable HTTP Stream| Acc2
     Stream <-->|Resumable HTTP Stream| AccN
 ```
 
----
+## 2. Performance directives
 
-## 2. Technology stack and architectural components
+1. **Local-first reads.** Navigation, listings, and searches query indexed SQLite tables in under 2 ms without hitting Google Drive.
+2. **Zero-copy streaming.** Uploads and downloads stream through Hono without buffering whole files in memory or local disk, staying under 50 MB RAM on 14 GB transfers.
+3. **SQLite-first virtual writes.** Folder renames, moves, and soft-trashes commit locally right away. `drive_outbox` pushes Drive updates and `appProperties` asynchronously.
+4. **Incremental delta sync.** After hydration, sync uses `drive.changes.list` with stored page tokens instead of full tree crawls.
+5. **Constant-time DOM rendering.** TanStack Virtual keeps DOM node counts flat regardless of folder size.
 
-| Component | Choice | Purpose |
-| :--- | :--- | :--- |
-| **Frontend framework** | React 19, TypeScript | Reactive state management, virtualized file trees, native component model. |
-| **Styling engine** | StyleX | Compile-time atomic CSS-in-JS by Meta. Zero runtime overhead, full type safety, predictable styles. |
-| **Design teardown** | REA + Chrome CDP | Reverse engineer layout, spacing, and component patterns from Google Drive, Dropbox, and Mega. |
-| **Build system** | Vite | Instant HMR, optimized bundling, drop-in compatibility with Electron renderers. |
-| **Backend API** | Hono (`@hono/node-server`) | Web-standard `Fetch`/`Request`/`ReadableStream` APIs, zero dependencies, built-in end-to-end RPC typing. |
-| **Local database** | SQLite (via `better-sqlite3` and Drizzle ORM) | High-speed local index cache, sub-millisecond lookups, ACID transactions, zero cloud fees. |
-| **Remote metadata** | Google Drive `appProperties` | Durable, self-describing file attributes stored on Google servers for cold-start recovery. |
-| **Google auth model** | Desktop app OAuth client (`installed`) | Uses loopback redirect without requiring manual redirect URI configuration in Google Cloud Console. Single client authorizes multiple pooled accounts. |
-| **Packaging** | Electron (Phase 7) | Wraps the local Hono server and Vite frontend into a desktop application. |
+## 3. Storage, transfers, and recovery
 
----
+### 3.1 Pools, headroom, and safety reserve
 
-## 3. Performance and latency directives
+- **Multi-pool and Share Pool.** Standard pools mirror under `_Tsubasa~ Pool <N>` per account. The Share Pool uses reserved ID `1_000_000` and `_Tsubasa~ Pool share`, rejects direct uploads, and records public batch folders in `share_links`.
+- **Per-account ceiling.** 14.25 GB usable on a 15 GB account.
+- **Safety reserve.** 750 MB reserved per account so Gmail, Google Photos, and account metadata do not hit quota limits.
+- **Formula.** $\text{Headroom}_i = \max(0, \text{limit}_i - 750\text{ MB} - \text{usage}_i)$
+- **System storage.** Snapshots, manifests, and mirrors under `/.tsubasa` are counted in account and pool metrics.
 
-To maintain responsiveness comparable to native desktop applications, the architecture enforces five performance rules:
-
-1. **Local-first read path.** 
-   The frontend never calls Google Drive to list files, expand directories, or run searches. 100% of read operations hit indexed local SQLite tables, returning in under 2 milliseconds.
-2. **Zero-copy streaming pipeline.**
-   Uploads and downloads stream directly through Hono without buffering complete files in memory or writing temporary files to local disk. Memory overhead remains under 50 MB even during 14 GB transfers.
-3. **Instant virtual operations with lazy sync.**
-   Folder renames, virtual file moves, and path updates apply instantly to SQLite. The UI reflects changes immediately, while background tasks update Google Drive `appProperties` asynchronously.
-4. **Incremental delta synchronization.**
-   Tsubasa avoids repeated tree crawls. After initial account initialization, synchronization uses Google Drive's `changes.list` API with stored page tokens, fetching only modified records in a single payload.
-5. **Constant-time DOM rendering.**
-   Large directories with tens of thousands of items are rendered using viewport virtualization (TanStack Virtual). The DOM node count remains constant regardless of folder size.
-
----
-
-## 4. Quota, allocation, and storage mechanics
-
-### 4.1 Headroom and safety buffer
-* **Ceiling per account:** 14.25 GB maximum allocation on free 15 GB accounts.
-* **Safety reserve:** 750 MB is strictly reserved to protect Gmail, Google Photos, and system metadata from bouncing incoming mail.
-* **Dynamic calculation:**
-  $$\text{Headroom}_i = \max(0, \text{limit}_i - 750\text{ MB} - \text{usage}_i)$$
-* **System storage accounting:** Backup snapshots, database mirrors, and manifest files stored in Drive are included in both individual account meters and the global storage tally.
-
-### 4.2 Placement engine: Folder-Cohesion Best-Fit
-To keep files organized and easily browsable directly inside `drive.google.com`, Tsubasa uses **Path Affinity** rather than scattering sibling files across random accounts.
+### 3.2 Folder-cohesion best-fit placement
 
 ```mermaid
 flowchart TD
-    Upload["Upload File or Folder"] --> SizeCheck{"Is File > 14.25 GB?"}
-    SizeCheck -- Yes --> Reject["Hard Reject: Exceeds 14.25 GB single-account ceiling"]
-    SizeCheck -- No --> HasParent{"Does parent folder exist<br/>on an account with room?"}
-    HasParent -- Yes --> PlaceAffinity["Place on existing parent account<br/>(Preserve folder cohesion)"]
-    HasParent -- No --> BatchCheck{"Is it a multi-file folder upload?"}
-    BatchCheck -- Yes --> BottomUp["Calculate branch size bottom-up.<br/>Find account where (Headroom - BranchSize) is minimal.<br/>Split at subfolder level only if branch > 14.25 GB."]
-    BatchCheck -- No --> SingleBestFit["Run Best-Fit across accounts:<br/>Min(Headroom - FileSize)"]
-    BottomUp --> Mirror["Mirror folder hierarchy in target account's Tsubasa Storage/"]
+    Upload["Upload File or Folder"] --> SizeCheck{"File > 14.25 GB?"}
+    SizeCheck -- Yes --> Reject["Reject: Exceeds 14.25 GB single-file ceiling"]
+    SizeCheck -- No --> HasParent{"Parent folder exists on account with headroom?"}
+    HasParent -- Yes --> PlaceAffinity["Place on sibling account (folder affinity)"]
+    HasParent -- No --> BatchCheck{"Multi-file folder upload?"}
+    BatchCheck -- Yes --> BottomUp["Size branches bottom-up.<br/>Best-fit whole branches.<br/>Split at subfolder level only when needed."]
+    BatchCheck -- No --> SingleBestFit["Best-fit across accounts: min(Headroom - FileSize)"]
+    BottomUp --> Mirror["Mirror path in _Tsubasa~ Pool N/"]
     SingleBestFit --> Mirror
     PlaceAffinity --> Mirror
 ```
 
-1. **Upload limit (Hard reject):** Any single file exceeding 14.25 GB is rejected immediately at the frontend with an informative size limit dialog.
-2. **Folder affinity (Existing path priority):** If a parent directory (like `/Projects/2026/`) already holds files on Account A and Account A has enough headroom, the file is placed on Account A.
-3. **Bottom-up branch sizing (Directory uploads):** When uploading a folder hierarchy, Tsubasa computes the total size of the deepest subfolders first. The placement engine fits whole subfolders into the account with the best fit. A directory is split at subfolder boundaries only if its total size exceeds an account's headroom.
-4. **Physical folder mirroring:** Inside each account's `Tsubasa Storage/`, Tsubasa recreates the directory path so browsing via Google Drive's web UI remains structured and legible.
+1. **Single-file limit.** Any file over 14.25 GB fails validation immediately.
+2. **Folder affinity.** If the parent directory already has files on an account with enough headroom and daily transfer quota, new files land on that account.
+3. **Bottom-up branch sizing.** Folder uploads sum subtree sizes bottom-up, placing whole subfolders by best-fit and splitting at subfolder boundaries only when a branch exceeds single-account headroom.
+4. **Physical mirroring.** Directories mirror inside each account's `_Tsubasa~ Pool <N>` folder, or `_Tsubasa~ Pool share` for the Share Pool.
 
-### 4.3 Transfer limit monitoring
-* Google enforces a strict upload limit of 750 GB per rolling 24-hour window per account.
-* SQLite maintains a rolling `transfer_logs` ledger recording every upload timestamp and size. The UI surfaces live 24-hour transfer gauges per account to prevent hitting Google rate caps.
+### 3.3 Transfers and persisted jobs
 
-### 4.4 Defensive lifecycle management
-* **Soft delete:** Deleting a file marks it as trashed in SQLite and issues an update to Google Drive (`trashed: true`). The file remains recoverable in the Google Drive trash.
-* **Empty trash:** Quota is permanently reclaimed only when the user explicitly triggers "Empty Trash" through a confirmed action.
+- **Daily upload cap.** Google enforces a 750 GB rolling 24-hour upload limit per account, tracked in `transfer_logs` and shown per account in the sidebar and CLI.
+- **Upload paths.** Files up to 5 MiB use a verified single-shot multipart path with MD5 check before SQLite commit (`POST /api/files/upload`). Larger files stream via a single-PUT resumable session in the UI (`POST /api/files/upload`) and via persisted chunked resumable sessions with MD5 verification before commit in the CLI (`POST /api/transfers/upload`, `PUT /api/transfers/:jobId/chunk`).
+- **Downloads.** Downloads stream with HTTP `Range` support. The CLI adds `.part` resume and hash verification.
+- **Persisted transfer jobs.** Long-running `upload`, `import_drive`, `cross_pool_move`, and `account_evacuate` jobs store state in `transfer_jobs`, `transfer_job_items`, and `transfer_job_shares` so interrupted transfers can resume or cancel cleanly.
 
-### 4.5 External modification detection and over-ceiling handling
-Users may occasionally edit, move, or delete files directly inside `drive.google.com`.
+### 3.4 Lifecycle and discrepancy handling
 
-* **Detection:** Periodic or on-demand delta sync via `drive.changes.list` flags discrepancies between Google Drive and the local SQLite index.
-* **Over-ceiling files ($> 14.25\text{ GB}$ detected in `Tsubasa Storage/`):**
-  When a file between 14.25 GB and 15 GB is found in `Tsubasa Storage/`, the UI presents two sequential options:
-  1. **Accept into Tsubasa (Over-ceiling mode):** Indexes the file into Tsubasa. The account headroom immediately drops to 0 GB (locked to read-only for new writes). The account card displays a high-priority alert: *"Buffer breached (e.g. 14.6 / 15.0 GB). Incoming emails may fail."*
-  2. **Move to root (Eject outside Tsubasa):** Moves the file from `Tsubasa Storage/` out to `My Drive` root via `files.update` (takes 0 extra bytes). Tsubasa removes it from its SQLite index and treats the space as external non-Tsubasa usage.
-* **Standard external change actions:**
-  1. **Accept changes:** Updates SQLite paths, file sizes, and checksums to match the new Drive state.
-  2. **Rebuild index:** Scans all account folders to reconstruct the entire virtual tree from scratch.
-  3. **Auto-rebalance:** If files added directly in `drive.google.com` push an account beyond its 14.25 GB ceiling, a rebalance action moves Tsubasa-managed files to an emptier account using Google's cloud-to-cloud server-side copy.
+- **Soft delete and purge.** Deleting marks files trashed in SQLite and enqueues `trashed: true` in `drive_outbox`. Quota reclaims only on permanent purge (`DELETE /api/trash/empty` or single-file purge).
+- **External changes.** The discrepancy scanner classifies five states: `overCeiling`, `conflicts`, `unindexed`, `modified`, and `missingRemote`. You can accept valid changes, resolve path conflicts, rebuild via cold sync, or rebalance over-ceiling accounts via cloud-to-cloud copy (`drive.files.copy`).
+- **Over-ceiling files.** Files over 14.25 GB inside `_Tsubasa~ Pool <N>` are rejected by `acceptExternalFile`, cold sync, and delta sync (`FileExceedsCeilingError`). Resolve them with **Move to root** (`POST /api/sync/resolve/move-to-root`), which moves the file to `My Drive` root with zero extra bytes, clears its Tsubasa `appProperties`, and removes it from SQLite.
 
-### 4.6 Cold recovery without cloud databases
-* Every file uploaded by Tsubasa carries identifying metadata in Google Drive:
-  ```json
-  {
-    "tsubasa_managed": "true",
-    "tsubasa_virtual_path": "/Backups/archive.tar.gz",
-    "tsubasa_virtual_id": "c4b9-...",
-    "tsubasa_checksum": "sha256-..."
-  }
-  ```
-* When cloning the repository or moving to a new machine, dropping `.env` files into `.oauths/` and triggering a sync rebuilds the SQLite database from Google Drive metadata in seconds.
+### 3.5 Cold recovery
 
----
+Every managed file stores Drive `appProperties`:
 
-## 5. Phased implementation plan
-
-```mermaid
-flowchart TD
-    P1["Phase 1: Project Scaffolding & Foundations"] --> P2["Phase 2: Account Engine & Drive Synchronization"]
-    P2 --> P3["Phase 3: Storage Pool & Folder-Cohesion Placement"]
-    P3 --> P4["Phase 4: Transfer Pipelines & External Changes Detector"]
-    P4 --> P5["Phase 5: UI Teardown & Consolidated React + StyleX UI"]
-    P5 --> P6["Phase 6: Durability Verification & Performance Tuning"]
-    P6 --> P7["Phase 7: Electron Desktop Packaging"]
+```json
+{
+  "tsubasa_managed": "true",
+  "tsubasa_virtual_path": "/Backups/archive.tar.gz",
+  "tsubasa_virtual_id": "c4b9-...",
+  "tsubasa_checksum": "<md5-hex>"
+}
 ```
 
-### Phase 1: Project scaffolding and foundations
-- [x] Initialize repository structure with TypeScript, Vite, and Node.js.
-- [x] Configure StyleX with Babel/Vite integration (`@stylexjs/rollup-plugin`).
-- [x] Set up Hono backend server using `@hono/node-server`.
-- [x] Configure SQLite with WAL mode, optimized cache pragmas, and Drizzle ORM.
-- [x] Define database schemas:
-  - `accounts`: ID, email, display name, avatar URL, quota limits, current usage, sync state.
-  - `files`: Virtual path, name, size, mime type, hash, owning account ID, Drive file ID, trash state.
-  - `folders`: Virtual path, name, parent folder ID, created timestamp.
-  - `transfer_logs`: Account ID, transfer type, byte count, timestamp for 24-hour rolling calculations.
+On a new machine, import Desktop OAuth JSON or `.env` credentials via the sidebar, `.oauths/`, or `tsubasa auth add`, then run a cold sync to rebuild `data/tsubasa.db` from Drive metadata.
 
-### Phase 2: Account engine and Drive synchronization
-- [x] Implement `.oauths/` scanner to load credential files dynamically.
-- [x] Build Google Auth client pool with automatic token refresh handling.
-- [x] Implement account hydration using `drive.about.get(fields="user,storageQuota")`.
-- [x] Implement root folder discovery and creation (`Tsubasa Storage/` per account).
-- [x] Build cold-start reconciliation scanner using `appProperties` queries.
-- [x] Implement incremental synchronization using `drive.changes.list` with page tokens.
-- [~] Document Desktop App OAuth setup guide in UI setup README:
-  - Create client ID with Application Type: **Desktop app** (not Web app).
-  - Eliminates `redirect_uri_mismatch` errors on loopback/localhost ports without requiring pre-registered URIs in Google Cloud Console.
-  - A single Desktop OAuth Client ID authorizes multiple personal Google accounts.
-  - Step by step guidelines per console.cloud.google.com surfaces. (see and decide if screenshots is the better call) 
+## 4. Open roadmap (Phase 8+)
 
-### Phase 3: Storage pool and folder-cohesion placement
-- [x] Build dynamic headroom calculator enforcing the 750 MB buffer.
-- [x] Implement Folder-Cohesion Best-Fit algorithm with bottom-up directory sizing.
-- [x] Implement physical folder mirroring inside each account's `Tsubasa Storage/`.
-- [x] Build 24-hour rolling transfer window aggregator for Google's 750 GB limit.
-- [x] Account for manifest and database snapshot files in quota metrics.
+Phase 8 shipped the `tsubasa` CLI, canonical `tsubasa export` (`GET /api/export`), HTTP `Range` downloads, external Drive import, and the `extensions/<name>/manifest.json` subprocess runner (see [src/cli/README.md](../src/cli/README.md) and [extensions/README.md](../extensions/README.md)). The remaining items are still open:
 
-### Phase 4: Transfer pipelines and external changes detector
-- [x] Build resumable streaming upload endpoint (`POST /api/files/upload`) with 14.25 GB client-side rejection.
-- [x] Build authenticated streaming download proxy (`GET /api/files/:id/download`).
-- [x] Implement soft-trashing (`POST /api/files/:id/trash`).
-- [x] Implement restore and permanent purge (`DELETE /api/trash/empty`).
-- [x] Implement external modification detector comparing `changes.list` against SQLite index.
-- [x] Implement over-ceiling resolution handlers: "Accept into Tsubasa" and "Move to root".
-- [x] Implement cloud-to-cloud rebalance engine (`drive.files.copy` between accounts).
+- [ ] Add a thin client/server UI viewer hook so extensions can intercept file clicks in `src/client/`.
+- [ ] Optionally add a web/UI entry field to `extensions/<name>/manifest.json` for serving extension bundles directly in the UI.
+- [ ] Add `accounts.rootFolderId` to `standard` and `full` `tsubasa export` account records if extensions need account root Drive folder IDs.
+- [ ] Sync Google Drive `modifiedTime` into `files.updatedAt` if downstream tools need upstream modification timestamps instead of local SQLite index time.
 
-### Phase 5: UI evaluation and consolidated React + StyleX UI
-- [x] **Phase 5.1: REA-driven design teardown (Google Drive, MEGA, Dropbox, Hanekawa, and QuiviT Sage Mint)**
-  - Extract layout metrics, row padding, typography scales, and selection states from Google Drive (`docs/teardowns/google-drive.md`).
-  - Extract shell layout, sidebar storage meters, compact 32px row metrics, and context menus from MEGA desktop (`docs/teardowns/mega.md`).
-  - Extract mobile shell layout, 64px touch rows, bottom sheet menus, and navigation drawer from MEGA mobile (`docs/teardowns/mega-mobile.md`).
-  - Extract shell layout, 48px row contracts, Dig 2 tokens, and 24px popover radii from Dropbox (`docs/teardowns/dropbox.md`).
-  - Extract mobile symmetric grid, off-canvas 300px drawer, and column collapse contracts from Dropbox mobile (`docs/teardowns/dropbox-mobile.md`).
-  - Extract scale-adaptive sprite geometry, dither palettes, and bubble physics from Hanekawa (`docs/teardowns/hanekawa.md`).
-  - Extract 20px table row metrics, panel docking ranges, and sage-mint tokens from QuiviT (`docs/teardowns/quivit-sage-mint.md`).
-  - Formulate StyleX design systems (color tokens, AAA contrast, spacing scales, dark and light modes in `docs/reference-tokens/tokens.google-drive.stylex.ts`, `docs/reference-tokens/tokens.mega.stylex.ts`, `docs/reference-tokens/tokens.dropbox.stylex.ts`, `docs/reference-tokens/tokens.hanekawa.stylex.ts`, and `docs/reference-tokens/tokens.quivit-sage-mint.stylex.ts`).
-- [x] **Phase 5.2: Application shell and views**
-  - [x] Build main layout shell (desktop grid and responsive mobile drawer, breadcrumbs with drop targets, search bar, Bayer dither dividers, zero-pop-in 3-way theme switcher, and single-tab browser lock modal).
-  - [x] Build pool and account sidebar (multi-pool management, Share Pool view, isolated Tsubasa storage meter, per-account headroom cards with masked emails, 24-hour transfer gauges, and account lifecycle modals).
-  - [x] Build virtualized file explorer table using TanStack Virtual (fixed 32px desktop / 64px mobile rows, folder navigation, marquee and keyboard selection, cut/copy/paste, drag-and-drop moves with conflict resolution, rename/new-folder/account-move modals, and inline actions).
-  - [x] Build buffer breach warning banners for locked over-ceiling accounts.
-  - [x] Build drag-and-drop upload drawer with file and folder staging, virtualized queue, allocation preview, 14.25 GB ceiling checks, and transfer progress bars.
-  - [x] Build external modification drawer with discrepancy review (over-ceiling "Accept into Tsubasa" and "Move to root", path conflicts, unindexed/modified/missing-remote items, and account rebalance).
-  - [x] Build trash view and permanent purge confirmation modal with single/batch restore and purge actions.
-  - [x] Build Share Pool workflow and share modal for copying selected items into public Drive batch folders.
+## 5. Completed milestones (Phases 1 to 7)
 
-### Phase 6: Durability verification and performance tuning
-- [x] Benchmark local SQLite query latency under 100,000 file records.
-- [x] Test cold recovery by wiping the local SQLite file and rebuilding state from Drive accounts.
-- [x] Verify handling of expired tokens, revoked access, and quota limits.
-- [x] Validate DOM frame rate during rapid virtualized scrolling.
+```mermaid
+flowchart LR
+    P1["1. Foundations"] --> P2["2. Accounts & Sync"]
+    P2 --> P3["3. Pool & Placement"]
+    P3 --> P4["4. Transfers & Discrepancies"]
+    P4 --> P5["5. React + StyleX UI"]
+    P5 --> P6["6. Durability"]
+    P6 --> P7["7. Electron Desktop"]
+    P7 --> P8["8. CLI & Extensions"]
+```
 
-### Phase 7: Electron desktop packaging
-- [x] Implement Electron main process to launch the background Hono service on a private port.
-- [x] Configure `BrowserWindow` to load Vite's compiled frontend bundle.
-- [x] Enforce single-instance Electron priority over browser tabs:
-  - Electron enforces a single desktop instance through `app.requestSingleInstanceLock()`.
-  - When the Electron desktop app is running, it takes priority over any browser tab.
-  - Electron's `BrowserWindow` and external `localhost` browser tabs run on separate origins, which isolates `BroadcastChannel` and `navigator.locks`. The background Hono server tracks the active instance lease as either `electron` or `browser` and enforces Electron priority.
-  - Any `localhost` browser tab opened while Electron is running receives a rejection from the backend before mounting the workspace and renders the same blocking modal so it cannot conflict with the desktop app.
-- [x] Add native desktop features (tray icon, custom tray popup menu, `Start with Windows` autostart toggle with NSIS uninstall cleanup, close-to-tray, native light/dark title bar, and dynamic window title).
-- [x] Build production Windows NSIS installer and portable `.zip` packages (with bundled `.portable` marker in the portable `.zip` archive).
-
-### Phase 8: CLI, extensions, and future UI viewer hooks
-
-- [x] Implement the `tsubasa` CLI, canonical `tsubasa export` at `GET /api/export`, HTTP `Range` downloads with metadata headers, and the `extensions/<name>/manifest.json` CLI subprocess runner, documented in `src/cli/README.md` and `extensions/README.md`.
-- [ ] Add a thin client and server UI viewer hook when integrating an external web viewer directly into the React or Electron interface, because `extensions/` currently runs CLI subprocesses only and cannot intercept file clicks in `src/client/`.
-- [ ] Optionally extend `extensions/<name>/manifest.json` with a web or UI entry field if the server should serve or launch an extension's web bundle directly from the interface.
-- [ ] Add `accounts.rootFolderId` to `standard` and `full` `tsubasa export` account records if a future extension requires account root Drive folder IDs alongside per-file `driveFileId`.
-- [ ] Sync Google Drive `modifiedTime` into `files.updatedAt` if downstream tools require upstream Drive modification timestamps instead of local SQLite index time.
+| Phase | Shipped scope |
+|---|---|
+| **1. Foundations** | TypeScript, Vite, StyleX (`unplugin-stylex`), Hono (`@hono/node-server`), and SQLite WAL (`better-sqlite3`, Drizzle ORM, runtime migrations in `src/server/db/init.ts`). Tables: `pools`, `accounts`, `folders`, `files`, `transfer_logs`, `share_links`, `pending_drive_sync`, `drive_outbox`, `transfer_jobs`, `transfer_job_items`, `transfer_job_shares`. |
+| **2. Accounts & sync** | `.oauths/` scanner, OAuth client pool with token refresh, `drive.about.get(fields="user,storageQuota")` hydration, `_Tsubasa~ Pool <N>` and `_Tsubasa~ Pool share` root folders, cold-start recovery from `appProperties`, `drive.changes.list` delta sync, and Desktop app OAuth setup documented in `README.md` (Desktop app client type and production consent screen, linking to `temp/` for the full walkthrough). |
+| **3. Pool & placement** | Dynamic 750 MB reserve headroom calculator, `/.tsubasa` system storage accounting, Folder-Cohesion Best-Fit placement with bottom-up branch sizing, Drive directory mirroring, and 24-hour rolling `transfer_logs` aggregation for the 750 GB daily cap. |
+| **4. Transfers & discrepancies** | Streaming upload (`<= 5 MiB` verified single-shot multipart, `> 5 MiB` resumable streaming in UI and chunked persisted resumable in CLI) with 14.25 GB rejection, `Range`-capable download proxy, soft-trash/restore/purge (`DELETE /api/trash/empty`), discrepancy scanner (`overCeiling`, `conflicts`, `unindexed`, `modified`, `missingRemote`), Move to root for over-ceiling files, and cloud-to-cloud account rebalance. |
+| **5. React + StyleX UI** | Design teardowns (`docs/teardowns/`) and reference tokens (`docs/reference-tokens/`) for Google Drive, MEGA, Dropbox, Hanekawa, and QuiviT Sage Mint. Responsive workspace shell, multi-pool sidebar, Share Pool workflow, pooled storage and headroom cards with masked emails, 24-hour transfer gauges, TanStack Virtual file table, upload queue drawer, external changes drawer, buffer-breach alerts, and Trash view. |
+| **6. Durability & tuning** | Benchmarked local SQLite query latency at 100,000 file records, verified cold recovery after wiping `tsubasa.db`, and verified expired tokens, revoked access, quota limits, and virtualized scrolling frame rates. |
+| **7. Electron desktop** | Electron main process hosting local Hono and the compiled Vite bundle, `app.requestSingleInstanceLock()`, backend `electron` vs `browser` instance lease priority (separate origins isolate `BroadcastChannel` and `navigator.locks`), tray icon and custom tray menu, `Start with Windows` with NSIS uninstall cleanup, close-to-tray, native title bar theme, dynamic window title, and Windows NSIS installer plus portable `.zip` builds with `.portable` marker injection. |
