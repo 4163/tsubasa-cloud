@@ -131,3 +131,24 @@ Keep existing `src/client/`, `src/server/`, and `src/cli/` organization intact a
 - Launch a second Electron instance while running (visible or in tray): verify second process exits and primary window restores and focuses.
 - Open `http://localhost:<port>` in a browser while Electron is running: verify `TabBlockedModal` blocks the tab with Electron-owner messaging; open a browser tab first, then launch Electron, and verify Electron supersedes the browser tab on next heartbeat.
 - Run `npm run package:win`: verify `electron-builder` produces both the NSIS `Setup.exe` and the `.zip` archive, verify packaged app launches standalone without dev servers, verify `%AppData%\Tsubasa~ Cloud\` default home and `.portable` adjacent-folder override, and confirm `npm run typecheck` and `npm run build` pass.
+
+## Follow-up slices
+
+1. **Custom tray menu and Start with Windows toggle.**
+   - Replace Electron's native Win32 tray context menu with a lightweight frameless popup `BrowserWindow` on `tray.on('right-click', ...)` styled with Tsubasa's light/dark sage-mint tokens, flat 1px borders, Montserrat text, and gold focus/hover indicators.
+   - Include three items: `Show Tsubasa~ Cloud`, `Start with Windows`, and `Quit`.
+   - Handle Windows 11 overflow tray coordinates by falling back to `screen.getCursorScreenPoint()` when `tray.getBounds()` is empty, clamping inside `display.workArea`, and dismissing cleanly on `blur` and `Escape` without reopen flicker.
+   - Support `Start with Windows` on both installed NSIS and portable builds (off by default) and hide or disable it in dev (`!app.isPackaged`). Register with `--autostart` so Windows login boots hidden to tray, read live `app.getLoginItemSettings` state when opening the menu, and clean up the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry in `build/installer.nsh` on NSIS uninstall.
+2. **Dedicated port block audit and migration.**
+   - Move off hardcoded `3000`, `5173`, and `4173`/`4180` onto a single shared Tsubasa port block (candidate blocks: `28300`/`28301`/`28302` for Tsubasa goroawase `2-8-3`, or `22283`/`22284`/`22285` for Black Hanekawa `22` + `283`).
+   - Centralize `DEFAULT_SERVER_PORT` and update `src/server/index.ts`, `src/electron/serverHost.ts`, `src/cli/transport.ts`, `vite.config.ts`, `src/server/routes/accounts.ts`, `src/server/drive/auth.ts`, `.agents/frontend-audit/server.mjs`, and docs.
+   - Optionally record the bound port in `data/tsubasa.writer.lock` so `tsubasa` CLI auto-discovers Electron even after an ephemeral port fallback.
+3. **One-command localhost runners.**
+   - Add a zero-dependency `scripts/dev.mjs` wired to `npm run dev` that runs `dev:server` and `dev:web` together in one terminal and stops both on `Ctrl+C`.
+   - Add `npm start` to run the built `dist/` bundle directly through Hono (`TSUBASA_SERVE_STATIC=1 node dist/server/index.js`).
+4. **Sidebar version badge.**
+   - Inject `package.json`'s `version` at build time via Vite `define` and display a compact `v<version>` badge in `Sidebar.tsx`'s `brandHeader` using `Pixelify Sans`, matching `docs/styling-guide.md`.
+5. **Portable `.zip` marker out of the box.**
+   - Ship a `.portable` marker file inside the portable `.zip` archive (and exclude it from the NSIS installer) so extracted `.zip` builds store `data/` and `.oauths/` beside `Tsubasa~ Cloud.exe` automatically instead of falling back to `%AppData%\Tsubasa~ Cloud\`.
+6. **Document data and OAuth locations in `README.md`.**
+   - Add the launch-mode table to `README.md` covering default `<homeDir>`, `.oauths/`, and `data/tsubasa.db` paths across dev, CLI, NSIS, portable `.zip`, and `TSUBASA_HOME` override.
