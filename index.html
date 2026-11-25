@@ -17,7 +17,18 @@
     <script>
       (function () {
         try {
-          var choice = localStorage.getItem('tsubasa-theme-choice') || 'auto';
+          var choice = null;
+          try {
+            if (window.tsubasaDesktop && typeof window.tsubasaDesktop.getThemeChoice === 'function') {
+              var desktopChoice = window.tsubasaDesktop.getThemeChoice();
+              if (desktopChoice === 'light' || desktopChoice === 'dark' || desktopChoice === 'auto') {
+                choice = desktopChoice;
+              }
+            }
+          } catch (e) {}
+          if (!choice) {
+            choice = localStorage.getItem('tsubasa-theme-choice') || 'auto';
+          }
           var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           var isDark = choice === 'dark' || (choice === 'auto' && prefersDark);
           var theme = isDark ? 'dark' : 'light';

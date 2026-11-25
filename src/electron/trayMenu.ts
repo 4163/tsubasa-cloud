@@ -17,7 +17,6 @@ export interface TrayMenuState {
 
 export interface TrayMenuOptions {
   appName: string;
-  packageRoot: string;
   preloadPath: string;
   getState: () => TrayMenuState;
   onShow: () => void;
@@ -57,7 +56,7 @@ function buildTrayMenuHtml(appName: string): string {
 <style>
 :root,
 html[data-theme="light"] {
-  --surface: #f7faf5;
+  --surface: ${LIGHT_SURFACE};
   --hover: #e4ede7;
   --subtle: #c2d1c7;
   --separator: rgba(17, 29, 24, 0.11);
@@ -70,7 +69,7 @@ html[data-theme="light"] {
 }
 
 html[data-theme="dark"] {
-  --surface: #12211d;
+  --surface: ${DARK_SURFACE};
   --hover: #162d26;
   --subtle: #294138;
   --separator: rgba(229, 242, 235, 0.12);

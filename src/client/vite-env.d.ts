@@ -13,6 +13,7 @@ export interface DesktopAuthCompletedPayload {
 export interface TsubasaDesktopBridge {
   readonly isElectron: true;
   setTitle(title: string): void;
+  getThemeChoice(): DesktopThemeChoice;
   setThemeChoice(choice: DesktopThemeChoice): void;
   onAuthCompleted(callback: (payload: DesktopAuthCompletedPayload) => void): () => void;
 }

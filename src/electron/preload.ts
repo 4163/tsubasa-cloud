@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('tsubasaDesktop', {
       ipcRenderer.send('tsubasa:set-title', title);
     }
   },
+  getThemeChoice(): DesktopThemeChoice {
+    const choice: unknown = ipcRenderer.sendSync('tsubasa:get-theme-choice');
+    return choice === 'auto' || choice === 'light' || choice === 'dark' ? choice : 'auto';
+  },
   setThemeChoice(choice: DesktopThemeChoice): void {
     if (choice === 'auto' || choice === 'light' || choice === 'dark') {
       ipcRenderer.send('tsubasa:set-theme-choice', choice);

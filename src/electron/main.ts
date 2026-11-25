@@ -36,8 +36,7 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(MODULE_DIR, '..', '..');
 const PRELOAD_PATH = path.join(MODULE_DIR, 'preload.cjs');
 const TRAY_PRELOAD_PATH = path.join(MODULE_DIR, 'trayPreload.cjs');
-const TRAY_ICON_PATH = path.join(PACKAGE_ROOT, 'build', 'icon.ico');
-const WINDOW_ICON_PATH = path.join(PACKAGE_ROOT, 'build', 'icon.ico');
+const APP_ICON_PATH = path.join(PACKAGE_ROOT, 'build', 'icon.ico');
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') {
@@ -141,14 +140,14 @@ function createTrayIcon(icoFrames: Map<number, Buffer>): NativeImage {
     return icon;
   }
 
-  return nativeImage.createFromPath(TRAY_ICON_PATH);
+  return nativeImage.createFromPath(APP_ICON_PATH);
 }
 
 function resolveDevWindowIcon(icoFrames: Map<number, Buffer>): NativeImage | string {
   const scaleFactor = screen.getPrimaryDisplay().scaleFactor;
   const targetSize = scaleFactor <= 1 ? 48 : 64;
   const frame = icoFrames.get(targetSize);
-  return frame ? nativeImage.createFromBuffer(frame) : WINDOW_ICON_PATH;
+  return frame ? nativeImage.createFromBuffer(frame) : APP_ICON_PATH;
 }
 
 function isAutostartSupported(): boolean {
@@ -201,7 +200,6 @@ function createTray(icoFrames: Map<number, Buffer>): void {
 
   trayMenu = new TrayMenuController({
     appName: APP_NAME,
-    packageRoot: PACKAGE_ROOT,
     preloadPath: TRAY_PRELOAD_PATH,
     getState: () => ({
       isDark: resolveIsDarkTheme(),
@@ -237,6 +235,10 @@ function registerIpcHandlers(): void {
     const trimmed = rawTitle.trim();
     if (!trimmed || !mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.setTitle(trimmed);
+  });
+
+  ipcMain.on('tsubasa:get-theme-choice', (event) => {
+    event.returnValue = currentThemeChoice;
   });
 
   ipcMain.on('tsubasa:set-theme-choice', (_event, rawChoice: unknown) => {
@@ -288,6 +290,7 @@ function createMainWindow(
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -431,7 +434,7 @@ if (!gotSingleInstanceLock) {
         },
       });
 
-      const icoFrames = readIcoPngFrames(TRAY_ICON_PATH);
+      const icoFrames = readIcoPngFrames(APP_ICON_PATH);
       createTray(icoFrames);
       mainWindow = createMainWindow(serverHost, icoFrames);
     })
