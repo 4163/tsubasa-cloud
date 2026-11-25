@@ -317,7 +317,6 @@ export function useShareWizard({
     isInspecting,
     selectedAccountIds,
     validationData,
-    isValidating,
     isSubmitting,
     error,
     setError,

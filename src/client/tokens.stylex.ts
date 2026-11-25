@@ -170,7 +170,8 @@ export const layout = stylex.defineVars({
   loadingSpinnerSize: '28px',
   ditherStripHeight: '6px',
   shareModalWidth: '540px',
-  shareDriveListMaxHeight: '220px',
+  shareDriveListMaxHeight: '180px',
+  shareDriveListMaxHeightCoarse: '196px',
   shareResultListMaxHeight: '180px',
 });
 

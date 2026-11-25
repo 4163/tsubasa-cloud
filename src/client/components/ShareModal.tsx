@@ -146,6 +146,11 @@ const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     gap: spacing.space1,
+    flexShrink: 0,
+  },
+  dangerBannerLiveWrap: {
+    flexShrink: 0,
+    marginTop: spacing.space2,
   },
   dangerBannerHeader: {
     display: 'flex',
@@ -162,6 +167,7 @@ const styles = stylex.create({
     color: colors.dangerTextOnSurface,
     lineHeight: typography.lineHeightBody,
     fontVariantNumeric: 'tabular-nums',
+    overflowWrap: 'anywhere',
   },
   successStrip: {
     padding: spacing.space3,
@@ -273,8 +279,17 @@ const styles = stylex.create({
       minHeight: '44px',
     },
   },
+  driveSelectionArea: {
+    height: layout.shareDriveListMaxHeight,
+    display: 'flex',
+    flexDirection: 'column',
+    '@media (pointer: coarse)': {
+      height: layout.shareDriveListMaxHeightCoarse,
+    },
+  },
   driveListContainer: {
-    maxHeight: layout.shareDriveListMaxHeight,
+    flex: 1,
+    minHeight: layout.mobileTouchTarget,
     overflowY: 'auto',
     backgroundColor: 'transparent',
     borderRadius: radius.none,
@@ -619,7 +634,6 @@ export function ShareModal({
     isInspecting,
     selectedAccountIds,
     validationData,
-    isValidating,
     isSubmitting,
     error,
     setError,
@@ -710,6 +724,10 @@ export function ShareModal({
     );
   const showResultLinksList =
     effectiveOpen && Boolean(executeResult && executeResult.links.length > 0);
+  const selectionInsufficientReason =
+    selectedAccountIds.length > 0 && validationData && !validationData.valid && validationData.reason
+      ? validationData.reason
+      : null;
 
   useScrollableKeyboardNav({
     scrollRef: driveListRef,
@@ -1053,110 +1071,122 @@ export function ShareModal({
                     </div>
                   </div>
 
-                  {!isValidating && validationData && !validationData.valid && validationData.reason && (
-                    <div {...stylex.props(styles.dangerBanner)} role="status">
-                      <div {...stylex.props(styles.dangerBannerHeader)}>
-                        <IconAlertTriangle size={15} />
-                        <span>Selection insufficient</span>
-                      </div>
-                      <p {...stylex.props(styles.dangerBannerText)}>{validationData.reason}</p>
-                    </div>
-                  )}
-
                   {emptyAccounts.length === 0 ? (
                     <div {...stylex.props(styles.emptyDriveNotice)}>
                       No empty drives found across your pools. Remove files from an account or add a
                       new Google Drive account to expand the Share Pool.
                     </div>
                   ) : (
-                    <div
-                      ref={driveListRef}
-                      role="listbox"
-                      aria-multiselectable="true"
-                      aria-label="Select empty drives for Share Pool"
-                      aria-activedescendant={activeDescendantId}
-                      tabIndex={0}
-                      onKeyDown={handleDriveListboxKeyDown}
-                      {...stylex.props(styles.driveListContainer)}
-                    >
+                    <div {...stylex.props(styles.driveSelectionArea)}>
                       <div
-                        {...stylex.props(styles.virtualTrack)}
-                        style={{ height: `${driveVirtualizer.getTotalSize()}px` }}
+                        ref={driveListRef}
+                        role="listbox"
+                        aria-multiselectable="true"
+                        aria-label="Select empty drives for Share Pool"
+                        aria-activedescendant={activeDescendantId}
+                        tabIndex={0}
+                        onKeyDown={handleDriveListboxKeyDown}
+                        {...stylex.props(styles.driveListContainer)}
                       >
-                        {driveVirtualizer.getVirtualItems().map((virtualRow) => {
-                          const acc = emptyAccounts[virtualRow.index];
-                          if (!acc) return null;
-                          const selectable = isDriveSelectable(acc);
-                          const isSelected = selectedAccountIds.includes(acc.id);
-                          const statusBadge = getDriveStatusBadge(acc);
+                        <div
+                          {...stylex.props(styles.virtualTrack)}
+                          style={{ height: `${driveVirtualizer.getTotalSize()}px` }}
+                        >
+                          {driveVirtualizer.getVirtualItems().map((virtualRow) => {
+                            const acc = emptyAccounts[virtualRow.index];
+                            if (!acc) return null;
+                            const selectable = isDriveSelectable(acc);
+                            const isSelected = selectedAccountIds.includes(acc.id);
+                            const statusBadge = getDriveStatusBadge(acc);
 
-                          return (
-                            <div
-                              key={acc.id}
-                              id={`${driveOptionIdPrefix}-${acc.id}`}
-                              role="option"
-                              aria-selected={isSelected}
-                              aria-disabled={!selectable || isSubmitting}
-                              onClick={() => {
-                                setActiveDriveIndex(virtualRow.index);
-                                handleToggleAccount(acc);
-                              }}
-                              {...stylex.props(
-                                styles.driveRow,
-                                isSelected && styles.driveRowSelected,
-                                (!selectable || isSubmitting) && styles.driveRowDisabled,
-                                virtualRow.index === emptyAccounts.length - 1 && styles.rowLast
-                              )}
-                              style={{
-                                height: `${virtualRow.size}px`,
-                                transform: `translateY(${virtualRow.start}px)`,
-                              }}
-                            >
-                              <span
+                            return (
+                              <div
+                                key={acc.id}
+                                id={`${driveOptionIdPrefix}-${acc.id}`}
+                                role="option"
+                                aria-selected={isSelected}
+                                aria-disabled={!selectable || isSubmitting}
+                                onClick={() => {
+                                  setActiveDriveIndex(virtualRow.index);
+                                  handleToggleAccount(acc);
+                                }}
                                 {...stylex.props(
-                                  styles.checkbox,
-                                  isSelected && styles.checkboxChecked
+                                  styles.driveRow,
+                                  isSelected && styles.driveRowSelected,
+                                  (!selectable || isSubmitting) && styles.driveRowDisabled,
+                                  virtualRow.index === emptyAccounts.length - 1 && styles.rowLast
                                 )}
+                                style={{
+                                  height: `${virtualRow.size}px`,
+                                  transform: `translateY(${virtualRow.start}px)`,
+                                }}
                               >
-                                {isSelected && <IconCheck size={12} />}
-                              </span>
-                              <div {...stylex.props(styles.driveInfoCol)}>
-                                <div {...stylex.props(styles.driveTopLine)}>
-                                  <span {...stylex.props(styles.driveName)} onMouseEnter={syncOverflowTitle}>
-                                    {getAccountLabel(acc.displayName, acc.email, acc.id)}
-                                  </span>
-                                </div>
-                                <div {...stylex.props(styles.driveSubLine)}>
-                                  <span {...stylex.props(styles.driveEmail)} onMouseEnter={syncOverflowTitle}>
-                                    {acc.email}
-                                  </span>
-                                  <span {...stylex.props(styles.driveMetaSep)} aria-hidden="true">
-                                    ·
-                                  </span>
-                                  {!acc.currentPoolIsShare && (
-                                    <span {...stylex.props(styles.drivePoolMeta)} onMouseEnter={syncOverflowTitle}>
-                                      {acc.currentPoolName}
-                                    </span>
+                                <span
+                                  {...stylex.props(
+                                    styles.checkbox,
+                                    isSelected && styles.checkboxChecked
                                   )}
-                                  {statusBadge && (
-                                    <span
-                                      {...stylex.props(
-                                        statusBadge.tone === 'danger'
-                                          ? styles.driveStatusBadge
-                                          : styles.driveNeutralStatus
-                                      )}
-                                    >
-                                      {statusBadge.label}
+                                >
+                                  {isSelected && <IconCheck size={12} />}
+                                </span>
+                                <div {...stylex.props(styles.driveInfoCol)}>
+                                  <div {...stylex.props(styles.driveTopLine)}>
+                                    <span {...stylex.props(styles.driveName)} onMouseEnter={syncOverflowTitle}>
+                                      {getAccountLabel(acc.displayName, acc.email, acc.id)}
                                     </span>
-                                  )}
+                                  </div>
+                                  <div {...stylex.props(styles.driveSubLine)}>
+                                    <span {...stylex.props(styles.driveEmail)} onMouseEnter={syncOverflowTitle}>
+                                      {acc.email}
+                                    </span>
+                                    <span {...stylex.props(styles.driveMetaSep)} aria-hidden="true">
+                                      ·
+                                    </span>
+                                    {!acc.currentPoolIsShare && (
+                                      <span {...stylex.props(styles.drivePoolMeta)} onMouseEnter={syncOverflowTitle}>
+                                        {acc.currentPoolName}
+                                      </span>
+                                    )}
+                                    {statusBadge && (
+                                      <span
+                                        {...stylex.props(
+                                          statusBadge.tone === 'danger'
+                                            ? styles.driveStatusBadge
+                                            : styles.driveNeutralStatus
+                                        )}
+                                      >
+                                        {statusBadge.label}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
+                                <span {...stylex.props(styles.driveHeadroom)}>
+                                  {formatBytes(acc.headroomBytes)}
+                                </span>
                               </div>
-                              <span {...stylex.props(styles.driveHeadroom)}>
-                                {formatBytes(acc.headroomBytes)}
-                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        {...stylex.props(
+                          selectionInsufficientReason !== null && styles.dangerBannerLiveWrap
+                        )}
+                      >
+                        {selectionInsufficientReason && (
+                          <div {...stylex.props(styles.dangerBanner)}>
+                            <div {...stylex.props(styles.dangerBannerHeader)}>
+                              <IconAlertTriangle size={15} />
+                              <span>Selection insufficient</span>
                             </div>
-                          );
-                        })}
+                            <p {...stylex.props(styles.dangerBannerText)}>
+                              {selectionInsufficientReason}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
