@@ -29,7 +29,19 @@ import {
   mapDomainErrorToResponse,
 } from './shared.js';
 
-const router = new Hono()
+export interface AuthCompletedEvent {
+  account: string;
+  poolId: number;
+  conflicts: number;
+}
+
+export interface AccountsRouterOptions {
+  serveStatic?: boolean;
+  onAuthCompleted?: (payload: AuthCompletedEvent) => void;
+}
+
+export function createAccountsRouter(options: AccountsRouterOptions = {}) {
+  return new Hono()
   .get('/api/accounts', async (c) => {
     const parsedPool = parseOptionalPoolId(c.req.query('poolId'));
     if (!parsedPool.ok) {
@@ -104,8 +116,13 @@ const router = new Hono()
     (c) => {
       const accountId = c.req.param('id');
       const { redirect_uri: redirectUri } = c.req.valid('query');
+      const trimmedRedirectUri = redirectUri?.trim();
+      const effectiveRedirectUri =
+        trimmedRedirectUri && trimmedRedirectUri.length > 0
+          ? trimmedRedirectUri
+          : `${new URL(c.req.url).origin}/api/auth/callback`;
       try {
-        const url = authPool.generateAuthUrl(accountId, redirectUri);
+        const url = authPool.generateAuthUrl(accountId, effectiveRedirectUri);
         return c.json({ url });
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
@@ -345,7 +362,29 @@ const router = new Hono()
         startBackgroundJob('oauth_cold_sync', hydRes.accountId, () => runColdReconciliation(hydRes.accountId));
       }
 
-      const clientOrigin = process.env.CLIENT_URL || (url.port === '3000' ? 'http://localhost:5173' : url.origin);
+      if (options.onAuthCompleted) {
+        try {
+          options.onAuthCompleted({
+            account: hydRes.accountId,
+            poolId: hydRes.poolId,
+            conflicts: conflictsCount,
+          });
+        } catch (callbackErr) {
+          console.warn(
+            'onAuthCompleted listener error:',
+            callbackErr instanceof Error ? callbackErr.message : String(callbackErr)
+          );
+        }
+      }
+
+      const envClientUrl = process.env.CLIENT_URL?.trim();
+      const clientOrigin = envClientUrl
+        ? envClientUrl
+        : options.serveStatic
+          ? url.origin
+          : url.port === '3000'
+            ? 'http://localhost:5173'
+            : url.origin;
       return c.redirect(
         `${clientOrigin}/?auth=success&account=${encodeURIComponent(hydRes.accountId)}&poolId=${hydRes.poolId}&conflicts=${conflictsCount}`
       );
@@ -353,5 +392,6 @@ const router = new Hono()
       return c.text(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`, 500);
     }
   });
+}
 
-export default router;
+export default createAccountsRouter();
