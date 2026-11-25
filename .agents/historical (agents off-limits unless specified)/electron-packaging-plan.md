@@ -41,9 +41,9 @@ The same formatting helper updates `document.title` in regular browsers and send
 - **Always-active tray icon.** Created on app startup using `build/icon.ico` (generated from `docs/svg-r44-app.svg`) with static tooltip `Tsubasa~ Cloud`.
 - **Close hides to tray.** Clicking the window close button (`X`) prevents default termination and hides `mainWindow` to the system tray instead, keeping the background Hono server, outbox worker, and active transfers alive.
 - **Tray interactions:**
-  - Left-click (or `Show` menu item): shows, unminimizes, and focuses `mainWindow`.
-  - Context menu: `Show Tsubasa~ Cloud`, separator, `Quit`.
-- **Clean quit.** Selecting `Quit` from the tray menu (or triggering `app.quit()` / OS shutdown) sets `isQuitting = true`, closes the window, stops the embedded Hono server, closes SQLite, and releases `data/tsubasa.writer.lock`.
+  - Left-click (or `Show Tsubasa~ Cloud` menu item): shows, unminimizes, and focuses `mainWindow`.
+  - Right-click: opens the custom frameless tray popup (`src/electron/trayMenu.ts` and `src/electron/trayPreload.ts`) with `Show Tsubasa~ Cloud`, `Start with Windows`, separator, and `Quit`.
+- **Clean quit.** Selecting `Quit` from the tray menu (or triggering `app.quit()` / OS shutdown) sets `isQuitting = true`, destroys the tray popup, closes the window, stops the embedded Hono server, closes SQLite, and releases `data/tsubasa.writer.lock`.
 
 ### 4. Single-instance and Electron priority
 
@@ -58,13 +58,14 @@ The same formatting helper updates `document.title` in regular browsers and send
 - **Private localhost HTTP origin.** Instead of `file://` (which breaks relative `/api/...` Hono RPC paths, `history.replaceState`, and storage isolation), the Electron app loads its workspace over `http://127.0.0.1:<port>/`.
 - **Static asset serving.** When running in packaged mode (or when `TSUBASA_SERVE_STATIC=1`), the Hono app serves the compiled Vite frontend from `dist/` and falls back to `dist/index.html` for non-`/api` GET routes.
 - **Port selection and CLI interop:**
-  - Probe `http://127.0.0.1:${PORT || 3000}/api/health` first.
-  - If a live Tsubasa backend with matching `dbFingerprint` is already running on that port (for example `npm run dev:server` during development), Electron attaches to it instead of colliding on `data/tsubasa.writer.lock`.
-  - Otherwise, Electron starts its own Hono server bound to `127.0.0.1`: trying port `3000` (or `PORT`) first so the `tsubasa` CLI auto-discovers it, and falling back to an OS-assigned ephemeral port (`0`) if `3000` is occupied by an unrelated process.
+  - Default ports live in `src/server/ports.ts`: `28300` for the Hono backend, `28301` for the Vite dev server, and `28302` for the frontend audit annotator.
+  - Electron probes the bound `port` recorded in `data/tsubasa.writer.lock` and `http://127.0.0.1:${PORT || 28300}/api/health` first.
+  - If a live Tsubasa backend with matching `dbFingerprint` is already running (for example `npm run dev:server` during development), Electron attaches to it instead of colliding on `data/tsubasa.writer.lock`.
+  - Otherwise, Electron starts its own Hono server bound to `127.0.0.1`: trying port `28300` (or `PORT`) first, and falling back to an OS-assigned ephemeral port (`0`) if `28300` is occupied by an unrelated process. Once bound, the server writes its active `port` and `hostname` into `data/tsubasa.writer.lock` so the `tsubasa` CLI and Electron auto-discover it even after an ephemeral fallback.
 - **OAuth copy-link flow and external links.**
   - The UI does not open OAuth popups directly; `SidebarAccountCard` displays the generated authorize URL with a `Copy` button so the user can paste it into whichever browser profile owns that Google account.
-  - `GET /api/accounts/auth-url/:id` defaults `redirect_uri` to `${requestOrigin}/api/auth/callback` when omitted, so the copied URL still lands on the active Hono server even if Electron binds an ephemeral port instead of `3000`.
-  - `GET /api/auth/callback` redirects to the server's own origin when serving static `dist/` assets (avoiding a dead `localhost:5173` redirect in packaged mode), so the user's browser tab renders `TabBlockedModal` with the existing "Account linked" message, and notifies the Electron main process in-process so the desktop window refreshes accounts immediately (bridging the `BroadcastChannel` boundary between external browser and Electron).
+  - `GET /api/accounts/auth-url/:id` defaults `redirect_uri` to `${requestOrigin}/api/auth/callback` when omitted, so the copied URL still lands on the active Hono server even if Electron binds an ephemeral port instead of `28300`.
+  - `GET /api/auth/callback` redirects to the server's own origin when serving static `dist/` assets (avoiding a dead `localhost:28301` redirect in packaged mode), so the user's browser tab renders `TabBlockedModal` with the existing "Account linked" message, and notifies the Electron main process in-process so the desktop window refreshes accounts immediately (bridging the `BroadcastChannel` boundary between external browser and Electron).
   - `mainWindow.webContents.setWindowOpenHandler` denies secondary Electron windows: external-origin links (such as Share Pool Drive links) open via `shell.openExternal`, while same-origin `/api/files/.../download` requests return `{ action: 'deny' }` without opening an external browser so `handleDownload` falls through to its `<a download>` path and uses Electron's native download flow.
 - **Native module ABI (`better-sqlite3`).**
   - In **packaged builds**, `electron-builder` rebuilds `better-sqlite3` against Electron's Node ABI (`npmRebuild: true`), and the Hono server runs in Electron's Node runtime (in-process or via `utilityProcess`) with zero system Node.js dependency.
@@ -76,14 +77,14 @@ Electron resolves `TSUBASA_HOME` before starting or probing the server using thi
 
 1. Explicit `TSUBASA_HOME` environment variable, if set.
 2. Development mode (`!app.isPackaged`): repository root (`process.cwd()` / package root), matching `src/server/paths.ts` and the `tsubasa` CLI.
-3. Packaged portable mode: if a `.portable` marker file or an existing `data/` or `.oauths/` directory sits next to the executable (`path.dirname(process.execPath)`), use the executable directory.
+3. Packaged portable mode: if a `.portable` marker file (bundled at the root of the portable `.zip` by `scripts/package-win.mjs`, and omitted from `release/win-unpacked/` and NSIS) or an existing `data/` or `.oauths/` directory sits next to the executable (`path.dirname(process.execPath)`), use the executable directory.
 4. Packaged installed default: Electron's `app.getPath('userData')` (`%AppData%\Tsubasa~ Cloud\`), which stays writable under `Program Files` and survives NSIS upgrades.
 
 ### 7. Windows packaging targets (`electron-builder`)
 
 - **Targets:**
-  - `nsis` (`oneClick: false`, `perMachine: false`, `allowToChangeInstallationDirectory: true`, Start Menu and optional Desktop shortcut, clean uninstaller).
-  - `zip` (unpacked Windows directory archive for portable/manual/Scoop users; supports creating `.portable` next to `Tsubasa~ Cloud.exe`).
+  - `nsis` (`oneClick: false`, `perMachine: false`, `allowToChangeInstallationDirectory: true`, Start Menu and optional Desktop shortcut, clean uninstaller with `build/installer.nsh` startup registry cleanup).
+  - `zip` (unpacked Windows directory archive for portable/manual/Scoop users; `scripts/package-win.mjs` injects a root `.portable` marker into the `.zip` archive without modifying `release/win-unpacked/` or the NSIS installer).
 - **Artifacts included in package:**
   - `dist/` (compiled Vite client, compiled Hono server, compiled Electron main/preload, and optionally compiled CLI).
   - `build/icon.ico` and `build/icon.png` (generated from `docs/svg-r44-app.svg`) for the installer, desktop window, and system tray.
@@ -94,15 +95,18 @@ Electron resolves `TSUBASA_HOME` before starting or probing the server using thi
 
 Keep existing `src/client/`, `src/server/`, and `src/cli/` organization intact and add a dedicated `src/electron/` owner:
 
-- `src/electron/main.ts`: Electron app bootstrap, single-instance lock, `TSUBASA_HOME` resolution, theme/prefs persistence, embedded Hono server lifecycle, `BrowserWindow` setup, tray icon, external URL routing, and graceful shutdown.
+- `src/electron/main.ts`: Electron app bootstrap, single-instance lock, `TSUBASA_HOME` resolution, theme/prefs persistence, embedded Hono server lifecycle, `BrowserWindow` setup, tray icon, `--autostart` silent boot, external URL routing, and graceful shutdown.
 - `src/electron/preload.ts`: Minimal `contextBridge` exposing `window.tsubasaDesktop`:
   - `isElectron: true`
   - `setTitle(title: string): void`
   - `setThemeChoice(choice: 'auto' | 'light' | 'dark'): void`
   - `onAuthCompleted(cb: (payload: AuthCompletedPayload) => void): () => void`
+- `src/electron/trayMenu.ts`: Custom frameless tray popup `BrowserWindow`, native Windows layout and theme styling, `display.bounds` anchoring with Windows 11 overflow cursor fallback, keyboard navigation, and debounced dismissal.
+- `src/electron/trayPreload.ts`: Sandboxed `contextBridge` preload exposing `window.tsubasaTrayMenu` (`onState`, `invokeAction`, `dismiss`).
 - `src/electron/paths.ts`: Dev, portable, and installed `TSUBASA_HOME` resolution plus `desktop-prefs.json` read and write helpers.
-- `src/electron/serverHost.ts`: Embedded Hono server startup, port selection (`3000` then ephemeral `0`), `/api/health` attachment probe in dev, static `dist/` wiring, and clean shutdown.
-- `tsconfig.electron.json`: TypeScript config compiling `src/electron/` to `dist/electron/`, producing ESM main and CommonJS preload bundles per Electron preload requirements.
+- `src/electron/serverHost.ts`: Embedded Hono server startup, port selection (`28300` via `src/server/ports.ts`, then ephemeral `0`), lockfile and `/api/health` attachment probe, static `dist/` wiring, and clean shutdown.
+- `src/server/ports.ts`: Shared default port constants (`28300`, `28301`, `28302`) and port parsing helpers used across server, Electron, CLI, and Vite.
+- `tsconfig.electron.json`: TypeScript config compiling `src/electron/` to `dist/electron/`, paired with `tsconfig.electron.preload.json` for CommonJS preload bundles (`preload.cjs` and `trayPreload.cjs`).
 - `electron-builder.yml`: Windows `nsis` and `zip` packaging config, icons, and `asarUnpack` for `better-sqlite3` native `.node` binaries.
 
 ### Targeted edits to existing files
@@ -134,21 +138,19 @@ Keep existing `src/client/`, `src/server/`, and `src/cli/` organization intact a
 
 ## Follow-up slices
 
-1. **Custom tray menu and Start with Windows toggle.**
-   - Replace Electron's native Win32 tray context menu with a lightweight frameless popup `BrowserWindow` on `tray.on('right-click', ...)` styled with Tsubasa's light/dark sage-mint tokens, flat 1px borders, Montserrat text, and gold focus/hover indicators.
-   - Include three items: `Show Tsubasa~ Cloud`, `Start with Windows`, and `Quit`.
-   - Handle Windows 11 overflow tray coordinates by falling back to `screen.getCursorScreenPoint()` when `tray.getBounds()` is empty, clamping inside `display.workArea`, and dismissing cleanly on `blur` and `Escape` without reopen flicker.
-   - Support `Start with Windows` on both installed NSIS and portable builds (off by default) and hide or disable it in dev (`!app.isPackaged`). Register with `--autostart` so Windows login boots hidden to tray, read live `app.getLoginItemSettings` state when opening the menu, and clean up the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry in `build/installer.nsh` on NSIS uninstall.
-2. **Dedicated port block audit and migration.**
-   - Move off hardcoded `3000`, `5173`, and `4173`/`4180` onto a single shared Tsubasa port block (candidate blocks: `28300`/`28301`/`28302` for Tsubasa goroawase `2-8-3`, or `22283`/`22284`/`22285` for Black Hanekawa `22` + `283`).
-   - Centralize `DEFAULT_SERVER_PORT` and update `src/server/index.ts`, `src/electron/serverHost.ts`, `src/cli/transport.ts`, `vite.config.ts`, `src/server/routes/accounts.ts`, `src/server/drive/auth.ts`, `.agents/frontend-audit/server.mjs`, and docs.
-   - Optionally record the bound port in `data/tsubasa.writer.lock` so `tsubasa` CLI auto-discovers Electron even after an ephemeral port fallback.
-3. **One-command localhost runners.**
-   - Add a zero-dependency `scripts/dev.mjs` wired to `npm run dev` that runs `dev:server` and `dev:web` together in one terminal and stops both on `Ctrl+C`.
-   - Add `npm start` to run the built `dist/` bundle directly through Hono (`TSUBASA_SERVE_STATIC=1 node dist/server/index.js`).
-4. **Sidebar version badge.**
-   - Inject `package.json`'s `version` at build time via Vite `define` and display a compact `v<version>` badge in `Sidebar.tsx`'s `brandHeader` using `Pixelify Sans`, matching `docs/styling-guide.md`.
-5. **Portable `.zip` marker out of the box.**
-   - Ship a `.portable` marker file inside the portable `.zip` archive (and exclude it from the NSIS installer) so extracted `.zip` builds store `data/` and `.oauths/` beside `Tsubasa~ Cloud.exe` automatically instead of falling back to `%AppData%\Tsubasa~ Cloud\`.
-6. **Document data and OAuth locations in `README.md`.**
-   - Add the launch-mode table to `README.md` covering default `<homeDir>`, `.oauths/`, and `data/tsubasa.db` paths across dev, CLI, NSIS, portable `.zip`, and `TSUBASA_HOME` override.
+- [x] **1. Custom tray menu and Start with Windows toggle.**
+  - Replaced Electron's native Win32 tray context menu with a compact `188x77` frameless popup `BrowserWindow` (`src/electron/trayMenu.ts`, `src/electron/trayPreload.ts`) using `thickFrame: false`, `hasShadow: false`, hairline `1px` border, native `12px` `'Segoe UI'` ClearType text, uniform light/dark sage-mint surface with paper grain overlay, `28px` left gutter with a plain `✓` check character and indented separator, and instant hover with a `1.5px` left gold accent bar.
+  - Anchors bottom-left at the tray icon center over `display.bounds`, falls back to `screen.getCursorScreenPoint()` for Windows 11 overflow tray icons, layers above the taskbar via `'screen-saver'` always-on-top, and dismisses cleanly on debounced `blur` and `Escape`.
+  - Added the `Start with Windows` toggle (disabled in dev when `!app.isPackaged`, active in packaged NSIS and portable builds). Registers with `--autostart` for silent tray boot, reads live `app.getLoginItemSettings` state, and removes `com.tsubasa.cloud` from both `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` and `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run` via `!macro customUnInstall` in `build/installer.nsh`.
+- [x] **2. Dedicated port block and lockfile port discovery.**
+  - Centralized default ports `28300` (Hono API), `28301` (Vite dev UI), and `28302` (frontend audit annotator) in `src/server/ports.ts` and updated server, Electron, CLI, Vite, and audit callers.
+  - Persisted the bound `port` and `hostname` in `data/tsubasa.writer.lock` so the `tsubasa` CLI and Electron auto-discover an active backend even after an ephemeral port fallback.
+- [x] **3. One-command localhost runners.**
+  - Added zero-dependency `scripts/dev.mjs` wired to `npm run dev` to run `dev:server` and `dev:web` together in one terminal and stop both on `Ctrl+C`.
+  - Added `scripts/start.mjs` wired to `npm start` to serve the compiled `dist/` bundle through Hono with `TSUBASA_SERVE_STATIC=1` and graceful IPC shutdown on Windows.
+- [x] **4. Sidebar version badge.**
+  - Injected `package.json`'s `version` at build time via Vite `define` (`__APP_VERSION__`) in `vite.config.ts` and `src/client/vite-env.d.ts`, and rendered a compact `v<version>` badge in `Pixelify Sans` inside `Sidebar.tsx`'s `brandHeader`.
+- [x] **5. Portable `.zip` marker out of the box.**
+  - Updated `scripts/package-win.mjs` to inject a root `.portable` marker file into the packaged `.zip` archive without modifying `release/win-unpacked/` or the NSIS installer.
+- [x] **6. Document data and OAuth locations in `README.md`.**
+  - Added the launch-mode table in `README.md` covering `<homeDir>`, `.oauths/`, and `data/tsubasa.db` across dev, CLI, NSIS, portable `.zip`, and `TSUBASA_HOME` override, and updated CLI transport docs in `src/cli/README.md`.
