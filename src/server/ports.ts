@@ -1,6 +1,5 @@
 export const DEFAULT_SERVER_PORT = 28300;
 export const DEFAULT_WEB_DEV_PORT = 28301;
-export const DEFAULT_AUDIT_PORT = 28302;
 
 export function isValidPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;

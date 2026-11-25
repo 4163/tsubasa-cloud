@@ -394,5 +394,3 @@ export function createAccountsRouter(options: AccountsRouterOptions = {}) {
     }
   });
 }
-
-export default createAccountsRouter();

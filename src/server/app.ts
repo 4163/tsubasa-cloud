@@ -74,7 +74,12 @@ function createStaticResponse(
     'Content-Length': String(content.byteLength),
     'Cache-Control': cacheControl,
   });
-  const body = method === 'HEAD' ? null : new Uint8Array(content);
+  const body =
+    method === 'HEAD'
+      ? null
+      : content.buffer instanceof ArrayBuffer
+        ? new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
+        : new Uint8Array(content);
   return new Response(body, { status: 200, headers });
 }
 

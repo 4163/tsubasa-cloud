@@ -9,7 +9,7 @@ import {
   WriterLockError,
   type WriterLockHandle,
 } from '../server/lock.js';
-import { DEFAULT_SERVER_PORT, isValidPort, parsePort } from '../server/ports.js';
+import { getDefaultServerPort, isValidPort } from '../server/ports.js';
 import { CliError, EXIT_CODES, mapErrorCodeToExitCode } from './lib/errors.js';
 
 export interface TransportOptions {
@@ -45,8 +45,7 @@ function normalizeBaseUrl(rawUrl: string): string {
 }
 
 function getDefaultServerUrl(): string {
-  const port = parsePort(process.env.PORT) ?? DEFAULT_SERVER_PORT;
-  return `http://127.0.0.1:${port}`;
+  return `http://127.0.0.1:${getDefaultServerPort()}`;
 }
 
 function getAutoProbeCandidateUrls(writerLockPath: string): string[] {
