@@ -44,6 +44,10 @@ export function useThemeChoice() {
     applyDocumentTheme(active);
   }, [themeChoice]);
 
+  useEffect(() => {
+    window.tsubasaDesktop?.setThemeChoice(themeChoice);
+  }, [themeChoice]);
+
   return { themeChoice, effectiveTheme, handleThemeChange };
 }
 

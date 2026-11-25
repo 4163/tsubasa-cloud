@@ -1,9 +1,10 @@
-import { useId } from 'react';
+import { useEffect, useId } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors, spacing, radius, typography } from '../tokens.stylex.js';
 import { IconAlertTriangle, IconCheck } from './Icons.js';
 import type { AuthCompletedPayload, TabOwnerKind } from '../utils/useTabLock.js';
 import { useResolvedTheme } from '../hooks/useResolvedTheme.js';
+import { applyWindowTitle, BASE_WINDOW_TITLE } from '../utils/windowTitle.js';
 import { GhostWorkspaceBackdrop } from './GhostWorkspaceBackdrop.js';
 import { ModalDialog } from './ModalDialog.js';
 import { ModalHeader, modalChromeStyles } from './ModalChrome.js';
@@ -86,6 +87,10 @@ export function TabBlockedModal({ ownerKind, authCompleted }: TabBlockedModalPro
   const isAuthSuccess = authCompleted != null;
   const titleId = useId();
 
+  useEffect(() => {
+    applyWindowTitle(BASE_WINDOW_TITLE);
+  }, []);
+
   const modalTitle = isAuthSuccess ? 'Account linked' : 'Tsubasa~ Cloud is already open';
 
   const leadMessage = isAuthSuccess
@@ -106,7 +111,9 @@ export function TabBlockedModal({ ownerKind, authCompleted }: TabBlockedModalPro
     ? isElectronOwner
       ? 'If the desktop app is no longer open, reload this page to continue here.'
       : 'If you closed the other tab, reload this page to continue here.'
-    : 'Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.';
+    : isElectronOwner
+      ? 'Switch to the desktop app or close this tab. If you quit the desktop app, reload this page to continue.'
+      : 'Switch to the active tab or close this tab. If you closed the other tab, reload this page to continue.';
 
   return (
     <div
