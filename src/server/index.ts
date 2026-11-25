@@ -165,7 +165,10 @@ export async function startTsubasaServer(
     onAuthCompleted: options.onAuthCompleted,
   });
 
-  const preferredPort = options.port ?? (Number(process.env.PORT) || 3000);
+  const rawEnvPort = process.env.PORT?.trim();
+  const parsedEnvPort = rawEnvPort ? Number(rawEnvPort) : NaN;
+  const preferredPort =
+    options.port ?? (Number.isInteger(parsedEnvPort) && parsedEnvPort >= 0 ? parsedEnvPort : 3000);
   const hostname = options.hostname?.trim() || undefined;
   const fallbackToEphemeralPort = options.fallbackToEphemeralPort ?? false;
 
@@ -174,7 +177,9 @@ export async function startTsubasaServer(
     bound = await bindHttpServer(app.fetch, preferredPort, hostname);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    if (fallbackToEphemeralPort && preferredPort !== 0 && code === 'EADDRINUSE') {
+    // Windows returns EACCES for reserved ports and conflicting/exclusive socket binds.
+    const canFallback = code === 'EADDRINUSE' || code === 'EACCES';
+    if (fallbackToEphemeralPort && preferredPort !== 0 && canFallback) {
       try {
         bound = await bindHttpServer(app.fetch, 0, hostname);
       } catch (fallbackErr) {

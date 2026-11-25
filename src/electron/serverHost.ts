@@ -41,23 +41,36 @@ const SPAWN_READY_TIMEOUT_MS = 15_000;
 const SPAWN_SHUTDOWN_TIMEOUT_MS = 5_000;
 const VITE_DEV_URL = 'http://localhost:5173/';
 
-async function probeExistingBackend(port: number, expectedFingerprint: string): Promise<string | null> {
+type BackendProbeResult =
+  | { status: 'attach'; serverUrl: string }
+  | { status: 'occupied' }
+  | { status: 'free' };
+
+async function probeExistingBackend(
+  port: number,
+  expectedFingerprint: string
+): Promise<BackendProbeResult> {
   const serverUrl = `http://127.0.0.1:${port}`;
   try {
     const res = await fetch(`${serverUrl}/api/health`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     if (!res.ok) {
-      return null;
+      return { status: 'occupied' };
     }
-    const body = (await res.json()) as HealthProbeResponse;
-    if (body.service === 'tsubasa-backend' && body.dbFingerprint === expectedFingerprint) {
-      return serverUrl;
+    try {
+      const body = (await res.json()) as HealthProbeResponse;
+      if (body.service === 'tsubasa-backend' && body.dbFingerprint === expectedFingerprint) {
+        return { status: 'attach', serverUrl };
+      }
+    } catch {
+      // Non-JSON response still indicates an active HTTP listener on this port.
     }
+    return { status: 'occupied' };
   } catch {
-    // No matching server listening on preferredPort.
+    // No HTTP server responded on preferredPort.
+    return { status: 'free' };
   }
-  return null;
 }
 
 async function isHtmlEndpointAvailable(url: string): Promise<boolean> {
@@ -253,25 +266,26 @@ export async function startServerHost(options: StartServerHostOptions): Promise<
   const preferredPort = options.preferredPort ?? (Number(process.env.PORT) || 3000);
   const expectedFingerprint = computeDbFingerprint(resolveDbPath(options.homeDir));
 
-  const attachedServerUrl = await probeExistingBackend(preferredPort, expectedFingerprint);
-  if (attachedServerUrl) {
-    const rendererUrl = await resolveAttachedRendererUrl(attachedServerUrl);
+  const probe = await probeExistingBackend(preferredPort, expectedFingerprint);
+  if (probe.status === 'attach') {
+    const rendererUrl = await resolveAttachedRendererUrl(probe.serverUrl);
     return {
       mode: 'attached',
       port: preferredPort,
-      serverUrl: attachedServerUrl,
+      serverUrl: probe.serverUrl,
       rendererUrl,
       close: async () => {},
     };
   }
 
+  const bindPort = probe.status === 'occupied' ? 0 : preferredPort;
   const staticDir = path.join(options.packageRoot, 'dist');
 
   if (options.isPackaged) {
     const { startTsubasaServer } = await import('../server/index.js');
     const started = await startTsubasaServer({
       hostname: '127.0.0.1',
-      port: preferredPort,
+      port: bindPort,
       fallbackToEphemeralPort: true,
       staticDir,
       homeDir: options.homeDir,
@@ -292,7 +306,7 @@ export async function startServerHost(options: StartServerHostOptions): Promise<
     homeDir: options.homeDir,
     packageRoot: options.packageRoot,
     staticDir,
-    preferredPort,
+    preferredPort: bindPort,
     onAuthCompleted: options.onAuthCompleted,
   });
 }
