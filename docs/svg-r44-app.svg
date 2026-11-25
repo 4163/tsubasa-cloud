@@ -1,0 +1,772 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 884 884"
+   width="884"
+   height="884"
+   version="1.1"
+   id="tsubasa-brand-mono-app"
+   xmlns="http://www.w3.org/2000/svg">
+  <!-- Anatomical naming: left/right on glasses and eye elements are from Tsubasa's perspective -->
+  <defs>
+    <!-- Exact bottom-right quarter-circle portrait mask (cx=411, cy=473, r=411, tangent to x=822 and y=884) -->
+    <clipPath id="portrait-circle-clip">
+      <path d="M 0,0 L 822,0 L 822,473 A 411,411 0 0,1 411,884 L 0,884 Z" />
+    </clipPath>
+
+    <!-- USER-INTENTIONAL LEFT FACE CONTOUR (adopted verbatim from 'svg attempt - backup.svg' #path98):
+         Do NOT replace with wavy step notches or merge into Eye 1 in future parity passes. -->
+    <mask id="face-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="822" height="884">
+      <path fill="white" d="M 514,872 C 509.8,856.5 504.4,839.8 499.8,829.2 C 495.4,819 491.4,813.4 486,811 c -5.8,-2.4 -12.4,0.8 -28,12 -9.4,6 -23.4,7.4 -35.6,4.2 -15.6,-3.8 -32.4,-9.2 -48,-16.7 -32.3,-15.9 -47.6,-29.7 -59.8,-53 -5.2,-10.1 -9.4,-30.9 -11.6,-49 -1.6,-13.5 -3.4,-19.7 -8.6,-31.3 C 288.6,664 281,652 269.6,636 c -10,-14.2 -16.4,-26.4 -24.8,-40.6 -10.2,-17.6 -20,-43.4 -23,-58.8 -4,-17 -6.6,-40.8 -4.3,-55.5 17.2,-73 152.3,-84.6 439,-38 38,6.2 50.5,10.9 63.1,23.6 7.9,8 10,11.3 13.6,21.5 5.4,16 5.9,33.2 1.2,49.6 -3.6,12.2 -12,29.4 -18.2,39.6 -6.2,10.2 -15,21 -24,29.8 -6.2,6 -8.6,15.8 -11.4,36 -3.6,25.2 -6.5,49.8 -6.3,63.2 0.4,18 5.2,44 9.6,66.2 4.0,8.0 5.0,14.0 -2.2,20.2 -48.6,35.8 -104.2,64.8 -167.2,79.8 z" />
+    </mask>
+
+    <!-- Clip path for upper hair silhouette so lit planes stay cleanly within the head contour -->
+    <clipPath id="upper-hair-clip">
+      <path d="m 687.6,790.5 l -2.4,-8.5 c -2.4,-8.5 -8.8,-48.2 -10.7,-61.2 -1.3,-14.6 -2.5,-17.6 -8.5,-26.4 -5.2,-7.6 -14.8,-17.2 -22.8,-30.8 -5.4,-9.2 -8.2,-15.2 -8.2,-19.6 0,-4.8 4.4,-9.2 10.5,-14 -5.6,-6.8 -12,-15 -17.5,-22.8 -3.4,-4.8 -6.6,-10.2 -8.4,-12.2 -2.2,-2.4 -3.2,0.4 -4,11.8 -1.2,15.8 -4.8,37.4 -10.2,59.8 -7.6,32.8 -9.4,37.6 -14,39.6 -6,2.8 -10.8,-7.8 -21,-46.6 -6,-23 -10,-35.6 -16.6,-53 -10.8,-29.2 -16.2,-41 -41,-88 -8.8,-16.6 -11.4,-21.4 -17.6,-32.2 -4.4,-7.6 -10.8,-21.2 -11.4,-23.4 -0.8,-3 -9.4,-5.4 -31.4,-8 -22.4,-3.2 -70.4,-12.6 -92,-16 -18.4,-2.8 -56.4,-9.6 -70.6,-11.6 6.2,4 20.2,10.4 32.4,15.8 15.8,7 45.8,18.2 70.6,30.8 5.8,3.2 7.4,4.8 7,6.8 -0.4,2 -2.4,2.6 -7.8,3 -14,0.6 -40,-3 -60,-6.2 -26,-4 -66,-10.4 -90.8,-16.2 -8.6,-2.8 -10.2,-1.4 -12.4,8.6 -2.4,10.6 -4.6,19.6 -2,25.4 4.2,8 13.2,15.4 26,25 19.2,14.8 41.2,29.8 57.2,40 8,5 16,8.8 23.2,12.2 5,2.4 4,4.2 -3.2,5.6 -5.6,1 -26,-2.8 -43.4,-7.6 C 274,567.2 246,554 227.4,541.8 224,539.6 82.8,450.8 82.2,448.6 c -1,-4.7 16,-51.9 26.5,-73.4 7.2,-14.9 19.5,-34 27.2,-42.5 5.3,-5.9 14.7,-12.9 19.5,-17.3 0.8,-1.8 -4.8,-8.2 -17.2,-20.4 C 123,280.2 117,272 112,259.4 104.8,241 101,211.6 102.8,186 c 2.8,-38.6 9.2,-62 24.6,-92.8 10.8,-21.4 22.8,-37.4 42.4,-56.2 19.6,-19 38,-31.2 52.8,-35 8.4,-2.2 15.8,-2.6 16.8,-1 1.2,2 -3.8,8 -15.8,18.6 -25.8,23 -34.6,31.8 -44.2,44.8 -9.4,12.8 -26.2,47.8 -31.4,64.2 -3.2,10.2 -4.8,21.8 -6.2,40 -2,26.2 0.6,46.4 10.2,81 6.4,23.4 10,34 13.4,39.8 4.4,7.2 6,7 12.2,-1 13.8,-18 43.2,-40 74.4,-55.4 24.6,-12.2 39.8,-18.2 82.4,-32.4 29.2,-9.6 51.8,-15.6 85.6,-22.2 7.6,-1.4 23.4,-7 32,-11.2 12,-6 26,-16.8 40,-26.8 28,-20.2 66,-50 94,-70.6 16,-11.8 26,-17 36,-25 8,-6.4 12,-9.6 16.4,-9.6 3.6,0 4.6,2.8 4.8,11 0.2,4.4 0.4,5.8 1.8,5.2 3.6,-1.6 10.6,-5.2 13.8,-4.8 5.8,1.6 9.2,13 10.8,37 2.0,24.8 4.0,45.2 6.8,66.4 2.4,17.2 2.8,23 2.8,48.6 0,28.8 -0.8,36 -5.6,55.4 -1.6,7.2 -1.2,9.4 3.4,14.8 10.6,12.6 25.6,33 38.2,51.2 30.8,44.6 48.2,66.4 71.4,89.6 10.4,10.2 23.2,21.2 32,28.2 3.2,2.4 3.8,5.6 3.8,15.8 8.0,95.0 -18.0,192.0 -72.4,268.4 -16.0,22.0 -38.0,46.0 -62.4,68.5 z M 668.2,621.6 c 10.8,-4.2 23.8,-12.8 23.8,-16 0,-1.8 -7.2,-10.2 -16,-21 -12,-15 -37,-46.2 -44.4,-52.2 -2,-1.4 -2.2,0 -1,5.2 2.2,9.2 16,34 21.2,48.4 3.2,8.8 7.8,28 9.2,35.8 0.4,2.4 2.6,1.6 7.2,-0.2 z M 718.6,572 c 6.2,-10.2 13.4,-25.8 16,-34.8 2.6,-9 2.8,-12 1,-12.4 -3.2,-0.8 -17.2,-8 -22.8,-11.6 -4.4,-2.8 -7.6,-3.6 -9.6,-2.2 -2.6,2 -2,8.6 2.2,27 3.6,14.4 6,25.6 7.2,33.8 0.6,4.4 1.4,6.2 2.4,5.8 0.8,-0.4 2,-3 3.6,-5.6 z m 17.8,-71.8 c -1,-5 -5.2,-17.8 -7.6,-22.4 -2.2,-4.2 -7,-9.6 -11.4,-13.4 -7.6,-6.8 -15,-10.6 -27,-14.2 -10.4,-3.2 -18.2,-2.2 -14.4,1.6 5.4,4.6 18,14 27.4,21.6 7.4,6 17.6,15.8 29,26.8 3.8,3.6 4.6,3.6 4,0 z" />
+    </clipPath>
+
+    <!-- Clip path for left iris (viewer's right, angled anime shield silhouette with full upper-inner dome tucked cleanly behind #lens-left under the manual upper eyelash arch) -->
+    <clipPath id="left-iris-clip">
+      <path d="M 404.5,542 C 406.5,558 416.5,577 429.5,591 C 436,590 444,587 452,583 C 465,581 473,576 477,568 C 480,561 481,551 480.5,542 C 480,534 478.8,526 477,520 C 471,511 448,506.5 424,507.5 C 406.5,508.5 401.5,517.5 404.5,542 Z" />
+    </clipPath>
+
+    <!-- Clip path for right iris (viewer's left, full-height 3/4 oblique iris from brand.png sitting snugly under the upper lash crown at y=587.5 and tucked dead-center behind #lens-right-front-arc along the lower-outer edge y=640..675 so the #9ea09d shadowed sclera whitespace between #lash-right-upper and the glasses rim is completely crisp) -->
+    <clipPath id="right-iris-clip">
+      <path d="M 270.4,606.5 C 266.8,599.2 267.8,589.0 282.0,587.5 C 295.0,586.5 307.0,602.0 314.5,622.0 C 320.4,637.5 322.2,654.0 320.8,666.5 C 319.6,673.5 314.2,677.0 307.5,675.6 C 306.0,671.5 301.0,660.5 294.2,650.0 C 286.5,638.0 275.5,622.0 270.4,606.5 Z" />
+    </clipPath>
+
+    <!-- USER-INTENTIONAL HAIR CLIP PILL GEOMETRY:
+         Consistent bold cel-shaded pill silhouette (22x96px). Do NOT reshape or flag against brand-mono_8c.png in future parity passes. -->
+    <clipPath id="hair-clip-pill-clip">
+      <rect x="-48" y="-11" width="96" height="22" rx="11" ry="11" />
+    </clipPath>
+
+    <!-- Clip path for front inner arc of #lens-right: outer boundary runs deep inside the solid #414546 #hair-lower-left mass (zero AA seam at hair/cheek boundary) -->
+    <clipPath id="lens-right-front-clip">
+      <path d="M 248,610 L 350,610 L 350,775 L 296,775 C 288,735 270,675 248,610 Z" />
+    </clipPath>
+
+    <!-- Single-edge mask for the bright #dfdfbd upside-down reflection crescent inside Eye 2 so #iris-left-lens-bevel matches it 100% flush with zero double-edge #dfdfbd AA hairline -->
+    <mask id="iris-left-reflection-mask" maskUnits="userSpaceOnUse" x="424" y="541" width="46" height="40">
+      <path fill="white" d="M 427,565.5 C 433.5,569.5 443,572.5 451.5,571.2 C 458.5,569.5 462.5,557.5 464.5,544 C 466,543.5 467.5,543.8 467.8,545 C 468,557.5 463.8,571 454.5,575.8 C 444,579 432.5,575.5 426.5,567.8 C 426.2,566.5 426.5,565.5 427,565.5 Z" />
+    </mask>
+
+    <!-- Surgical inner-upper bevel clip for #glasses-skin-shadow-left-upper: keeps outer-left bevel intact while tapering inner-right bevel smoothly back into #lens-left clear of the forehead bang -->
+    <clipPath id="lens-left-upper-bevel-clip">
+      <path d="M 310,510 L 380,510 L 374,521 C 363,522 352,529 344,538 C 343.30,538.84 342.62,539.72 341.95,540.64 C 343.06,544.86 342.41,548.91 339.36,555.74 C 337.23,561.73 335.60,566.20 330.80,569.20 L 328,578 L 310,578 Z" />
+    </clipPath>
+  </defs>
+
+  <g id="app-icon-root" transform="translate(31, 0)">
+    <circle id="app-icon-bg" cx="411" cy="473" r="411" fill="#deb76c" />
+    <g id="portrait-root" clip-path="url(#portrait-circle-clip)">
+    <!-- L1. LOWER BACK HAIR (tucked behind #face-base at top and extended past #portrait-circle-clip at bottom) -->
+    <path
+       id="hair-lower-back"
+       fill="#414546"
+       d="M 455,886 C 450,876 443,864 437,853.4 C 431.4,842.6 428.8,837.4 427,832.8 C 424.2,825.6 424.8,818.2 433.2,818.6 C 440.4,819 442.8,816.6 448.4,814.6 C 455.8,811.8 457,812 457.6,814.6 C 459.4,820.2 462.6,834 466.4,840.6 C 472,850 481,865 492,882 L 455,886 Z M 495,880 C 487,865 478,847 472,834 C 468,826 466.5,823 466.6,820.8 C 464,815.2 465,811 471,807.4 C 475.6,804.6 477.6,804 482.8,804 C 488.8,804 489.4,804.4 493.6,808.6 C 498.4,813.4 501.4,820.8 506,832.2 C 510,842 516.5,863 519,876 L 495,880 Z" />
+
+    <!-- L2. RIGHT GLASSES LENS & TEMPLE (viewer's left, behind lower-left hair curtain) -->
+    <g id="glasses-right">
+      <path
+         id="temple-right"
+         d="M 176,716 C 195,710 216,704 240,697"
+         fill="none"
+         stroke="#414546"
+         stroke-width="8.2"
+         stroke-linecap="round" />
+      <ellipse
+         id="lens-right"
+         cx="-93.890717"
+         cy="733.5141"
+         rx="60.289272"
+         ry="81.187538"
+         transform="matrix(0.87638749,-0.48160664,0.45747123,0.88922442,0,0)"
+         fill="none"
+         stroke="#414546"
+         stroke-width="7.2" />
+    </g>
+
+    <!-- L3. LOWER LEFT HAIR CURTAIN (single owner of lower-left hair boundary, extending under #face-base) -->
+    <g id="hair-lower-left">
+      <!-- USER-INTENTIONAL LOWER-LEFT HAIR STRANDS (adopted verbatim from 'svg attempt - backup.svg' #path100) -->
+      <path
+         id="hair-lower-left-base"
+         fill="#414546"
+         d="m 307.2,824.4 c -6,-6.4 -13.4,-17 -18.8,-25.2 -10.8,-16 -14.2,-20.4 -15.8,-19 -1.2,1.2 5.8,15.2 10.4,21.6 4.4,6.2 11.6,14.2 12.4,18.4 0.6,3.2 -0.6,3.6 -5.2,3.6 -10.4,0.4 -26.4,-10.8 -35.4,-24.8 -6,-9.4 -11.4,-21.4 -13.8,-29.8 -2.6,-8.8 -6,-18 -8.6,-27.8 -7.4,-28.2 -9.4,-34.2 -15.8,-46.4 -5.8,-11 -7.4,-12.8 -22.2,-27.6 -8.8,-8.8 -18.2,-19.2 -21.6,-23.8 -3.4,-4.6 -5.6,-7.6 -6.2,-7.4 -0.6,0.2 -0.4,8.4 0.2,20.2 0.6,14 1.2,31.6 0.6,42.2 -0.4,6.2 -2,7 -5.6,5.6 -4.4,-1.6 -14.2,-11.6 -20,-20 -13.2,-19.4 -29.2,-56.6 -35.6,-82.8 -4,-15.8 -7.2,-39.4 -9.4,-67.2 -0.8,-9.6 -1.4,-16.4 -2.2,-15.6 -1.2,1.6 -7.6,30.8 -9.6,40.6 -3.6,19.4 -5,60.8 -3.2,88.8 1.8,28 3.2,56.6 2.2,63.6 -0.6,3.2 -2,3.8 -3.8,2.4 -4.8,-3.8 -11,-23.8 -15.2,-50.6 -4.4,-28 -5.2,-42.4 -4.6,-70.4 0.8,-38 3.2,-57.2 11.8,-98.6 3.8,-18.4 7.2,-35 10.8,-50 0.8,-3.2 141.2,88 145.4,91.8 1.8,1.8 1.2,8.2 2.6,15.8 5.4,16.8 16.4,40 25.2,54 7.8,12.4 12.4,20.8 19,30.2 11.6,16.2 18.2,27.4 23.4,39.4 5.6,13 7.2,19.2 8.6,31.4 1.6,14.6 4.6,33.2 6.4,38 1.8,4.8 6,12.8 12.8,23.2 11.2,16.2 23.6,25.2 44,35.4 7.8,4 11.6,9 11,14.8 -0.6,5 -2.4,8.2 -5,8.4 -2.4,0.2 -5.6,-2 -11,-6.2 -12.0,-11.5 -32.0,-29.0 -48.6,-41.4 0.8,10.6 2.8,27 3.2,39.6 0.2,8.6 -0.6,10.8 -2.6,11.6 -2.8,1 -4.8,-0.4 -10.2,-6 z" />
+      <!-- Tapered secondary hair volume planes (#515251, #9ea09d) -->
+      <path
+         id="hair-lower-left-mid-1"
+         fill="#515251"
+         d="M 157,603 C 181,629 211,656 239,683 C 235,685 227,680 216,671 C 194,651 173,628 157,603 Z" />
+      <path
+         id="hair-lower-left-lit-1"
+         fill="#9ea09d"
+         d="M 176,633 C 197,650 218,668 237,685 C 233,686 225,681 215,672 C 200,659 186,646 176,633 Z" />
+      <path
+         id="hair-lower-left-mid-2"
+         fill="#515251"
+         d="M 253,789 C 266,796 280,807 294,820 C 287,821 275,814 263,802 C 257,796 254,792 253,789 Z" />
+      <path
+         id="hair-lower-left-lit-2"
+         fill="#9ea09d"
+         d="M 264,797 C 274,804 285,813 294,821 C 289,822 280,816 271,807 C 267,803 265,799 264,797 Z" />
+    </g>
+
+    <!-- L4. FACE, NECK & PEEKING EAR BASE -->
+    <g id="face-layer" mask="url(#face-mask)">
+      <!-- USER-INTENTIONAL LEFT FACE CONTOUR (adopted verbatim from 'svg attempt - backup.svg' #path98):
+           Do NOT replace with wavy step notches or merge into Eye 1 in future parity passes. -->
+      <path
+         id="face-base"
+         fill="#dfdfbd"
+         stroke="#dfdfbd"
+         stroke-width="2"
+         d="M 514,872 C 509.8,856.5 504.4,839.8 499.8,829.2 C 495.4,819 491.4,813.4 486,811 c -5.8,-2.4 -12.4,0.8 -28,12 -9.4,6 -23.4,7.4 -35.6,4.2 -15.6,-3.8 -32.4,-9.2 -48,-16.7 -32.3,-15.9 -47.6,-29.7 -59.8,-53 -5.2,-10.1 -9.4,-30.9 -11.6,-49 -1.6,-13.5 -3.4,-19.7 -8.6,-31.3 C 288.6,664 281,652 269.6,636 c -10,-14.2 -16.4,-26.4 -24.8,-40.6 -10.2,-17.6 -20,-43.4 -23,-58.8 -4,-17 -6.6,-40.8 -4.3,-55.5 17.2,-73 152.3,-84.6 439,-38 38,6.2 50.5,10.9 63.1,23.6 7.9,8 10,11.3 13.6,21.5 5.4,16 5.9,33.2 1.2,49.6 -3.6,12.2 -12,29.4 -18.2,39.6 -6.2,10.2 -15,21 -24,29.8 -6.2,6 -8.6,15.8 -11.4,36 -3.6,25.2 -6.5,49.8 -6.3,63.2 0.4,18 5.2,44 9.6,66.2 4.0,8.0 5.0,14.0 -2.2,20.2 -48.6,35.8 -104.2,64.8 -167.2,79.8 z" />
+
+      <!-- Face & neck broad shading masked with face silhouette via #face-mask -->
+      <g id="face-shading">
+        <!-- USER-INTENTIONAL STYLIZED WARM RIM BEVEL (exact mathematical upper-left cubic Bezier of #lens-left, stroke-width="13.2" matching #glasses-skin-shadow-left, stroke-linecap="round"):
+             Layered strictly BEFORE #shadow-forehead-and-sideburn so the forehead shadow clips top cleanly, ending clear of the Layer 7 forehead bang on both sides -->
+        <g clip-path="url(#lens-left-upper-bevel-clip)">
+          <path
+             id="glasses-skin-shadow-left-upper"
+             d="M 374,521 C 363,522 352,529 344,538 C 338.60,544.48 334.22,553.29 331.33,563.49"
+             fill="none"
+             stroke="#9c9c88"
+             stroke-width="13.2"
+             stroke-linecap="round" />
+        </g>
+
+        <!-- Forehead bang shadow + right eye-socket/nose-bridge shadow + right-side cheek/sideburn cast shadow -->
+        <path
+           id="shadow-forehead-and-sideburn"
+           fill="#9ea09d"
+           d="m 208,395 h 334 l 53,300 c -15,-21 -33,-53 -51,-95 -15,-28 -24,-48 -36,-60 -7,-5 -14,-5 -23,-5 -17,-22 -45,-30 -75,-28 c -18,12 -28,28 -30.65,52.2 c -7.60,-11.20 -17.07,-20.50 -28.41,-27.89 c -2.70,-4.27 -6.01,-7.52 -9.94,-8.31 l -5,-5 c -6,3 -36,3 -55,0 -5,0 -8,2 -18,0 -5,4 -4,16 2,30 7,14 17,21 25,23 1,4 2,8 5,12 4,4 7,9 11,18 5,11 8,27 11,40 6.5,1.2 10.5,7 10.2,15 -1.4,6.8 -5.4,13.6 -9.2,20.2 -0.8,8.5 -0.8,17.2 -2,25.8 -3.5,3 -7.5,7 -9.5,15 L 284,734 210,590 Z" />
+
+        <!-- Recessed cast shadows under forehead bangs & left temple (#636363, tucked under L5 brows & L7 #hair-upper-base, strictly inside #shadow-forehead-and-sideburn) -->
+        <path
+           id="shadow-forehead-bang-left"
+           fill="#636363"
+           d="M 222.0,553.2 C 226.4,555.0 230.8,556.2 234.8,556.6 C 234.1,561.2 233.6,566.2 233.4,571.2 L 222.0,571.2 Z" />
+        <path
+           id="shadow-forehead-bang-pocket"
+           fill="#636363"
+           d="M 282.0,423.0 L 335.0,432.0 L 333.5,434.4 C 325.0,433.4 318.2,433.6 314.6,435.5 C 311.8,437.0 310.4,439.2 309.6,442.2 L 282.0,434.0 Z" />
+        <path
+           id="shadow-forehead-bang-arch"
+           fill="#636363"
+           d="M 378.0,440.5 L 408.0,446.5 L 406.0,449.5 C 399.5,449.8 392.5,451.2 387.5,453.2 C 388.4,448.6 385.2,444.2 378.5,442.0 Z" />
+        <path
+           id="shadow-forehead-bang-right"
+           fill="#636363"
+           d="M 465.0,453.5 L 489.0,456.0 L 495.5,479.0 L 492.4,481.2 C 488.8,474.2 484.4,467.8 479.4,463.6 C 475.2,460.0 470.4,457.8 465.0,456.6 Z" />
+
+        <!-- Right neck shadow under back-right hair (including lower hair cutout shadow) -->
+        <path
+           id="shadow-neck-right"
+           fill="#9ea09d"
+           d="M 620,525 L 650,520 L 692,595 C 680,598 666,606 660,618 C 672,638 684,662 690,692 L 696,790 L 656,810 C 646,768 634,724 624,692 C 618,698 612,704 606,698 C 602,684 612,654 622,632 Z" />
+
+        <!-- Deep recessed cast shadow along right neck-hair border (#636363, strictly inside #shadow-neck-right and tucked under Layer 7 #hair-upper-base) -->
+        <path
+           id="shadow-neck-right-deep"
+           fill="#636363"
+           d="M 665.5,692.5 C 668.0,697.8 669.2,704.5 669.6,712.5 C 670.2,723.5 671.8,735.5 674.0,747.5 C 676.2,759.5 678.8,772.0 682.2,786.0 L 696.0,786.0 L 694.0,692.0 Z" />
+
+        <!-- Lower neck shadow (extended past circular portrait boundary) -->
+        <path
+           id="shadow-neck-bottom"
+           fill="#9ea09d"
+           d="M 468,820 C 496,798 524,778 548,766 C 557,786 562,826 562,870 L 504,880 L 478,824 Z" />
+
+        <!-- Tapered jawline & chin contour rim clipped cleanly inside #face-clip (smooth 0px taper at top-left behind #lens-right-front-arc, zero ledge) -->
+        <path
+           id="jaw-contour"
+           fill="#9ea09d"
+           d="M 309.5,747.5 C 311.5,751.5 314.8,757.5 319.5,764.5 C 331.5,782.0 347.5,794.5 379.0,809.5 C 394.5,817.0 411.0,822.0 426.0,825.5 C 438.0,828.5 450.5,827.0 460.0,821.0 C 473.5,810.5 480.5,807.0 487.0,809.5 L 490.0,818.0 C 480.0,816.0 472.0,820.0 458.0,830.0 C 448.0,836.0 433.0,838.0 420.0,834.0 C 404.0,830.0 387.0,824.0 370.0,816.0 C 337.0,800.0 321.5,785.0 309.0,761.0 C 307.0,757.0 307.8,751.0 309.5,747.5 Z" />
+
+        <!-- USER-INTENTIONAL STYLIZED WARM RIM BEVELS (#9c9c88, inspired by Stage 4):
+             Bilateral warm cel-shaded rim wrapping skin-crossing arcs of #lens-left and #glasses-bridge (layered in Layer 4 strictly underneath #eyes-layer and #glasses-left-and-bridge) -->
+        <path
+           id="glasses-skin-shadow-left"
+           d="M 329.0,607.5 C 331.8,626.5 341.8,644.5 357.0,657.0 C 374.0,672.0 396.0,681.0 416.0,679.0 C 441.0,676.0 458.0,652.0 461.5,620.0 C 462.8,602.5 460.0,585.5 454.2,572.0"
+           fill="none"
+           stroke="#9c9c88"
+           stroke-width="13.2"
+           stroke-linecap="round" />
+        <path
+           id="glasses-skin-shadow-bridge"
+           d="M 299.5,619.5 C 308.5,611.5 318.5,606.8 328.2,606.9"
+           fill="none"
+           stroke="#9c9c88"
+           stroke-width="12.2"
+           stroke-linecap="butt" />
+        <!-- Independent tapered right lens cheek cast-shadow (#9c9c88) tucked underneath Layer 6 #lens-right-front-arc (y=695..753.5), decoupled from #nose-foreground -->
+        <path
+           id="glasses-skin-shadow-right"
+           fill="#9c9c88"
+           d="M 317.8,694.8 C 320.2,695.2 322.6,704.0 322.8,713.5 C 323.0,723.5 321.2,734.5 317.8,743.5 C 315.6,749.0 313.2,752.8 311.5,754.2 L 309.5,750.5 C 313.2,744.5 316.2,735.5 317.8,724.5 C 319.0,715.5 318.2,704.5 315.8,695.5 Z" />
+      </g>
+
+      <!-- Clean nose contour & highlights (#fdffe0) layered underneath glasses frames -->
+      <g id="face-highlights">
+        <!-- Smooth cubic-Bezier cheek highlight inside left glasses lens + outer-rim specular glints (#fdffe0) -->
+        <path
+           id="cheek-highlight"
+           fill="#fdffe0"
+           d="M 414,621 C 414,615 422,608 434,602 C 441,598 447,596 451,597 C 455,599 455.5,608 455,617 C 454.5,618.5 449,619 446.5,621 C 445,623.5 443.5,625 441,623.5 C 436.5,621.5 430,621.5 425.5,624.5 C 421,625.5 414,623.5 414,621 Z M 468,596 C 472,595.5 475,598 474.5,601 C 471.5,603 468,601 468,596 Z M 474,605 C 476.5,604.5 478.5,606.5 477.5,609 C 475,609.5 473.5,607.5 474,605 Z" />
+      </g>
+
+      <!-- Clean stylized mouth -->
+      <path
+         id="mouth"
+         fill="#9ea09d"
+         d="M 365,745 C 364,741 372,738 382,739 C 392,740 397,743 395,746 C 392,749 381,753 374,754 C 369,754 366,749 365,745 Z" />
+    </g>
+
+    <!-- L4b. PEEKING RIGHT EAR (unmasked sibling of #face-layer, fully enclosed underneath Layer 7 #hair-upper-base):
+         Prevents #face-mask (#path98) from clipping ~0.5-1.0px inside #hair-upper-base's ear cutouts, eliminating transparent seams and bright AA hairlines while keeping #face-mask/#face-base verbatim -->
+    <g id="peeking-ear-layer">
+      <path
+         id="peeking-ear-base"
+         fill="#dfdfbd"
+         d="M 670,444 L 714,442 L 742,462 L 744,507 L 728,507 L 670,456 Z M 697,506 L 744,520 L 742,544 L 720,584 L 708,582 L 697,528 Z" />
+      <path
+         id="shadow-peeking-ear"
+         fill="#9ea09d"
+         d="M 696.0,506.0 L 725.0,506.0 L 723.4,516.2 C 722.4,519.8 719.8,524.2 715.6,527.0 C 712.0,529.4 707.6,532.4 703.5,536.5 C 698.0,530.0 694.5,519.5 696.0,506.0 Z M 734.4,522.0 C 735.0,527.8 734.0,534.2 732.0,541.0 C 729.4,548.8 725.8,556.4 721.8,562.2 C 720.2,564.4 717.8,565.4 714.4,565.2 C 711.6,565.0 709.0,564.4 706.0,563.6 L 706.0,584.0 L 744.0,584.0 L 744.0,520.0 Z" />
+      <path
+         id="shadow-peeking-ear-upper"
+         fill="#9ea09d"
+         d="M 670.0,444.0 L 682.2,444.0 C 680.8,447.6 679.2,449.8 679.0,451.5 C 678.8,452.8 680.5,453.6 683.8,454.6 C 690.5,456.6 697.8,460.4 703.4,465.4 C 707.6,469.2 710.8,473.8 713.4,478.2 C 715.2,481.2 716.8,484.2 718.0,488.2 L 712.0,488.5 L 670.0,456.0 Z M 730.6,500.4 C 732.2,499.4 734.0,498.5 736.2,498.0 L 744.0,497.0 L 744.0,507.0 L 732.0,507.0 Z" />
+      <path
+         id="shadow-peeking-ear-warm-rim"
+         fill="#9c9c88"
+         d="M 691.5,449.8 C 698.6,453.4 706.2,458.4 712.8,464.4 C 719.2,470.0 724.4,476.0 728.4,481.2 C 730.2,483.6 731.6,485.4 732.8,486.8 L 744.0,486.0 L 740.0,458.0 L 712.0,442.0 L 690.0,443.0 Z" />
+    </g>
+
+    <!-- L5. EYES & BROWS (anatomical naming from Tsubasa's perspective; intentional human-authored vector forms & user's manual eyebrows) -->
+    <g id="eyes-layer">
+      <!-- Right eye (Eye 1 on viewer's left: full-height 3/4 anime eye from brand.png & backup.svg spanning all the way down to the nose contour) -->
+      <g id="eye-right">
+        <!-- USER-INTENTIONAL MANUAL EYEBROW (thickened ~2.5-3px inward per user request so it reads with confident brow weight harmonizing with #brow-left and tapers smoothly without a disconnected grazing speck):
+             Do NOT overwrite or alter in future parity passes. -->
+        <path
+           id="brow-right"
+           fill="#414546"
+           d="M 233.5,575.5 C 232.5,567.8 232.2,559.5 233.8,552.0 C 234.6,548.2 235.6,545.8 237.5,545.6 C 239.4,545.4 241.2,546.2 241.0,547.8 C 238.5,552.5 236.6,558.2 235.4,564.8 C 234.6,569.2 234.2,573.2 233.5,575.5 Z" />
+
+        <!-- Calligraphic right upper eyelid crease (#515251, pixel-locked to brand.png: ~2.8px crest tapering to razor-sharp 0px points at (258.5,571.6) and (287.2,573.2)) -->
+        <path
+           id="eyelid-crease-right"
+           fill="#515251"
+           d="M 258.5,571.6 C 262.8,566.3 269.2,565.0 275.6,566.8 C 280.2,568.1 284.4,570.5 287.2,573.2 C 283.8,571.3 279.2,569.4 274.2,568.8 C 268.2,568.1 262.8,569.1 258.5,571.6 Z" />
+
+        <!-- Full-height outer-left shadowed sclera (#9ea09d, matching brand.png and user magenta mark) tapering cleanly along the left side without wrapping over the top crown -->
+        <path
+           id="sclera-right-shadow"
+           fill="#9ea09d"
+           d="M 265.8,598.5 C 267.5,591.5 273.5,588.5 281.5,588.5 L 310,675 L 301.5,675 C 292,658 278.5,636 268.8,614 C 266.4,608 265.2,602.5 265.8,598.5 Z" />
+
+        <!-- Right iris (clipped to full-height 3/4 oblique silhouette reaching down to the nose contour) -->
+        <g id="iris-right" clip-path="url(#right-iris-clip)">
+          <!-- Deep dark iris base (#414546) -->
+          <path
+             id="iris-right-base"
+             fill="#414546"
+             d="M 262,584 L 326,584 L 326,682 L 262,682 Z" />
+
+          <!-- Subtle hand-tapered upper-iris gloss rim (#515251) tracing the curved upper dome inside #lash-right-upper so the top crown has gentle depth without a light #9ea09d arch -->
+          <path
+             id="iris-right-upper-rim-sheen"
+             fill="#515251"
+             d="M 274.2,607.0 C 273.6,597.8 277.8,592.6 285.5,593.2 C 293.8,594.0 301.2,601.2 307.0,612.0 C 307.4,613.0 306.6,613.6 305.8,612.6 C 300.0,603.8 293.0,597.6 285.4,596.6 C 279.4,596.0 276.0,600.0 275.6,607.2 C 275.3,608.4 274.3,608.2 274.2,607.0 Z" />
+
+          <!-- Continuous lower iris mid-tone transition cradle (#515251 outer depth + #636363 inner bevel) moved inward along the user's red guide so the upside-down crescent sweeps visibly inside #lens-right-front-arc with a clean dark #414546 outer iris band to its left -->
+          <path
+             id="iris-right-crescent-shade"
+             fill="#515251"
+             d="M 278.5,617.0 C 281.0,626.8 286.0,641.0 291.8,654.2 C 297.2,666.2 303.6,673.8 310.0,675.0 C 317.4,675.8 320.8,666.0 320.4,647.0 C 320.0,637.5 318.2,630.5 316.0,629.8 C 314.8,638.8 311.2,644.6 306.0,645.2 C 301.2,645.6 296.0,636.8 290.2,626.6 C 286.4,620.2 281.4,615.4 278.5,617.0 Z" />
+          <path
+             id="iris-right-crescent-mid"
+             fill="#636363"
+             d="M 279.4,618.4 C 282.0,628.0 287.0,642.2 292.8,655.0 C 298.0,666.2 304.2,672.8 310.4,674.0 C 317.0,674.6 320.0,665.2 319.6,648.2 C 319.2,639.5 317.6,633.0 315.8,632.4 C 314.4,640.8 311.0,646.4 306.0,647.0 C 301.4,647.4 296.2,638.6 290.4,628.2 C 286.6,621.8 281.8,617.0 279.4,618.4 Z" />
+
+          <!-- Broad continuous luminous lower iris bowl (#9ea09d) filling the lower half cleanly behind #lens-right-front-arc and cradling the inward-extended crescent horn -->
+          <path
+             id="iris-right-crescent-lit"
+             fill="#9ea09d"
+             d="M 280.4,619.8 C 283.0,629.4 288.0,643.2 293.8,655.6 C 298.8,666.2 304.6,671.8 310.8,672.8 C 316.5,673.4 319.1,664.4 318.8,649.5 C 318.5,641.8 317.0,635.8 315.4,635.2 C 314.0,643.2 310.6,648.6 306.0,649.2 C 301.6,649.6 296.4,640.6 290.6,630.0 C 286.8,623.4 282.4,618.6 280.4,619.8 Z" />
+
+          <!-- Single continuous hand-tapered cream upside-down crescent (#dfdfbd) extending inward along the user's red guide from (281,618.5) visibly along the right side of #lens-right-front-arc into the lower iris bowl -->
+          <path
+             id="iris-right-reflection-arcs"
+             fill="#dfdfbd"
+             d="M 281.2,618.4 C 283.2,618.6 287.6,624.8 292.2,632.2 C 297.2,640.2 302.5,649.5 307.8,651.0 C 312.6,651.8 316.2,646.0 317.0,639.6 C 318.0,640.0 318.2,642.4 317.5,645.8 C 316.0,653.2 312.2,657.2 306.8,656.6 C 300.2,655.6 294.2,644.6 288.6,634.2 C 284.8,627.2 280.4,621.2 280.4,619.2 C 280.5,618.6 280.8,618.3 281.2,618.4 Z" />
+
+          <!-- Lower-right iris catchlight (#dfdfbd) nestled cleanly against the upper-right shoulder of the luminous lower bowl inside the slim dark outer iris rim -->
+          <path
+             id="catchlight-right-lower-sparkle"
+             fill="#dfdfbd"
+             d="M 312.4,636.0 C 312.4,633.0 314.0,631.2 316.2,631.8 C 318.0,632.4 318.6,635.4 317.8,638.2 C 316.8,640.4 314.6,641.0 313.2,639.6 C 312.6,638.6 312.4,637.4 312.4,636.0 Z" />
+        </g>
+
+        <!-- USER-INTENTIONAL MANUAL RIGHT EYE FRAME (Eye 1 on viewer's left, adopted from 'svg attempt - backup.svg' #path1, cleanly terminated behind #lens-right-front-arc with matching lower lash ticks):
+             Spans the full height of Eye 1 from the upper lash arch (y=581) all the way down to the nose contour. Do NOT truncate or shrink! -->
+        <path
+           id="lash-right-upper"
+           fill="#414546"
+           d="M 301.2,670.4 L 296.82789,666.38566 C 294.21887,663.98646 291.25997,662 290.2132,662 c -3.0187,0 -4.62315,-2.47964 -14.70933,-22.73292 C 270.4,628.8 267.4,622.6 266.2,618.8 C 265.7,617.2 265.3,616.4 264.7,616.4 C 264.1,616.4 264.1,619.2 265.0,624.2 L 263.4,623.4 C 262.2,616.6 261.6,608.6 262.04817,600.54189 c 0.81811,-7.22289 1.22796,-8.28469 4.4363,-11.49303 3.36357,-3.36356 3.92121,-3.55245 11.50425,-3.89682 C 281.2,585.1 283.1,585.2 283.9,585.3 C 283.8,582.6 283.2,579.9 282.2,577.1 C 283.9,580.2 285.2,583.5 287.0,586.6 C 288.3,587.2 289.4,587.6 290.4,587.8 C 292.2,587.9 293.9,588.2 295.4,588.6 C 293.8,589.6 292.3,590.2 291.3,590.5 C 292.7,591.8 293.8,593.2 294.49998,594.52933 c -5.4411,-2.15176 -14.34781,-3.62928 -18.30269,-3.03621 -4.80999,0.7213 -7.63752,4.07413 -8.85026,10.49444 -1.63898,8.67692 15.17495,43.22297 31.15555,64.01244 C 299.6,667.4 300.6,668.9 301.2,670.4 Z" />
+        <!-- Outer lower-left lash spur connecting #lash-right-upper smoothly into #hair-lower-left directly below #lens-right-front-arc (matched 1:1 to brand.png) -->
+        <path
+           id="lash-right-outer-spur"
+           fill="#414546"
+           d="M 276.4,635.6 C 274.8,637.2 273.0,638.2 269.6,638.8 L 271.4,641.8 C 273.8,640.6 275.8,639.8 278.0,639.4 Z" />
+        <!-- Pair of filled, organically curved calligraphic right-eye lower lash shapes (#414546, pixel-locked to brand.png: #lash-right-tick-1 flows smoothly off #lash-right-upper with zero elbow and clean hair clearance; #lash-right-tick-2 anchors into #lens-right-front-arc) -->
+        <path
+           id="lash-right-tick-1"
+           fill="#414546"
+           d="M 297.8,666.8 C 300.2,669.8 300.0,675.2 298.4,682.8 C 300.8,678.2 302.4,673.2 301.2,669.2 C 300.4,667.8 299.2,666.6 297.8,666.8 Z" />
+        <path
+           id="lash-right-tick-2"
+           fill="#414546"
+           d="M 308.6,675.8 C 307.2,681.0 305.4,686.2 303.6,691.2 C 306.4,686.8 308.6,682.0 310.6,677.2 Z" />
+      </g>
+
+      <!-- Left eye (Eye 2 on viewer's right: anatomical iris, organic non-bullseye sparkles, fine crease harmonizing with manual brows) -->
+      <g id="eye-left">
+        <!-- USER-INTENTIONAL MANUAL EYEBROW (adopted verbatim from 'svg attempt - backup.svg'):
+             Do NOT overwrite, thicken, or alter in future parity passes. -->
+        <path
+           id="brow-left"
+           fill="#414546"
+           d="M 334.01919,511.85534 c -0.0353,-3.02883 4.15817,-15.21315 7.8176,-22.71419 3.95311,-8.103 15.65352,-22.29615 22.49807,-27.29122 6.40288,-4.67273 16.81563,-9.62372 24.87365,-11.82675 13.75869,-3.76158 16.59009,-3.99766 25.78097,-2.14958 l 8.48949,1.70704 -8.38011,1.28285 c -21.19865,3.24514 -34.02706,8.93307 -51.15446,22.68114 -12.9454,10.39119 -16.59795,14.88932 -25.1116,30.92497 -2.63693,4.96672 -4.80305,8.2903 -4.81361,7.38574 z" />
+
+        <!-- Calligraphic left upper eyelid crease (#515251, pixel-locked to brand.png: ~3.8px mid-lower arc tapering cleanly to a razor-sharp 0px tip at (384.8,487.8) and tucking dead-center behind #lens-left) -->
+        <path
+           id="eyelid-crease-left"
+           fill="#515251"
+           d="M 354.8,525.8 C 356.2,516.0 360.2,506.8 367.2,499.2 C 373.0,493.4 378.8,489.8 384.8,487.8 C 379.6,491.4 374.4,495.8 369.6,501.4 C 363.6,508.6 359.6,517.0 358.2,525.8 Z" />
+
+        <!-- Full left eye sclera negative space from brand.png: inner sclera bay (x=379.2..430, y=510..591) + upper-outer #9ea09d sclera pocket (x=473..486.8, y=516..538.5, smoothly continuing the right-side cheek shadow contour across the outer needle spike with zero hanging wedge) -->
+        <path
+           id="sclera-left"
+           fill="#dfdfbd"
+           d="M 379.5,558 C 384,546 393,537 406,531 L 430,591 C 421,593.5 413,594.5 408,592 C 397,578 387.5,565 379.5,558 Z" />
+
+        <!-- USER-INTENTIONAL STYLIZED WARM EYE RIM (#9c9c88, inspired by Stage 4):
+             Smooth hand-tapered skin-contact rim softening Eye 2's lower-left, bottom, and outer-right iris edge against cream cheek skin (strictly behind #iris-left, #sclera-left-shadow, and #lash-left-lower) -->
+        <path
+           id="iris-left-warm-rim"
+           fill="#9c9c88"
+           d="M 402.8,546.5 C 405.2,562.5 415.0,580.2 428.8,593.2 C 435.5,593.5 445.5,590.2 455.2,585.5 L 453.5,581.5 C 444.2,585.8 435.8,589.0 430.0,589.2 C 417.5,576.8 408.2,560.2 405.8,545.5 C 404.6,544.8 403.0,545.2 402.8,546.5 Z M 461.5,580.5 C 470.5,578.0 477.5,573.2 480.2,566.8 C 483.2,559.5 483.8,548.5 482.0,536.0 L 478.5,538.0 C 479.8,549.5 478.8,560.5 475.8,567.2 C 473.0,573.2 467.8,576.8 461.0,578.2 Z" />
+        <path
+           id="sclera-left-shadow"
+           fill="#9ea09d"
+           d="M 379.35,559.2 C 378.0,535 382.5,516 402,506.5 C 414,503 428,503 438,506.5 L 424,534 L 406,534 C 394,540 385.2,548.8 379.35,559.2 Z M 473,516 L 486.8,520 L 485.8,535.6 C 483.6,536.0 481.2,537.0 478.8,538.5 L 473,538.5 Z" />
+
+        <!-- Left iris (clipped to angled anime shield silhouette, built from coherent anatomical layers) -->
+        <g id="iris-left" clip-path="url(#left-iris-clip)">
+          <!-- Deep dark iris base (#414546) -->
+          <path
+             id="iris-left-base"
+             fill="#414546"
+             d="M 398,506 L 490,506 L 490,596 L 398,596 Z" />
+
+          <!-- Lower iris mid-tone transition cradle (#515251 outer depth + #636363 soft inner bevel) -->
+          <path
+             id="iris-left-crescent-shade"
+             fill="#515251"
+             d="M 421,562 C 421,574 428,588 442,588 C 455,586 466,579 472,569 C 476,562 477.5,550 476,541 C 471,538 463,538 459,543 C 457.5,554 453,562 444.5,566.5 C 438.5,563.5 429.5,561.5 421,562 Z" />
+          <path
+             id="iris-left-crescent-mid"
+             fill="#636363"
+             d="M 423.5,563.5 C 423.5,575 429.5,587.5 442,587.5 C 454,585.5 464.5,579 470.5,569.5 C 474.5,563 476,552 475,543 C 470.5,540.5 463.5,540.5 459.5,544.5 C 458,555 453.5,563 445,567.5 C 439.5,564.5 431,563 423.5,563.5 Z" />
+
+          <!-- Wide luminous lower iris crescent (#9ea09d) with smooth Bezier bowl curvature -->
+          <path
+             id="iris-left-crescent-lit"
+             fill="#9ea09d"
+             d="M 426,564.5 C 425,576 430.5,587 442,587 C 453,585 463,579 470,570 C 474,563.5 475.8,554 475,545.5 C 471.5,542.5 464.5,541.5 460,545.5 C 458.2,556 454,563.5 445,568.2 C 439.8,565.2 432.5,563.8 426,564.5 Z" />
+
+          <!-- Cohesive hand-tapered cream reflection arcs (#dfdfbd) sweeping along the lower iris bowl + USER-INTENTIONAL STYLIZED WARM EYE ACCENTS (#9c9c88, inspired by Stage 4 & user exact geometry spec):
+               upper reflection crescent & #iris-left-lens-bevel share single-edge #iris-left-reflection-mask so the warm bevel matches the light #dfdfbd upside-down crescent 100% flush on both sides of #lens-left with zero double-edge #dfdfbd AA hairline -->
+          <g id="iris-left-reflection-upper-group" mask="url(#iris-left-reflection-mask)">
+            <path
+               id="iris-left-reflection-arcs"
+               fill="#dfdfbd"
+               stroke="#dfdfbd"
+               stroke-width="2"
+               d="M 427,565.5 C 433.5,569.5 443,572.5 451.5,571.2 C 458.5,569.5 462.5,557.5 464.5,544 C 466,543.5 467.5,543.8 467.8,545 C 468,557.5 463.8,571 454.5,575.8 C 444,579 432.5,575.5 426.5,567.8 C 426.2,566.5 426.5,565.5 427,565.5 Z" />
+            <path
+               id="iris-left-lens-bevel"
+               d="M 461.5,620 C 463,599 458,579 449,564 C 444,555 438,548 432,541"
+               fill="none"
+               stroke="#9c9c88"
+               stroke-width="13.2" />
+          </g>
+          <path
+             id="iris-left-reflection-arc-lower"
+             fill="#dfdfbd"
+             d="M 437,586 C 446.5,581.2 458.5,576.2 468,568 C 468.5,571.8 460.5,580.5 449.5,584.8 C 444.5,586.5 440,586.8 437,586 Z" />
+
+          <!-- Organic hand-shaped anime catchlights with soft #9c9c88 warm glow halos (no mechanical bullseye circles) -->
+          <path
+             id="catchlight-left-inner-sparkle"
+             fill="#9ea09d"
+             d="M 420.8,545.2 C 422,542.6 424.8,542.2 426.2,544.5 C 427,546.8 425.2,549.2 422.5,549 C 420.5,548.5 420,546.8 420.8,545.2 Z" />
+          <path
+             id="catchlight-left-upper-halo"
+             fill="#9c9c88"
+             d="M 442.5,535.2 C 443.4,530.6 447.2,528.6 450.8,530.5 C 452.4,533.8 450.5,538.8 446.6,540.2 C 443.4,540.0 442.0,537.8 442.5,535.2 Z" />
+          <path
+             id="catchlight-left-upper-sparkle"
+             fill="#dfdfbd"
+             d="M 444.2,535.2 C 444.8,532.2 447.5,530.5 449.8,531.8 C 450.8,534.2 449.2,537.5 446.5,538.5 C 444.5,538.2 443.8,536.8 444.2,535.2 Z" />
+          <path
+             id="catchlight-left-mid-halo"
+             fill="#9c9c88"
+             d="M 449.5,550.2 C 450.6,545.8 455.2,544.4 459.0,547.2 C 460.6,551.2 458.0,555.8 453.6,556.2 C 450.2,555.6 448.8,553.0 449.5,550.2 Z" />
+          <path
+             id="catchlight-left-mid-sparkle"
+             fill="#dfdfbd"
+             d="M 451.2,550.2 C 452,547.2 455.2,546.2 457.8,548.2 C 458.8,551 456.8,554.2 453.8,554.5 C 451.5,554 450.6,552.2 451.2,550.2 Z" />
+          <path
+             id="catchlight-left-pupil-glint"
+             fill="#9ea09d"
+             d="M 444.8,558.8 C 445.8,557.2 447.6,557.6 447.8,559.5 C 447.4,561 445.5,561.2 444.8,559.8 Z" />
+        </g>
+
+        <!-- USER-INTENTIONAL MANUAL LEFT UPPER EYELASH ARCH (Eye 2 on viewer's right, adopted VERBATIM from 'svg attempt - backup.svg' #path1):
+             Slender sweeping upper eyelash arch with fine inner-left spikes, top spikes, and sharp outer wing. Do NOT replace with a blocky filled helmet! -->
+        <path
+           id="lash-left-upper"
+           fill="#414546"
+           d="M 377.71407,551.5 c -0.94498,-4.95 -1.71722,-10.21094 -1.7161,-11.69098 0.003,-4.34842 -2.01219,-4.4612 -5.80298,-0.32473 -3.42592,3.73833 -3.47172,3.75444 -2.77433,0.9758 0.39,-1.5539 1.54018,-4.54541 2.55595,-6.64781 1.83046,-3.78862 1.82791,-3.83579 -0.28739,-5.3174 -2.06796,-1.44846 -2.0257,-1.49488 1.36087,-1.49488 2.98899,0 3.77662,-0.52274 5.4392,-3.60997 2.96113,-5.49849 13.72208,-14.75955 22.31395,-19.20378 12.38292,-6.40519 28.92865,-10.87658 46.69676,-12.61955 l 6,-0.58857 -5.5,2.656 -5.5,2.656 11,1.86521 c 6.05,1.02587 12.509,2.36084 14.35334,2.9666 3.59288,1.18005 2.82358,1.53395 13.14666,-6.04797 4.14725,-3.046 2.99974,-1.10621 -3.28946,5.5606 l -3.90038,4.13457 7.34492,3.56304 c 7.51523,3.64565 19.02371,12.26485 20.79476,15.5741 0.95867,1.79129 0.88187,1.79232 -2.56631,0.0343 -4.08342,-2.08185 -6.21935,-1.63748 -6.82396,1.41968 -0.23274,1.17684 -1.46635,6.6397 -2.74137,12.1397 l -2.3182,10 -0.5,-11.83393 c -0.57785,-13.67651 0.0456,-12.74306 -12.5,-18.71552 -12.44236,-5.92331 -21.20901,-4.2 -35.5,-2.95 C 424.0,514.4 414.5,514.4 406.2,516.1 C 398.5,517.8 392.4,521.0 387.74574,525.69826 c -4.61858,5.57451 -6.62119,12.17556 -7.57799,24.97876 L 379.43221,560.5 Z" />
+
+        <!-- Main upper-left catchlight UNCLIPPED with trimmed lower/outer #9c9c88 warm rim (upper-right trimmed cleanly below diagonal glint per blue cut) -->
+        <path
+           id="catchlight-left-main-rim"
+           fill="#9c9c88"
+           d="M 401.2,530.8 C 403.5,529.6 407.2,529.8 410.2,531.2 C 412.8,532.6 415.2,534.6 416.4,536.8 C 417.8,542.4 413.8,547.6 405.5,547.4 C 402.5,547.0 401.2,543.5 401.0,539.0 C 400.8,535.0 400.6,532.0 401.2,530.8 Z" />
+        <path
+           id="catchlight-left-main"
+           fill="#dfdfbd"
+           d="M 401,532 C 404.5,529.5 412.5,531 415.5,536.2 C 416,541.5 412.5,546 405.2,545.8 C 401,544.5 399.8,537.5 401,532 Z" />
+
+        <!-- Cohesive tapered diagonal lash-reflection slash with delicate upper-left #9c9c88 top-edge accent (per yellow addition, zero wrap underneath) -->
+        <path
+           id="lash-left-diagonal-glint-top-rim"
+           fill="#9c9c88"
+           d="M 411.5,526.2 C 414.8,526.5 418.8,528.8 421.8,531.8 C 420.8,532.8 419.0,532.2 416.8,530.6 C 414.4,528.8 412.2,527.8 411.0,527.4 C 410.5,526.8 410.8,526.2 411.5,526.2 Z" />
+        <path
+           id="lash-left-diagonal-glint"
+           fill="#dfdfbd"
+           d="M 411.5,527.5 C 416.8,529 423.2,533.8 427,538.5 C 426,539.8 424,539.2 421.8,536.8 C 417.8,533.2 413.8,530.5 411,528.8 C 410.5,528 410.8,527.3 411.5,527.5 Z" />
+
+        <!-- USER-INTENTIONAL MANUAL LEFT LOWER EYELASH & BOTH OUTER LASH TICKS (Eye 2 on viewer's right, adopted VERBATIM from 'svg attempt - backup.svg' #path1 in #414546 primary dark ink):
+             Do NOT overwrite or recolor to grey in future passes. -->
+        <path
+           id="lash-left-lower"
+           fill="#414546"
+           d="M 421,594.09186 c 0,-0.39536 3.7125,-1.77969 8.25,-3.07629 10.38024,-2.96615 27.08369,-9.58168 31.98013,-12.66595 4.1526,-2.61574 4.76987,-2.79257 4.76987,-1.36647 0,1.12743 -6.56894,4.59889 -16.0018,8.45639 C 441.57833,588.8828 421,595.02284 421,594.09186 Z" />
+        <path
+           id="lash-left-outer-tick-1"
+           fill="#414546"
+           d="M 492.5,555.43136 c -1.65,-0.85598 -3.45,-2.0363 -4,-2.62295 -1.58121,-1.68656 4.5102,0.0245 8,2.24717 2.48376,1.58193 2.65584,1.91257 1,1.92141 -1.1,0.006 -3.35,-0.68965 -5,-1.54563 z" />
+        <path
+           id="lash-left-outer-tick-2"
+           fill="#414546"
+           d="M 482.21782,569.87039 c -2.09669,-2.23412 -2.36162,-2.83289 -0.9259,-2.09262 2.50567,1.29194 6.14143,5.22223 4.83089,5.22223 -0.53234,0 -2.28959,-1.40832 -3.90499,-3.12961 z" />
+      </g>
+    </g>
+
+    <!-- L6. LEFT GLASSES LENS, BRIDGE, INNER RIGHT RIM & LEFT TEMPLE (BELOW upper hair bangs & sideburns) -->
+    <g id="glasses-left-and-bridge">
+      <!-- Exact front arc of #lens-right clipped cleanly inside #lens-right-front-clip (0.000px geometric drift from Layer 2 #lens-right; extends deep into #hair-lower-left at BOTH top-left over Eye 1 and bottom-left at the jawline with zero AA seam) -->
+      <g clip-path="url(#lens-right-front-clip)">
+        <ellipse
+           id="lens-right-front-arc"
+           cx="-93.890717"
+           cy="733.5141"
+           rx="60.289272"
+           ry="81.187538"
+           transform="matrix(0.87638749,-0.48160664,0.45747123,0.88922442,0,0)"
+           fill="none"
+           stroke="#414546"
+           stroke-width="7.2" />
+      </g>
+      <!-- 3D protruding nose occlusion layered ABOVE #lens-right-front-arc: #nose-skin-occlusion -> #nose-bridge-stroke (#9c9c88) -> #nose-highlight (#fdffe0) -->
+      <g id="nose-foreground">
+        <path
+           id="nose-skin-occlusion"
+           fill="#dfdfbd"
+           d="M 324.5,656.5 C 320.2,664.2 313.8,673.0 312.6,678.8 C 312.0,682.5 315.4,689.2 320.2,695.5 C 322.2,698.2 325.5,698.0 334.5,696.0 C 346.5,693.0 358.0,684.0 358.0,672.0 C 358.0,660.0 342.0,650.0 324.5,656.5 Z" />
+        <path
+           id="nose-bridge-stroke"
+           fill="#9c9c88"
+           d="M 324.5,657.6 C 324.8,658.4 322.6,663.5 319.8,668.5 C 317.0,673.5 314.8,678.0 314.8,680.2 C 314.8,683.2 317.4,688.8 321.6,694.8 C 322.2,695.8 321.8,696.8 320.6,696.6 C 319.0,696.2 317.4,694.2 315.6,691.5 C 312.2,686.5 310.2,681.2 311.0,677.6 C 311.6,675.2 314.0,671.0 316.4,666.8 C 318.6,663.0 321.2,658.8 322.2,657.2 C 323.0,656.0 324.2,656.4 324.5,657.6 Z" />
+        <path
+           id="nose-highlight"
+           fill="#fdffe0"
+           d="M 316.2,679.2 C 315.8,675.2 320.0,667.2 324.4,659.2 C 327.0,654.8 333.5,653.8 339.8,656.2 C 347.8,659.8 354.5,664.8 355.2,672.0 C 355.6,677.5 354.0,681.5 350.5,682.2 C 345.5,683.0 339.5,680.8 333.5,680.4 C 326.2,680.0 316.8,682.0 316.2,679.2 Z" />
+      </g>
+
+      <!-- Curved arc nose bridge (exact de Casteljau trim of 'svg attempt - backup.svg' bridge ending dead-center inside #lens-left at (327.89,606.86) with stroke-linecap="butt" so zero bump pokes inside the lens) -->
+      <path
+         id="glasses-bridge"
+         d="M 285.64,639.42 C 293.64,617.78 309.31,606.10 327.89,606.86"
+         fill="none"
+         stroke="#414546"
+         stroke-width="6.71479"
+         stroke-linecap="butt" />
+
+      <!-- Left temple arm starting from outer upper lash wing and tucking underneath L7 upper hair -->
+      <path
+         id="temple-left"
+         d="M 489,517 C 497,515.5 507,513.5 518,511"
+         fill="none"
+         stroke="#414546"
+         stroke-width="6.5"
+         stroke-linecap="round" />
+
+      <!-- Left round wireframe lens (viewer's right, continuous across inner sclera bay into solid #414546 iris; tucked under forehead bang tip) -->
+      <path
+         id="lens-left"
+         d="M 405.5,526.8 C 396.5,523.2 385.5,521.2 374,521 C 363,522 352,529 344,538 C 334,550 327.5,570 327.5,592 C 327.5,618 339,642 357,657 C 374,672 396,681 416,679 C 441,676 458,652 461.5,620 C 463,599 458,579 449,564 C 444,555 438,548 432,541"
+         fill="none"
+         stroke="#414546"
+         stroke-width="7.2"
+         stroke-linecap="round" />
+
+      <!-- USER-INTENTIONAL STYLIZED RIM GLINT (inspired by Stage 4):
+           Sleek hand-tapered metallic rim specular (#9c9c88) riding #lens-left's exact lower-left curve (pointed ends, zero tube caps). Do NOT strip in future passes. -->
+      <path
+         id="lens-left-glint"
+         fill="#9c9c88"
+         d="M 352.4,653.0 C 363.2,662.2 376.2,669.8 391.2,675.4 C 390.8,676.6 388.8,677.0 385.5,676.0 C 373.0,671.4 361.4,663.6 352.6,654.8 C 351.6,653.8 351.6,653.0 352.4,653.0 Z" />
+    </g>
+
+    <!-- L7. UPPER HAIR, AHOGE, CAT EAR, BANGS & BACK-RIGHT HAIR (ABOVE foreground glasses) -->
+    <g id="hair-upper-layer">
+      <!-- Base dark hair silhouette (#414546) -->
+      <path
+         id="hair-upper-base"
+         fill="#414546"
+         d="m 687.6,790.5 l -2.4,-8.5 c -2.4,-8.5 -8.8,-48.2 -10.7,-61.2 -1.3,-14.6 -2.5,-17.6 -8.5,-26.4 -5.2,-7.6 -14.8,-17.2 -22.8,-30.8 -5.4,-9.2 -8.2,-15.2 -8.2,-19.6 0,-4.8 4.4,-9.2 10.5,-14 -5.6,-6.8 -12,-15 -17.5,-22.8 -3.4,-4.8 -6.6,-10.2 -8.4,-12.2 -2.2,-2.4 -3.2,0.4 -4,11.8 -1.2,15.8 -4.8,37.4 -10.2,59.8 -7.6,32.8 -9.4,37.6 -14,39.6 -6,2.8 -10.8,-7.8 -21,-46.6 -6,-23 -10,-35.6 -16.6,-53 -10.8,-29.2 -16.2,-41 -41,-88 -8.8,-16.6 -11.4,-21.4 -17.6,-32.2 -4.4,-7.6 -10.8,-21.2 -11.4,-23.4 -0.8,-3 -9.4,-5.4 -31.4,-8 -22.4,-3.2 -70.4,-12.6 -92,-16 -18.4,-2.8 -56.4,-9.6 -70.6,-11.6 6.2,4 20.2,10.4 32.4,15.8 15.8,7 45.8,18.2 70.6,30.8 5.8,3.2 7.4,4.8 7,6.8 -0.4,2 -2.4,2.6 -7.8,3 -14,0.6 -40,-3 -60,-6.2 -26,-4 -66,-10.4 -90.8,-16.2 -8.6,-2.8 -10.2,-1.4 -12.4,8.6 -2.4,10.6 -4.6,19.6 -2,25.4 4.2,8 13.2,15.4 26,25 19.2,14.8 41.2,29.8 57.2,40 8,5 16,8.8 23.2,12.2 5,2.4 4,4.2 -3.2,5.6 -5.6,1 -26,-2.8 -43.4,-7.6 C 274,567.2 246,554 227.4,541.8 224,539.6 82.8,450.8 82.2,448.6 c -1,-4.7 16,-51.9 26.5,-73.4 7.2,-14.9 19.5,-34 27.2,-42.5 5.3,-5.9 14.7,-12.9 19.5,-17.3 0.8,-1.8 -4.8,-8.2 -17.2,-20.4 C 123,280.2 117,272 112,259.4 104.8,241 101,211.6 102.8,186 c 2.8,-38.6 9.2,-62 24.6,-92.8 10.8,-21.4 22.8,-37.4 42.4,-56.2 19.6,-19 38,-31.2 52.8,-35 8.4,-2.2 15.8,-2.6 16.8,-1 1.2,2 -3.8,8 -15.8,18.6 -25.8,23 -34.6,31.8 -44.2,44.8 -9.4,12.8 -26.2,47.8 -31.4,64.2 -3.2,10.2 -4.8,21.8 -6.2,40 -2,26.2 0.6,46.4 10.2,81 6.4,23.4 10,34 13.4,39.8 4.4,7.2 6,7 12.2,-1 13.8,-18 43.2,-40 74.4,-55.4 24.6,-12.2 39.8,-18.2 82.4,-32.4 29.2,-9.6 51.8,-15.6 85.6,-22.2 7.6,-1.4 23.4,-7 32,-11.2 12,-6 26,-16.8 40,-26.8 28,-20.2 66,-50 94,-70.6 16,-11.8 26,-17 36,-25 8,-6.4 12,-9.6 16.4,-9.6 3.6,0 4.6,2.8 4.8,11 0.2,4.4 0.4,5.8 1.8,5.2 3.6,-1.6 10.6,-5.2 13.8,-4.8 5.8,1.6 9.2,13 10.8,37 2.0,24.8 4.0,45.2 6.8,66.4 2.4,17.2 2.8,23 2.8,48.6 0,28.8 -0.8,36 -5.6,55.4 -1.6,7.2 -1.2,9.4 3.4,14.8 10.6,12.6 25.6,33 38.2,51.2 30.8,44.6 48.2,66.4 71.4,89.6 10.4,10.2 23.2,21.2 32,28.2 3.2,2.4 3.8,5.6 3.8,15.8 8.0,95.0 -18.0,192.0 -72.4,268.4 -16.0,22.0 -38.0,46.0 -62.4,68.5 z M 668.2,621.6 c 10.8,-4.2 23.8,-12.8 23.8,-16 0,-1.8 -7.2,-10.2 -16,-21 -12,-15 -37,-46.2 -44.4,-52.2 -2,-1.4 -2.2,0 -1,5.2 2.2,9.2 16,34 21.2,48.4 3.2,8.8 7.8,28 9.2,35.8 0.4,2.4 2.6,1.6 7.2,-0.2 z M 718.6,572 c 6.2,-10.2 13.4,-25.8 16,-34.8 2.6,-9 2.8,-12 1,-12.4 -3.2,-0.8 -17.2,-8 -22.8,-11.6 -4.4,-2.8 -7.6,-3.6 -9.6,-2.2 -2.6,2 -2,8.6 2.2,27 3.6,14.4 6,25.6 7.2,33.8 0.6,4.4 1.4,6.2 2.4,5.8 0.8,-0.4 2,-3 3.6,-5.6 z m 17.8,-71.8 c -1,-5 -5.2,-17.8 -7.6,-22.4 -2.2,-4.2 -7,-9.6 -11.4,-13.4 -7.6,-6.8 -15,-10.6 -27,-14.2 -10.4,-3.2 -18.2,-2.2 -14.4,1.6 5.4,4.6 18,14 27.4,21.6 7.4,6 17.6,15.8 29,26.8 3.8,3.6 4.6,3.6 4,0 z" />
+
+      <!-- Clean stylized lit hair planes clipped inside upper hair silhouette -->
+      <g id="hair-lit-planes" clip-path="url(#upper-hair-clip)">
+        <!-- Broad lit crown & upper bangs plane (#9ea09d), curving around the tapered ahoge V-root at (156,316) to the outer-left hair edge -->
+        <path
+           id="hair-crown-lit"
+           fill="#9ea09d"
+           d="M 124,348 C 133,335 142,324 150,319 C 156,318 160,314 163,305 C 166,297 170,292 175,289 C 196,267 219,248 244,234 C 304,200 384,180 452,162 C 484,146 524,116 562,86 C 524,120 478,162 420,206 C 416,222 426,244 426,262 C 440,282 454,298 450,312 C 454,342 460,374 468,406 L 454,438 C 402,428 334,408 266,384 C 210,364 164,342 124,348 Z" />
+
+        <!-- Left crown shoulder midtone transition (#515251 & #636363) -->
+        <path
+           id="hair-crown-left-midtone"
+           fill="#515251"
+           d="M 124,345 C 148,333 178,335 208,347 C 194,356 168,358 142,357 C 131,355 124,350 124,345 Z" />
+        <path
+           id="hair-crown-left-soft"
+           fill="#636363"
+           d="M 134,335 C 156,329 184,333 212,345 C 192,342 164,339 134,335 Z" />
+
+        <!-- Soft mid-dark transition band (#515251 & #636363) at cat ear base & crown right edge -->
+        <path
+           id="hair-ear-base-shade"
+           fill="#515251"
+           d="M 424,204 C 446,182 474,158 502,134 C 482,164 464,192 446,216 C 436,228 430,242 432,254 C 424,242 418,222 424,204 Z" />
+        <path
+           id="hair-ear-base-transition"
+           fill="#636363"
+           d="M 420,204 C 440,180 468,156 498,132 C 476,160 452,188 434,212 C 426,224 424,240 428,254 C 420,242 416,222 420,204 Z" />
+
+        <!-- Mid-dark tapered transition band along right crown (#515251 & #636363, tucked cleanly left of #hair-clip) -->
+        <path
+           id="hair-crown-midtone"
+           fill="#515251"
+           d="M 438,314 C 468,324 494,344 510,372 C 504,384 496,394 486,400 C 466,374 448,344 438,314 Z" />
+        <path
+           id="hair-crown-midtone-soft"
+           fill="#636363"
+           d="M 420,310 C 444,322 468,346 486,380 C 480,388 474,394 466,396 C 448,368 432,338 420,310 Z" />
+
+        <!-- Tapered diagonal wisp & under-ear lit streak (#515251 + #9ea09d) -->
+        <path
+           id="hair-under-ear-shade"
+           fill="#515251"
+           d="M 470,283 C 512,299 560,320 606,342 C 594,344 580,341 564,335 C 530,320 498,302 470,283 Z" />
+        <path
+           id="hair-under-ear-lit"
+           fill="#9ea09d"
+           d="M 480,287 C 514,301 548,317 578,334 C 568,336 556,333 542,326 C 518,314 498,301 480,287 Z" />
+
+        <!-- Tapered secondary volume locks inside dark right hair mass (#515251) -->
+        <path
+           id="hair-right-mass-flow-1"
+           fill="#515251"
+           d="M 534,384 C 576,412 622,450 664,498 C 654,496 642,488 628,476 C 596,446 564,414 534,384 Z" />
+        <path
+           id="hair-right-mass-flow-2"
+           fill="#515251"
+           d="M 520,446 C 548,470 572,498 594,528 C 584,524 572,514 558,498 C 544,480 530,462 520,446 Z" />
+
+        <!-- Dark sweeping hair strands carved cleanly over the lit crown (roots tucked deep under #hair-clip) -->
+        <path
+           id="hair-strand-top"
+           fill="#414546"
+           d="M 250,262 C 282,254 320,262 364,294 C 414,330 462,374 504,412 C 496,422 482,424 460,420 C 428,380 388,338 340,302 C 302,276 272,272 250,262 Z" />
+        <path
+           id="hair-strand-mid"
+           fill="#414546"
+           d="M 232,338 C 266,334 314,344 366,370 C 416,394 462,412 504,428 C 496,440 482,448 462,446 C 418,428 362,408 310,388 C 268,372 244,358 232,338 Z" />
+        <path
+           id="hair-strand-lower"
+           fill="#414546"
+           d="M 160,350 C 202,356 252,384 314,410 C 374,434 434,444 498,448 C 488,458 474,464 454,464 C 392,456 322,440 260,418 C 210,392 180,370 160,350 Z" />
+        <path
+           id="hair-strand-right-diagonal"
+           fill="#414546"
+           d="M 396,260 C 434,274 480,302 536,338 C 594,376 654,414 714,450 C 704,456 696,458 688,454 C 626,416 562,374 498,334 C 452,306 416,280 396,260 Z" />
+
+        <!-- Deep forehead skin shadow recessed behind overlapping bangs (#636363, clipped flush via #upper-hair-clip without touching #9ea09d skin shadow) -->
+        <path
+           id="shadow-forehead-bang-recess"
+           fill="#636363"
+           d="M 187.6,437.9 C 201.5,447.1 230.0,459.2 244.5,462.25 L 246.0,468.0 L 240.0,498.31 L 228.55,498.31 C 214.9,478.2 201.2,458.0 187.6,437.9 Z" />
+
+        <!-- Lit lower-bangs planes (#9ea09d & #515251 transitions) with sharp tapered roots and tips -->
+        <path
+           id="hair-bang-lit-1"
+           fill="#9ea09d"
+           d="M 158,360 C 196,382 238,408 286,438 C 314,450 342,460 368,468 C 338,464 300,454 260,440 C 212,424 176,400 158,360 Z" />
+        <path
+           id="hair-bang-lit-1b-shade"
+           fill="#515251"
+           d="M 278,430 C 312,434 352,442 392,456 C 362,456 322,450 278,430 Z" />
+        <path
+           id="hair-bang-lit-1b"
+           fill="#9ea09d"
+           d="M 312,434 C 340,438 368,446 394,456 C 368,456 338,450 312,434 Z" />
+        <path
+           id="hair-bang-lit-2-shade"
+           fill="#515251"
+           d="M 148,444 C 184,482 226,518 286,548 C 304,558 318,564 328,568 C 304,562 274,550 244,532 C 198,504 168,472 148,444 Z" />
+        <path
+           id="hair-bang-lit-2"
+           fill="#9ea09d"
+           d="M 170,454 C 202,492 240,526 292,554 C 308,562 318,566 328,570 C 304,566 276,554 246,536 C 208,512 184,482 170,454 Z" />
+
+        <!-- Slimmed flat edge-riding ahoge strand planes tapering organically into the crown root via #515251 & #636363 transition planes cushioning the #414546 V-root at (156,315) -->
+        <path
+           id="ahoge-shade"
+           fill="#515251"
+           d="M 233,4 C 196,14 160,42 140,74 C 118,108 106,150 105,194 C 104.5,222 114,252 135,274 C 138,266 135,250 131,232 C 126,204 126,174 130,144 C 136,110 152,78 174,52 C 192,30 214,15 233,4 Z M 149,238 C 154,260 159,278 162,294 C 160,303 156,311 149,317 C 153,321 159,319 163,311 C 167,303 171,295 177,289 C 168,278 157,258 149,238 Z" />
+        <path
+           id="ahoge-mid"
+           fill="#636363"
+           d="M 230,4 C 194,14 158,42 138,74 C 118,108 107,148 107,190 C 107.5,214 115,238 128,256 C 129,246 127,232 124,216 C 120,192 121,164 126,136 C 132,104 148,74 170,48 C 188,28 210,14 230,4 Z M 163,286 C 163,296 161,306 156,316 C 160,317 164,311 167,302 C 170,295 173,291 177,288 C 171,285 166,284 163,286 Z" />
+        <path
+           id="ahoge-lit"
+           fill="#9ea09d"
+           d="M 227,3 C 191,13 156,39 136,71 C 118,102 110,138 111,174 C 112,196 116,216 123,234 C 123,222 121,206 120,188 C 119,164 122,138 129,112 C 138,82 154,56 176,34 C 192,20 210,10 227,3 Z" />
+
+        <!-- Back-right hair lit edge sweeping down from cat ear (#9ea09d with tapered #515251 inner transition) -->
+        <path
+           id="hair-back-right-top-shade"
+           fill="#515251"
+           d="M 648,272 C 688,316 732,368 776,416 C 796,438 812,452 824,462 C 814,464 804,460 792,450 C 764,422 732,386 698,344 C 674,314 658,290 648,272 Z" />
+        <path
+           id="hair-back-right-lit-top"
+           fill="#9ea09d"
+           d="M 656,260 C 696,304 740,356 784,404 C 804,426 816,440 826,452 C 818,454 808,450 798,440 C 772,414 740,378 706,336 C 680,304 664,278 656,260 Z" />
+
+        <!-- Tapered lit diagonal streak across right hair (#515251 + #9ea09d) -->
+        <path
+           id="hair-right-streak-1-shade"
+           fill="#515251"
+           d="M 620,350 C 672,364 726,386 778,420 C 768,422 756,418 742,410 C 702,386 660,366 620,350 Z" />
+        <path
+           id="hair-right-streak-1"
+           fill="#9ea09d"
+           d="M 640,355 C 686,366 728,384 764,410 C 756,411 744,407 732,400 C 702,382 670,368 640,355 Z" />
+
+        <!-- Reshaped crisp diagonal far-right mid hair plane sweeping with right hair flow into #portrait-circle-clip -->
+        <path
+           id="hair-back-right-mid-shade"
+           fill="#515251"
+           d="M 752,456 C 774,464 798,476 824,492 L 824,548 C 796,530 772,508 756,482 C 751,472 750,462 752,456 Z" />
+        <path
+           id="hair-back-right-lit-mid"
+           fill="#9ea09d"
+           d="M 764,464 C 784,472 806,484 824,498 L 824,540 C 800,524 780,506 766,484 C 762,476 762,468 764,464 Z" />
+
+        <!-- Secondary back-right middle-low lit bands (#515251 + #9ea09d, tapered inner points) -->
+        <path
+           id="hair-back-right-mid2-shade"
+           fill="#515251"
+           d="M 768,556 C 786,564 802,576 816,590 L 806,600 C 792,588 778,572 768,556 Z" />
+        <path
+           id="hair-back-right-lit-mid2"
+           fill="#9ea09d"
+           d="M 780,560 C 794,568 806,578 816,588 L 808,596 C 796,586 786,572 780,560 Z" />
+
+        <path
+           id="hair-back-right-low-shade"
+           fill="#515251"
+           d="M 740,594 C 762,606 784,620 802,638 L 792,646 C 774,630 756,612 740,594 Z" />
+        <path
+           id="hair-back-right-lit-low"
+           fill="#9ea09d"
+           d="M 750,602 C 768,612 786,626 802,640 L 794,646 C 778,632 762,616 750,602 Z" />
+
+        <!-- Recessed lower-right hair contour shade (#636363, clipped flush via #upper-hair-clip without touching #9ea09d neck shadow) -->
+        <path
+           id="hair-neck-recess-shade"
+           fill="#636363"
+           d="M 637.6,635.6 C 637.4,638.8 639.0,642.4 641.6,647.4 C 645.4,654.8 649.8,663.0 653.2,670.4 C 655.6,675.6 657.2,680.4 658.4,684.6 L 650.0,686.0 L 629.0,645.0 L 634.0,636.0 Z" />
+
+        <!-- Crisp, tapered hair crown highlights (#dfdfbd, zero artificial #9c9c88 AA halo rings) -->
+        <path
+           id="hair-highlight-crown-1"
+           fill="#dfdfbd"
+           d="M 355,248 C 366,242 382,241 395,246 C 384,251 370,254 355,248 Z" />
+        <path
+           id="hair-highlight-crown-2"
+           fill="#dfdfbd"
+           d="M 302,318 C 316,319 332,325 344,334 C 330,335 314,329 302,318 Z" />
+        <path
+           id="hair-highlight-left-edge"
+           fill="#dfdfbd"
+           d="M 137,374 C 139,364 142,356 144,358 C 143,374 144,394 146,410 C 140,400 137,386 137,374 Z" />
+      </g>
+
+      <!-- Cat ear inner grey shape (cleaned, smooth human-drawn fur tufts) -->
+      <path
+         id="cat-ear-inner"
+         fill="#9ea09d"
+         d="M 505,279 C 503,276 510,274 522,271 C 546,265 568,252 584,232 C 588,226 592,218 590,216 C 587,215 576,219 567,221 C 566,220 572,208 580,196 C 585,188 588,182 586,178 C 588,174 592,170 590,168 C 584,167 568,170 556,174 C 554,173 558,166 562,159 C 566,152 567,147 564,146 C 558,146 546,151 538,154 C 538,149 544,136 556,124 C 572,108 594,94 612,87 C 618,85 625,88 632,96 C 646,112 654,140 657,174 C 659,204 654,242 644,264 C 632,286 606,299 582,302 C 554,302 520,290 505,279 Z" />
+
+      <!-- USER-INTENTIONAL HAIR CLIP (bold flat cel-shaded pill matching surrounding anime hair weight):
+           Do NOT reshape, add 3D bevels, or flag against brand-mono_8c.png in future parity passes. -->
+      <g id="hair-clip" transform="translate(504,409) rotate(-48)" clip-path="url(#hair-clip-pill-clip)">
+        <rect
+           id="hair-clip-body"
+           x="-48"
+           y="-11"
+           width="96"
+           height="22"
+           rx="11"
+           ry="11"
+           fill="#9ea09d" />
+        <path
+           id="hair-clip-highlight"
+           fill="#dfdfbd"
+           d="M -34,-5.5 C -16,-8.5 6,-10 26,-10.5 C 36,-10.8 43,-8.5 45,-4.5 C 46,-1.5 43,1.5 36,2.2 C 24,3 12,1.8 -2,-0.5 C -16,-2.5 -27,-3.5 -34,-5.5 Z" />
+      </g>
+    </g>
+    </g>
+  </g>
+</svg>

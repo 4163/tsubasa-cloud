@@ -5,7 +5,7 @@
 # Tsubasa~ Cloud
 
 <p>
-  <img src="docs/brand-mono_8c-circle.png" alt="Tsubasa~ Cloud mark" align="left" width="67" />
+  <img src="docs/svg-r44-readme.svg" alt="Tsubasa~ Cloud mark" align="left" width="67" />
   Tsubasa~ Cloud pools multiple personal Google Drive accounts into one virtual drive backed by a local SQLite index. Files stay intact on single accounts without splitting or striping, and each pool mirrors its folder hierarchy inside Google Drive so accounts remain browsable on drive.google.com.
 </p>
 
