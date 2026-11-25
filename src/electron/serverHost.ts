@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import type { AuthCompletedEvent } from '../server/app.js';
-import { computeDbFingerprint, resolveDbPath } from '../server/paths.js';
+import { readWriterLock } from '../server/lock.js';
+import { computeDbFingerprint, resolveDbPath, resolveWriterLockPath } from '../server/paths.js';
+import { getDefaultServerPort, getDefaultWebDevUrl, isValidPort } from '../server/ports.js';
 
 export interface StartServerHostOptions {
   isPackaged: boolean;
@@ -39,7 +41,7 @@ interface AuthCompletedIpcMessage {
 const PROBE_TIMEOUT_MS = 350;
 const SPAWN_READY_TIMEOUT_MS = 15_000;
 const SPAWN_SHUTDOWN_TIMEOUT_MS = 5_000;
-const VITE_DEV_URL = 'http://localhost:5173/';
+const VITE_DEV_URL = `${getDefaultWebDevUrl()}/`;
 
 type BackendProbeResult =
   | { status: 'attach'; serverUrl: string }
@@ -263,7 +265,7 @@ async function startSpawnedDevServer(options: {
 }
 
 export async function startServerHost(options: StartServerHostOptions): Promise<ServerHostHandle> {
-  const preferredPort = options.preferredPort ?? (Number(process.env.PORT) || 3000);
+  const preferredPort = options.preferredPort ?? getDefaultServerPort();
   const expectedFingerprint = computeDbFingerprint(resolveDbPath(options.homeDir));
 
   const probe = await probeExistingBackend(preferredPort, expectedFingerprint);
@@ -276,6 +278,21 @@ export async function startServerHost(options: StartServerHostOptions): Promise<
       rendererUrl,
       close: async () => {},
     };
+  }
+
+  const lockPort = readWriterLock(resolveWriterLockPath(options.homeDir))?.port;
+  if (isValidPort(lockPort) && lockPort !== preferredPort) {
+    const lockProbe = await probeExistingBackend(lockPort, expectedFingerprint);
+    if (lockProbe.status === 'attach') {
+      const rendererUrl = await resolveAttachedRendererUrl(lockProbe.serverUrl);
+      return {
+        mode: 'attached',
+        port: lockPort,
+        serverUrl: lockProbe.serverUrl,
+        rendererUrl,
+        close: async () => {},
+      };
+    }
   }
 
   const bindPort = probe.status === 'occupied' ? 0 : preferredPort;

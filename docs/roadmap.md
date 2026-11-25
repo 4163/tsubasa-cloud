@@ -223,8 +223,8 @@ flowchart TD
   - When the Electron desktop app is running, it takes priority over any browser tab.
   - Electron's `BrowserWindow` and external `localhost` browser tabs run on separate origins, which isolates `BroadcastChannel` and `navigator.locks`. The background Hono server tracks the active instance lease as either `electron` or `browser` and enforces Electron priority.
   - Any `localhost` browser tab opened while Electron is running receives a rejection from the backend before mounting the workspace and renders the same blocking modal so it cannot conflict with the desktop app.
-- [x] Add native desktop features (tray icon, close-to-tray, native light/dark title bar, and dynamic window title).
-- [x] Build production Windows NSIS installer and portable zip packages.
+- [x] Add native desktop features (tray icon, custom tray popup menu, `Start with Windows` autostart toggle with NSIS uninstall cleanup, close-to-tray, native light/dark title bar, and dynamic window title).
+- [x] Build production Windows NSIS installer and portable `.zip` packages (with bundled `.portable` marker in the portable `.zip` archive).
 
 ### Phase 8: CLI, extensions, and future UI viewer hooks
 

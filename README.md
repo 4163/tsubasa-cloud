@@ -26,9 +26,9 @@ Requires [Node.js](https://nodejs.org/) with `npm`.
 3. **Install dependencies and start the app.**
    ```bash
    npm install
-   npm run dev:server   # Hono API on http://localhost:3000
-   npm run dev:web      # Vite UI on http://localhost:5173 (proxies /api to :3000)
+   npm run dev          # Hono API on http://localhost:28300 and Vite UI on http://localhost:28301
    ```
+   Press `Ctrl+C` to stop both servers, or run `npm run dev:server` and `npm run dev:web` in separate terminals. To serve the compiled `dist/` bundle directly through Hono on `http://localhost:28300`, run `npm run build` followed by `npm start`.
 4. **Add Google accounts.** Prepare a Desktop OAuth JSON file, or a `.env` file defining `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Import it from the web UI sidebar, copy it into `.oauths/`, or run:
    ```bash
    npm run tsubasa -- auth add <credentials.json>
@@ -37,7 +37,7 @@ Requires [Node.js](https://nodejs.org/) with `npm`.
 
 ## CLI and extensions
 
-The `tsubasa` CLI shares the server's SQLite index, placement rules, and Drive engine. It probes `GET /api/health` and routes over HTTP when a running server matches the local `dbFingerprint`, or runs standalone with `data/tsubasa.writer.lock`.
+The `tsubasa` CLI shares the server's SQLite index, placement rules, and Drive engine. It checks `data/tsubasa.writer.lock` for the server's bound port alongside `127.0.0.1:${PORT:-28300}`, probes `GET /api/health`, and routes over HTTP when a running server matches the local `dbFingerprint`. Without a matching server, it runs standalone under `data/tsubasa.writer.lock`.
 
 ```bash
 npm run tsubasa -- status
@@ -47,12 +47,28 @@ npm run build:cli && npm link   # Install `tsubasa` globally on PATH
 - CLI commands, flags, exit codes, and external Drive imports: [src/cli/README.md](src/cli/README.md)
 - Subprocess extensions under `extensions/<name>/`: [extensions/README.md](extensions/README.md)
 
+## Data and OAuth locations
+
+Tsubasa resolves a single home directory (`<homeDir>`) per launch mode and stores OAuth credentials under `.oauths/` and runtime state under `data/`.
+
+| Launch mode | `<homeDir>` | `.oauths/` | SQLite database |
+|---|---|---|---|
+| **Development** (`npm run dev`, `dev:server`, `dev:electron`) | Repository root | `<repo>/.oauths/` | `<repo>/data/tsubasa.db` |
+| **CLI** (`tsubasa`, `npm run tsubasa`) | Package root resolved from `import.meta.url`, never `process.cwd()` | `<packageRoot>/.oauths/` | `<packageRoot>/data/tsubasa.db` |
+| **Windows NSIS installer** (`Tsubasa~ Cloud Setup.exe`) | `%AppData%\Tsubasa~ Cloud\` | `%AppData%\Tsubasa~ Cloud\.oauths\` | `%AppData%\Tsubasa~ Cloud\data\tsubasa.db` |
+| **Windows portable `.zip`** | Directory containing `Tsubasa~ Cloud.exe` | `<exeDir>\.oauths\` | `<exeDir>\data\tsubasa.db` |
+| **`TSUBASA_HOME` override** (any mode) | Resolved `TSUBASA_HOME` path | `<TSUBASA_HOME>/.oauths/` | `<TSUBASA_HOME>/data/tsubasa.db` |
+
+Portable mode activates automatically when a `.portable` marker file sits next to `Tsubasa~ Cloud.exe`, which the portable zip bundles by default, or when an adjacent `data/` or `.oauths/` folder already exists. For the CLI, `--home <dir>` overrides the package root in the same way as `TSUBASA_HOME`. Alongside `tsubasa.db`, the `data/` directory holds `tsubasa.writer.lock`, which records the active server's bound port and writer lock state, and `desktop-prefs.json` for Electron theme preferences.
+
 ## Development
 
 ```bash
-npm run dev:server   # Start Hono backend with watch reload (PORT defaults to 3000)
-npm run dev:web      # Start Vite dev server on port 5173
+npm run dev          # Start Hono API (:28300) and Vite UI (:28301) together; Ctrl+C stops both
+npm run dev:server   # Start Hono backend with watch reload (PORT defaults to 28300)
+npm run dev:web      # Start Vite dev server on port 28301 (proxies /api to :28300)
 npm run dev:electron # Build web, server, and Electron shell, then launch desktop app
+npm start            # Serve compiled dist/ bundle through Hono on :28300 (TSUBASA_SERVE_STATIC=1)
 npm run typecheck    # Run TypeScript check
 npm run build        # Typecheck, build frontend, and compile server
 npm run build:cli    # Compile the CLI to dist/cli/index.js

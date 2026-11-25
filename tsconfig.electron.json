@@ -16,5 +16,5 @@
     "outDir": "./dist"
   },
   "include": ["src/electron/**/*"],
-  "exclude": ["node_modules", "dist", "src/electron/preload.ts"]
+  "exclude": ["node_modules", "dist", "src/electron/preload.ts", "src/electron/trayPreload.ts"]
 }

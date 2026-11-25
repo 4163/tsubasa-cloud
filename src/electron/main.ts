@@ -6,7 +6,6 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
-  Menu,
   nativeImage,
   nativeTheme,
   screen,
@@ -24,14 +23,19 @@ import {
   type DesktopThemeChoice,
 } from './paths.js';
 import { startServerHost, type ServerHostHandle } from './serverHost.js';
+import { TrayMenuController } from './trayMenu.js';
 
 const APP_NAME = 'Tsubasa~ Cloud';
 const APP_USER_MODEL_ID = 'com.tsubasa.cloud';
 const FALLBACK_REVEAL_MS = 2500;
+const AUTOSTART_ARG = '--autostart';
+
+const startedFromAutostart = process.argv.includes(AUTOSTART_ARG);
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(MODULE_DIR, '..', '..');
 const PRELOAD_PATH = path.join(MODULE_DIR, 'preload.cjs');
+const TRAY_PRELOAD_PATH = path.join(MODULE_DIR, 'trayPreload.cjs');
 const TRAY_ICON_PATH = path.join(PACKAGE_ROOT, 'build', 'icon.ico');
 const WINDOW_ICON_PATH = path.join(PACKAGE_ROOT, 'build', 'icon.ico');
 
@@ -42,6 +46,7 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let trayMenu: TrayMenuController | null = null;
 let serverHost: ServerHostHandle | null = null;
 let homeDir = '';
 let currentThemeChoice: DesktopThemeChoice = 'auto';
@@ -146,29 +151,84 @@ function resolveDevWindowIcon(icoFrames: Map<number, Buffer>): NativeImage | str
   return frame ? nativeImage.createFromBuffer(frame) : WINDOW_ICON_PATH;
 }
 
+function isAutostartSupported(): boolean {
+  return app.isPackaged && process.platform === 'win32';
+}
+
+function getAutostartEnabled(): boolean {
+  if (!isAutostartSupported()) {
+    return false;
+  }
+  const settings = app.getLoginItemSettings({
+    path: process.execPath,
+    args: [AUTOSTART_ARG],
+  });
+  return Boolean(settings.openAtLogin);
+}
+
+function setAutostartEnabled(enabled: boolean): void {
+  if (!isAutostartSupported()) {
+    return;
+  }
+  if (enabled) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      enabled: true,
+      name: APP_USER_MODEL_ID,
+      path: process.execPath,
+      args: [AUTOSTART_ARG],
+    });
+    return;
+  }
+  app.setLoginItemSettings({
+    openAtLogin: false,
+    name: APP_USER_MODEL_ID,
+    path: process.execPath,
+    args: [AUTOSTART_ARG],
+  });
+}
+
+function resolveIsDarkTheme(): boolean {
+  if (currentThemeChoice === 'dark') return true;
+  if (currentThemeChoice === 'light') return false;
+  return nativeTheme.shouldUseDarkColors;
+}
+
 function createTray(icoFrames: Map<number, Buffer>): void {
   const icon = createTrayIcon(icoFrames);
   tray = new Tray(icon);
   tray.setToolTip(APP_NAME);
+
+  trayMenu = new TrayMenuController({
+    appName: APP_NAME,
+    packageRoot: PACKAGE_ROOT,
+    preloadPath: TRAY_PRELOAD_PATH,
+    getState: () => ({
+      isDark: resolveIsDarkTheme(),
+      autostartEnabled: getAutostartEnabled(),
+      autostartAvailable: isAutostartSupported(),
+    }),
+    onShow: () => restoreMainWindow(),
+    onToggleAutostart: () => {
+      if (!isAutostartSupported()) return;
+      setAutostartEnabled(!getAutostartEnabled());
+    },
+    onQuit: () => {
+      isQuitting = true;
+      app.quit();
+    },
+  });
+
   tray.on('click', () => {
+    trayMenu?.hide();
     restoreMainWindow();
   });
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: `Show ${APP_NAME}`,
-        click: () => restoreMainWindow(),
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ])
-  );
+
+  tray.on('right-click', () => {
+    if (tray) {
+      void trayMenu?.toggle(tray);
+    }
+  });
 }
 
 function registerIpcHandlers(): void {
@@ -189,6 +249,7 @@ function registerIpcHandlers(): void {
         resolveShellBackgroundColor(rawChoice, nativeTheme.shouldUseDarkColors)
       );
     }
+    trayMenu?.syncState();
   });
 
   nativeTheme.on('updated', () => {
@@ -198,6 +259,7 @@ function registerIpcHandlers(): void {
         resolveShellBackgroundColor('auto', nativeTheme.shouldUseDarkColors)
       );
     }
+    trayMenu?.syncState();
   });
 }
 
@@ -232,14 +294,20 @@ function createMainWindow(
   win.removeMenu();
 
   let revealed = false;
-  const showOnce = () => {
-    if (revealed || win.isDestroyed()) return;
-    revealed = true;
-    clearTimeout(fallbackRevealTimer);
-    win.show();
-  };
-  const fallbackRevealTimer = setTimeout(showOnce, FALLBACK_REVEAL_MS);
-  win.once('ready-to-show', showOnce);
+  let fallbackRevealTimer: ReturnType<typeof setTimeout> | null = null;
+  if (!startedFromAutostart) {
+    const showOnce = () => {
+      if (revealed || win.isDestroyed()) return;
+      revealed = true;
+      if (fallbackRevealTimer) {
+        clearTimeout(fallbackRevealTimer);
+        fallbackRevealTimer = null;
+      }
+      win.show();
+    };
+    fallbackRevealTimer = setTimeout(showOnce, FALLBACK_REVEAL_MS);
+    win.once('ready-to-show', showOnce);
+  }
 
   const allowedOrigins = new Set<string>();
   const rendererOrigin = tryParseUrl(host.rendererUrl)?.origin;
@@ -277,7 +345,10 @@ function createMainWindow(
   });
 
   win.on('closed', () => {
-    clearTimeout(fallbackRevealTimer);
+    if (fallbackRevealTimer) {
+      clearTimeout(fallbackRevealTimer);
+      fallbackRevealTimer = null;
+    }
     if (mainWindow === win) {
       mainWindow = null;
     }
@@ -310,6 +381,10 @@ if (!gotSingleInstanceLock) {
     if (!teardownPromise) {
       teardownPromise = (async () => {
         try {
+          if (trayMenu) {
+            trayMenu.destroy();
+            trayMenu = null;
+          }
           if (tray && !tray.isDestroyed()) {
             tray.destroy();
           }

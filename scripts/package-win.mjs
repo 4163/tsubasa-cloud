@@ -9,6 +9,9 @@ const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');
 const SQLITE_BUILD_DIR = path.join(PROJECT_ROOT, 'node_modules', 'better-sqlite3', 'build');
 const SQLITE_BINARY_PATH = path.join(SQLITE_BUILD_DIR, 'Release', 'better_sqlite3.node');
 const STAGING_DIR = path.join(PROJECT_ROOT, '.build');
+const RELEASE_DIR = path.join(PROJECT_ROOT, 'release');
+const PORTABLE_MARKER_NAME = '.portable';
+const PORTABLE_MARKER_CONTENT = 'Portable mode marker for Tsubasa~ Cloud.\n';
 
 // Probe in a child process so Windows does not lock native .node binaries inside this process.
 function canSystemNodeLoadSqlite() {
@@ -86,6 +89,79 @@ function spawnElectronBuilder(extraArgs) {
   });
 }
 
+function findRecentZipArtifacts(releaseDir, buildStartMs) {
+  if (!fs.existsSync(releaseDir)) {
+    return [];
+  }
+
+  const thresholdMs = buildStartMs - 2000;
+  const results = [];
+
+  for (const entry of fs.readdirSync(releaseDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.zip')) {
+      continue;
+    }
+
+    const fullPath = path.join(releaseDir, entry.name);
+    const stat = fs.statSync(fullPath);
+    if (stat.mtimeMs >= thresholdMs) {
+      results.push(fullPath);
+    }
+  }
+
+  return results;
+}
+
+export function injectPortableMarkerIntoZip(zipPath) {
+  if (process.platform !== 'win32') {
+    throw new Error('injectPortableMarkerIntoZip requires Windows PowerShell');
+  }
+
+  const psScript = [
+    "$ErrorActionPreference = 'Stop'",
+    'Add-Type -AssemblyName System.IO.Compression',
+    'Add-Type -AssemblyName System.IO.Compression.FileSystem',
+    '$zipPath = $env:TSUBASA_ZIP_PATH',
+    '$markerName = $env:TSUBASA_PORTABLE_NAME',
+    '$markerContent = $env:TSUBASA_PORTABLE_CONTENT',
+    '$zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Update)',
+    'try {',
+    '  $existing = $zip.GetEntry($markerName)',
+    '  if ($null -ne $existing) { $existing.Delete() }',
+    '  $entry = $zip.CreateEntry($markerName, [System.IO.Compression.CompressionLevel]::Optimal)',
+    '  $writer = New-Object System.IO.StreamWriter($entry.Open(), (New-Object System.Text.UTF8Encoding($false)))',
+    '  try {',
+    '    $writer.Write($markerContent)',
+    '  } finally {',
+    '    $writer.Dispose()',
+    '  }',
+    '} finally {',
+    '  $zip.Dispose()',
+    '}',
+  ].join('; ');
+
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', psScript],
+    {
+      env: {
+        ...process.env,
+        TSUBASA_ZIP_PATH: zipPath,
+        TSUBASA_PORTABLE_NAME: PORTABLE_MARKER_NAME,
+        TSUBASA_PORTABLE_CONTENT: PORTABLE_MARKER_CONTENT,
+      },
+      encoding: 'utf8',
+    }
+  );
+
+  if (result.status !== 0) {
+    const details = (result.stderr || result.stdout || '').trim();
+    throw new Error(
+      `Failed to inject ${PORTABLE_MARKER_NAME} into ${path.basename(zipPath)} (exit ${result.status ?? 'unknown'})${details ? `: ${details}` : ''}`
+    );
+  }
+}
+
 async function main() {
   const extraArgs = process.argv.slice(2);
   const hadBuildDir = fs.existsSync(SQLITE_BUILD_DIR);
@@ -153,6 +229,7 @@ async function main() {
   process.once('SIGTERM', () => handleTerminationSignal('SIGTERM'));
 
   let exitCode = 0;
+  const buildStartMs = Date.now();
 
   try {
     activeChild = spawnElectronBuilder(extraArgs);
@@ -180,9 +257,21 @@ async function main() {
   if (exitCode !== 0) {
     process.exit(exitCode);
   }
+
+  // Inject `.portable` only into freshly built `.zip` archives; never touch `release/win-unpacked/`.
+  const zipArtifacts = findRecentZipArtifacts(RELEASE_DIR, buildStartMs);
+  for (const zipPath of zipArtifacts) {
+    injectPortableMarkerIntoZip(zipPath);
+    console.log(`Injected ${PORTABLE_MARKER_NAME} into ${path.basename(zipPath)}`);
+  }
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+const isMain =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

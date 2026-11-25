@@ -4,3 +4,8 @@
   !undef APP_FILENAME
 !endif
 !define APP_FILENAME "${PRODUCT_FILENAME}"
+
+!macro customUnInstall
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.tsubasa.cloud"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "com.tsubasa.cloud"
+!macroend

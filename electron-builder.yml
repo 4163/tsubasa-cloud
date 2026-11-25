@@ -30,6 +30,8 @@ win:
     - target: nsis
       arch:
         - x64
+    # scripts/package-win.mjs injects a root `.portable` marker into built `.zip` archives
+    # without touching `release/win-unpacked/` so the NSIS installer stays non-portable.
     - target: zip
       arch:
         - x64
