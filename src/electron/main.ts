@@ -8,7 +8,6 @@ import {
   ipcMain,
   nativeImage,
   nativeTheme,
-  screen,
   shell,
   Tray,
   type NativeImage,
@@ -143,13 +142,6 @@ function createTrayIcon(icoFrames: Map<number, Buffer>): NativeImage {
   return nativeImage.createFromPath(APP_ICON_PATH);
 }
 
-function resolveDevWindowIcon(icoFrames: Map<number, Buffer>): NativeImage | string {
-  const scaleFactor = screen.getPrimaryDisplay().scaleFactor;
-  const targetSize = scaleFactor <= 1 ? 48 : 64;
-  const frame = icoFrames.get(targetSize);
-  return frame ? nativeImage.createFromBuffer(frame) : APP_ICON_PATH;
-}
-
 function isAutostartSupported(): boolean {
   return app.isPackaged && process.platform === 'win32';
 }
@@ -265,10 +257,7 @@ function registerIpcHandlers(): void {
   });
 }
 
-function createMainWindow(
-  host: ServerHostHandle,
-  icoFrames: Map<number, Buffer>
-): BrowserWindow {
+function createMainWindow(host: ServerHostHandle): BrowserWindow {
   const initialBackgroundColor = resolveShellBackgroundColor(
     currentThemeChoice,
     nativeTheme.shouldUseDarkColors
@@ -283,7 +272,7 @@ function createMainWindow(
     show: false,
     title: APP_NAME,
     backgroundColor: initialBackgroundColor,
-    ...(useEmbeddedExeIcon ? {} : { icon: resolveDevWindowIcon(icoFrames) }),
+    ...(useEmbeddedExeIcon ? {} : { icon: APP_ICON_PATH }),
     autoHideMenuBar: true,
     webPreferences: {
       preload: PRELOAD_PATH,
@@ -436,7 +425,7 @@ if (!gotSingleInstanceLock) {
 
       const icoFrames = readIcoPngFrames(APP_ICON_PATH);
       createTray(icoFrames);
-      mainWindow = createMainWindow(serverHost, icoFrames);
+      mainWindow = createMainWindow(serverHost);
     })
     .catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
