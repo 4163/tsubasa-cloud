@@ -20,6 +20,7 @@ Read agent guidelines and project documentation only. No codebase exploration.
 - `docs/styling-guide.md`
 - `extensions/README.md`
 - `src/cli/README.md`
+- `site/README.md`
 - `README.md` (if present)
 
 Do not read source files, config files, or directory trees.
