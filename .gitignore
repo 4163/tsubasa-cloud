@@ -1,0 +1,15 @@
+# Environment files
+.env
+.env.*
+*.env
+
+# Dependencies and builds
+node_modules/
+dist/
+.vite/
+
+# Logs and OS metadata
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
