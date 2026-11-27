@@ -35,7 +35,6 @@ function CheckingShell() {
       {...stylex.props(gateStyles.checkingShell, effectiveTheme === 'dark' && darkColors)}
       data-theme={effectiveTheme}
     >
-      <div className="grain-overlay" />
       {__DEMO_MODE__ && (
         <DemoWorkspaceBackdrop
           effectiveTheme={effectiveTheme}
@@ -65,13 +64,34 @@ function TabLockGate() {
   );
 }
 
+function DemoReadyGate({ children }: { children: React.ReactNode }) {
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || window.parent === window) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        window.parent.postMessage({ type: 'tsubasa:demo-ready' }, window.location.origin);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+    };
+  }, []);
+
+  return <>{children}</>;
+}
+
 const rootEl = document.getElementById('root');
 if (rootEl) {
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
       {__DEMO_MODE__ ? (
         <React.Suspense fallback={<CheckingShell />}>
-          <App />
+          <DemoReadyGate>
+            <App />
+          </DemoReadyGate>
         </React.Suspense>
       ) : (
         <TabLockGate />

@@ -121,8 +121,6 @@ export function TabBlockedModal({ ownerKind, authCompleted }: TabBlockedModalPro
       {...stylex.props(styles.root, effectiveTheme === 'dark' && darkColors)}
       data-theme={effectiveTheme}
     >
-      <div className="grain-overlay" />
-
       <GhostWorkspaceBackdrop effectiveTheme={effectiveTheme} themeChoice={readThemeChoice()} />
 
       <ModalDialog

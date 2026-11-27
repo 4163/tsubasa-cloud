@@ -45,7 +45,7 @@ export function readInitialTheme(): EffectiveTheme {
 export function applyDocumentTheme(theme: EffectiveTheme): void {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.style.backgroundColor = theme === 'dark' ? '#0b1412' : '#eef2ec';
+  document.documentElement.style.backgroundColor = theme === 'dark' ? '#12211d' : '#f7faf5';
   document.documentElement.style.color = theme === 'dark' ? '#e5f2eb' : '#111d18';
   if (theme === 'dark') {
     document.documentElement.classList.add('dark');

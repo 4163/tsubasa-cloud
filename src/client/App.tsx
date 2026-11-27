@@ -1062,8 +1062,6 @@ export function App() {
       )}
       data-theme={effectiveTheme}
     >
-      <div className="grain-overlay" />
-
       {__DEMO_MODE__ && (!hasDemoHydrated || isResettingDemo) && (
         <div
           aria-busy="true"
