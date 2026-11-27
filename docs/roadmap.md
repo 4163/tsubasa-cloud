@@ -2,7 +2,7 @@
 
 ## 1. Architecture overview
 
-Tsubasa pools personal Google Drive accounts into one virtual drive backed by a local SQLite WAL index (`data/tsubasa.db`). Files stay whole on single accounts without striping or splitting, and all navigation, search, and directory queries hit indexed local tables. One Desktop app OAuth client (`installed`) can authorize multiple accounts across pools using loopback redirects without pre-registered redirect URIs. See [README.md](../README.md#stack) for the full technology stack.
+Tsubasa is a local file manager that combines personal Google Drive accounts into storage pools backed by a local SQLite WAL index (`data/tsubasa.db`). Each pool syncs its folder structure with Google Drive, files stay intact on single accounts, and all navigation, search, and directory queries hit indexed local tables. One Desktop app OAuth client (`installed`) can authorize multiple accounts across pools using loopback redirects without pre-registered redirect URIs. See [README.md](../README.md#stack) for the full technology stack.
 
 ```mermaid
 graph TD
@@ -103,16 +103,25 @@ Every managed file stores Drive `appProperties`:
 
 On a new machine, import Desktop OAuth JSON or `.env` credentials via the sidebar, `.oauths/`, or `tsubasa auth add`, then run a cold sync to rebuild `data/tsubasa.db` from Drive metadata.
 
-## 4. Open roadmap (Phase 8+)
+## 4. Static site and live demo
 
-Phase 8 shipped the `tsubasa` CLI, canonical `tsubasa export` (`GET /api/export`), HTTP `Range` downloads, external Drive import, and the `extensions/<name>/manifest.json` subprocess runner (see [src/cli/README.md](../src/cli/README.md) and [extensions/README.md](../extensions/README.md)). The remaining items are still open:
+The public site ([tsubasa.moe.page](https://tsubasa.moe.page)) lives on the standalone orphan `site` branch, mounted locally at `site/` (gitignored on `main`), and builds two static pages: `/` (`HomePage`) and `/data-policy` (`DataPolicyPage`). See [site/README.md](https://github.com/4163/tsubasa-cloud/blob/site/README.md) for site scripts, layout, and host contracts.
+
+- **Client-only demo runtime (`src/client/demo/`).** `npm run build:demo` compiles the main React client (`vite build --mode demo`, `base: './'`) into `dist/demo/`. `createDemoFetch()` intercepts Hono RPC calls in-browser with zero network requests and stores metadata-only state in IndexedDB (`tsubasa-demo-v1`), never saving real file bytes.
+- **Build isolation.** Standard desktop and localhost builds (`npm run build:web`) strip demo modules via `stripDemoModulePlugin()` in `vite.config.ts`. Demo builds rewrite theme storage to `tsubasa-demo-theme-choice` and show `DemoWorkspaceBackdrop` while IndexedDB initializes or resets.
+- **Host/iframe contract.** `DemoWindow` embeds `public/demo/index.html` (`1280x720` desktop, `540px` mobile at `<= 768px`), masks host grain (`.grain-masked-none`) to avoid double-graining, covers the iframe until `DemoReadyGate` posts `tsubasa:demo-ready` (`250 ms` `onLoad` fallback), and forwards site header theme toggles via same-origin `tsubasa:site-theme-sync` `postMessage`.
+- **Static sync and deployment.** `npm run sync:demo` (`scripts/sync-demo.mjs`) builds `dist/demo/` and mirrors it into `site/public/demo/`, committed on `site` so static hosts deploy without checking out `main`. `VITE_SITE_ORIGIN` rewrites canonical links, `robots.txt`, `sitemap.xml`, and asset base paths at build time.
+
+## 5. Open roadmap (Phase 8+)
+
+Remaining extension and export items after Phase 8:
 
 - [ ] Add a thin client/server UI viewer hook so extensions can intercept file clicks in `src/client/`.
 - [ ] Optionally add a web/UI entry field to `extensions/<name>/manifest.json` for serving extension bundles directly in the UI.
 - [ ] Add `accounts.rootFolderId` to `standard` and `full` `tsubasa export` account records if extensions need account root Drive folder IDs.
 - [ ] Sync Google Drive `modifiedTime` into `files.updatedAt` if downstream tools need upstream modification timestamps instead of local SQLite index time.
 
-## 5. Completed milestones (Phases 1 to 7)
+## 6. Completed milestones (Phases 1 to 9)
 
 ```mermaid
 flowchart LR
@@ -123,6 +132,7 @@ flowchart LR
     P5 --> P6["6. Durability"]
     P6 --> P7["7. Electron Desktop"]
     P7 --> P8["8. CLI & Extensions"]
+    P8 --> P9["9. Site & Live Demo"]
 ```
 
 | Phase | Shipped scope |
@@ -133,4 +143,6 @@ flowchart LR
 | **4. Transfers & discrepancies** | Streaming upload (`<= 5 MiB` verified single-shot multipart, `> 5 MiB` resumable streaming in UI and chunked persisted resumable in CLI) with 14.25 GB rejection, `Range`-capable download proxy, soft-trash/restore/purge (`DELETE /api/trash/empty`), discrepancy scanner (`overCeiling`, `conflicts`, `unindexed`, `modified`, `missingRemote`), Move to root for over-ceiling files, and cloud-to-cloud account rebalance. |
 | **5. React + StyleX UI** | Design teardowns (`docs/teardowns/`) and reference tokens (`docs/reference-tokens/`) for Google Drive, MEGA, Dropbox, Hanekawa, and QuiviT Sage Mint. Responsive workspace shell, multi-pool sidebar, Share Pool workflow, pooled storage and headroom cards with masked emails, 24-hour transfer gauges, TanStack Virtual file table, upload queue drawer, external changes drawer, buffer-breach alerts, and Trash view. |
 | **6. Durability & tuning** | Benchmarked local SQLite query latency at 100,000 file records, verified cold recovery after wiping `tsubasa.db`, and verified expired tokens, revoked access, quota limits, and virtualized scrolling frame rates. |
-| **7. Electron desktop** | Electron main process hosting local Hono and the compiled Vite bundle, `app.requestSingleInstanceLock()`, backend `electron` vs `browser` instance lease priority (separate origins isolate `BroadcastChannel` and `navigator.locks`), tray icon and custom tray menu, `Start with Windows` with NSIS uninstall cleanup, close-to-tray, native title bar theme, inset rounded window rim (`BaseWindow` + `WebContentsView`), dynamic window title, and Windows NSIS installer plus portable `.zip` builds with `.portable` marker injection. |
+| **7. Electron desktop** | Electron main process hosting local Hono and the compiled Vite bundle, `app.requestSingleInstanceLock()`, backend `electron` vs `browser` instance lease priority (separate origins isolate `BroadcastChannel` and `navigator.locks`), tray icon and custom tray menu, `Start with Windows` with NSIS uninstall cleanup, close-to-tray, native title bar theme, inset rounded window rim (`BaseWindow` + `WebContentsView`), dynamic window title, elevated-session UIPI drag-and-drop warning on Windows, and Windows NSIS installer plus portable `.zip` builds with `.portable` marker injection. |
+| **8. CLI & extensions** | Headless `tsubasa` CLI, canonical `tsubasa export` (`GET /api/export`), HTTP `Range` downloads with `.part` resume, external Drive import (`copy` and `stream` modes), and the `extensions/<name>/manifest.json` subprocess runner (see [src/cli/README.md](../src/cli/README.md) and [extensions/README.md](../extensions/README.md)). |
+| **9. Static site & live demo** | Standalone orphan `site` branch hosting `/` and `/data-policy` (`tsubasa.moe.page`) with `VITE_SITE_ORIGIN` URL rewriting, `DemoWindow` iframe host with grain masking, pre-load ready gate, and theme sync, client-only IndexedDB demo runtime (`src/client/demo/`, `tsubasa-demo-v1`) stripped from standard builds, and `npm run sync:demo` mirroring `dist/demo/` into `site/public/demo/` (see [site/README.md](https://github.com/4163/tsubasa-cloud/blob/site/README.md)). |
