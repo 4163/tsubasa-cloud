@@ -39,7 +39,7 @@ const styles = stylex.create({
     flexDirection: 'column',
   },
   mainCentered: {
-    justifyContent: 'center',
+    justifyContent: 'safe center',
   },
 });
 

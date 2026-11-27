@@ -6,7 +6,7 @@ import { HomePage } from '../pages/HomePage';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <SiteLayout activeRoute="home">
+    <SiteLayout activeRoute="home" fitViewport>
       <HomePage />
     </SiteLayout>
   </StrictMode>
