@@ -26,7 +26,7 @@
           var isDark = choice === 'dark' || (choice === 'auto' && prefersDark);
           var theme = isDark ? 'dark' : 'light';
           document.documentElement.setAttribute('data-theme', theme);
-          document.documentElement.style.backgroundColor = isDark ? '#0b1412' : '#eef2ec';
+          document.documentElement.style.backgroundColor = isDark ? '#12211d' : '#f7faf5';
           document.documentElement.style.color = isDark ? '#e5f2eb' : '#111d18';
           if (isDark) {
             document.documentElement.classList.add('dark');
@@ -39,17 +39,17 @@
     <style>
       :root {
         color-scheme: light dark;
-        background-color: #0b1412;
+        background-color: #12211d;
         color: #e5f2eb;
       }
       :root[data-theme='light'] {
         color-scheme: light;
-        background-color: #eef2ec;
+        background-color: #f7faf5;
         color: #111d18;
       }
       :root[data-theme='dark'] {
         color-scheme: dark;
-        background-color: #0b1412;
+        background-color: #12211d;
         color: #e5f2eb;
       }
       body {

@@ -38,10 +38,10 @@ const styles = stylex.create({
     },
   },
   canvasLight: {
-    backgroundColor: '#eef2ec',
+    backgroundColor: '#f7faf5',
   },
   canvasDark: {
-    backgroundColor: '#0b1412',
+    backgroundColor: '#12211d',
   },
   iframe: {
     display: 'block',
