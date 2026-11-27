@@ -20,6 +20,7 @@ export interface TsubasaDesktopBridge {
 
 declare global {
   const __APP_VERSION__: string;
+  const __DEMO_MODE__: boolean;
   interface Window {
     tsubasaDesktop?: TsubasaDesktopBridge;
   }
