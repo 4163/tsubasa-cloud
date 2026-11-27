@@ -65,6 +65,7 @@ export function applySiteTheme(theme: SiteTheme): void {
   const isDark = theme === 'dark';
   const root = document.documentElement;
   root.setAttribute('data-theme', theme);
+  root.style.colorScheme = theme;
   root.style.backgroundColor = isDark ? '#0b1412' : '#eef2ec';
   root.style.color = isDark ? '#e5f2eb' : '#111d18';
   root.classList.toggle('dark', isDark);

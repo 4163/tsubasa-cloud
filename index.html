@@ -65,6 +65,7 @@
           var root = document.documentElement;
           root.dataset.theme = theme;
           root.classList.toggle('dark', theme === 'dark');
+          root.style.colorScheme = theme;
           root.style.backgroundColor = theme === 'dark' ? '#0b1412' : '#eef2ec';
           root.style.color = theme === 'dark' ? '#e5f2eb' : '#111d18';
         } catch (e) {}
