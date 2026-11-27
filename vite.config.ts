@@ -4,7 +4,7 @@ import stylexPlugin from 'unplugin-stylex/vite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DEFAULT_SITE_ORIGIN = 'https://4163.github.io/tsubasa-cloud';
+const DEFAULT_SITE_ORIGIN = 'https://tsubasa.moe.page';
 
 function resolveSiteOrigin(): string {
   const raw = process.env.VITE_SITE_ORIGIN?.trim() || DEFAULT_SITE_ORIGIN;

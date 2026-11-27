@@ -11,7 +11,7 @@ npm run preview    # Serve built dist/ bundle on http://localhost:28303
 npm run typecheck  # TypeScript check without emitting files
 ```
 
-- **Site URL (`VITE_SITE_ORIGIN`).** Defaults to `https://4163.github.io/tsubasa-cloud`. Builds use this URL to set the asset base path (`/tsubasa-cloud/`, or `/` for a root domain) and fill in canonical links in HTML, `robots.txt`, and `sitemap.xml`. Override it for a custom domain with `VITE_SITE_ORIGIN=https://example.com npm run build`.
+- **Site URL (`VITE_SITE_ORIGIN`).** Defaults to `https://tsubasa.moe.page`. Builds use this URL to set the asset base path (`/` for a root domain, or the URL path when hosted under a subpath) and fill in canonical links in HTML, `robots.txt`, and `sitemap.xml`. Override it with `VITE_SITE_ORIGIN=https://example.com npm run build`.
 
 ## Demo bundle and sync
 
