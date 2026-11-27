@@ -18,9 +18,9 @@
 - **External Drive changes and recovery.** Detect edits made directly on drive.google.com to accept them, move over-limit files to Drive root, or rebalance files across accounts. On a new machine, Tsubasa rebuilds your file list directly from your Google Drive accounts.
 - **Desktop app, localhost web app, and CLI.** Run the Windows desktop app, open it in a browser on localhost, or use the `tsubasa` CLI for resumable transfers, Google Drive folder imports, and extensions.
 
-> **14.25 GB direct upload limit:** Files stay whole on a single Google account rather than splitting across accounts. Tsubasa reserves 750 MB per 15 GB account so Gmail and Google Photos do not run out of space.
+> **14.25 GB direct upload limit.** Free Google Drive accounts have 15 GB of storage, and Tsubasa reserves 750 MB for Gmail and Google Photos.
 
-> **750 GB daily upload tracking:** Google Drive caps uploads at 750 GB per account over a rolling 24-hour window, so Tsubasa tracks transfer volume per account to avoid hitting that limit.
+> **750 GB daily upload tracking.** Google Drive caps uploads at 750 GB per account every 24 hours, and Tsubasa tracks usage against that limit.
 
 ## Setup
 
@@ -76,7 +76,7 @@ Each launch mode resolves one `<homeDir>` holding `.oauths/` and `data/tsubasa.d
 | **Development** (`dev`, `dev:server`, `dev:electron`, `start`) | Repository root |
 | **Override** (`TSUBASA_HOME` or CLI `--home <dir>`) | Resolved override path |
 
-> **Portable mode:** The portable `.zip` includes a `.portable` marker file next to `Tsubasa~ Cloud.exe`. If `.portable`, `data/`, or `.oauths/` exists in the same folder as the `.exe`, Tsubasa keeps credentials and data in that folder instead of `%AppData%\Tsubasa~ Cloud\`.
+- Portable mode activates when `.portable`, `data/`, or `.oauths/` sits next to `Tsubasa~ Cloud.exe`, storing data there instead of `%AppData%\Tsubasa~ Cloud\`.
 
 ## Stack
 
