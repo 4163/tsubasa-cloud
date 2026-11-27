@@ -179,7 +179,7 @@ export function useUploadQueue({
         immediate[item.key] = cached;
       } else if (item.file.size !== existing.sizeBytes) {
         immediate[item.key] = 'different';
-      } else if (!existing.hash) {
+      } else if (__DEMO_MODE__ || !existing.hash) {
         immediate[item.key] = item.file.size === 0 ? 'identical' : 'unverified';
       } else {
         immediate[item.key] = 'checking';

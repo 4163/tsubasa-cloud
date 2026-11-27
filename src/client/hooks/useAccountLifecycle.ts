@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { client } from '../api.js';
+import { authorizeDemoAccount } from '../demo/index.js';
 import type { AccountItem, ClientFileRecord, DiscoveredAccount } from '../types.js';
 import { copyTextToClipboard } from '../utils/format.js';
 import { invalidateShareInspectCache } from '../utils/queryCache.js';
@@ -61,6 +62,8 @@ export function useAccountLifecycle({
   authUrlErrorsRef.current = authUrlErrors;
   const pendingAuthRequestsRef = useRef<Set<string>>(new Set());
   const [copiedAuthUrlId, setCopiedAuthUrlId] = useState<string | null>(null);
+  const [authorizingAccountId, setAuthorizingAccountId] = useState<string | null>(null);
+  const authorizingRef = useRef(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -160,6 +163,35 @@ export function useAccountLifecycle({
       setIsImporting(true);
       const poolId = activePoolIdRef.current;
       try {
+        if (__DEMO_MODE__) {
+          if (!file.name.toLowerCase().endsWith('.json')) {
+            const msg = 'Select a .json file to import an account.';
+            if (activePoolIdRef.current === poolId) {
+              surfaceSidebarError('importOAuth', msg, msg);
+            }
+            return;
+          }
+
+          const res = await client.api.accounts.oauth.import.$post({
+            json: {
+              filename: file.name,
+              content: '',
+              poolId,
+            },
+          });
+
+          if (res.ok) {
+            invalidateShareInspectCache();
+            await loadClusterData(poolId);
+          } else {
+            const msg = await readResponseError(res, 'Failed to import OAuth credentials');
+            if (activePoolIdRef.current === poolId) {
+              surfaceSidebarError('importOAuth', msg, 'Failed to import OAuth credentials');
+            }
+          }
+          return;
+        }
+
         const text = await file.text();
 
         if (file.name.toLowerCase().endsWith('.json') || text.trim().startsWith('{')) {
@@ -220,6 +252,48 @@ export function useAccountLifecycle({
       }
     },
     [activePoolIdRef, presentAuthorizedAccount, loadClusterData, surfaceSidebarError]
+  );
+
+  const handleAuthorizeDemoAccount = useCallback(
+    async (accountId: string) => {
+      if (!__DEMO_MODE__ || authorizingRef.current) return;
+      authorizingRef.current = true;
+      setSidebarError(null);
+      setAuthorizingAccountId(accountId);
+      const poolId = activePoolIdRef.current;
+      try {
+        const result = await authorizeDemoAccount(accountId);
+        if (!result.ok) {
+          throw new Error(result.error || 'Failed to authorize account');
+        }
+        invalidateShareInspectCache();
+        setAuthUrls((prev) => {
+          if (!(accountId in prev)) return prev;
+          const next = { ...prev };
+          delete next[accountId];
+          return next;
+        });
+        setAuthUrlErrors((prev) => {
+          if (!(accountId in prev)) return prev;
+          const next = { ...prev };
+          delete next[accountId];
+          return next;
+        });
+        await presentAuthorizedAccount({
+          accountFilterId: result.accountId ?? accountId,
+          targetPool: result.poolId ?? poolId,
+          conflictsCount: result.conflictsCount ?? 0,
+        });
+      } catch (err) {
+        if (activePoolIdRef.current === poolId) {
+          surfaceSidebarError('authorizeDemoAccount', err, 'Failed to authorize account');
+        }
+      } finally {
+        authorizingRef.current = false;
+        setAuthorizingAccountId((prev) => (prev === accountId ? null : prev));
+      }
+    },
+    [activePoolIdRef, presentAuthorizedAccount, surfaceSidebarError]
   );
 
   const setAccountEnabled = useCallback(
@@ -387,5 +461,7 @@ export function useAccountLifecycle({
     authUrlErrors,
     copiedAuthUrlId,
     handleCopyAuthUrl,
+    authorizingAccountId,
+    handleAuthorizeDemoAccount,
   };
 }
