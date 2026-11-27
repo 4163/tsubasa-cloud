@@ -144,10 +144,10 @@ export function HomePage() {
         <h1 {...stylex.props(styles.heroTitle)}>Tsubasa~ Cloud</h1>
 
         <p {...stylex.props(styles.heroCopy)}>
-          Tsubasa~ Cloud combines personal Google Drive accounts into one virtual drive on your
-          computer. Files stay whole on a single account without splitting, and each pool mirrors
-          its folder tree in Google Drive so you can still browse everything on drive.google.com.
-          Run the Windows desktop app or open it locally in your browser.
+          Tsubasa~ Cloud is a local file manager that combines personal Google Drive accounts into
+          storage pools on your computer. Each pool syncs its folder structure with Google Drive so
+          your files stay intact and browsable on drive.google.com. Run the Windows desktop app,
+          open it locally in your browser, or use the CLI.
         </p>
 
         <div {...stylex.props(styles.ctaRow)}>

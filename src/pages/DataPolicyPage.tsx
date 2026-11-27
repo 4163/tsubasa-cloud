@@ -125,8 +125,8 @@ export function DataPolicyPage() {
             <h2 {...stylex.props(styles.heading)}>Self-hosted with zero developer access</h2>
             <p {...stylex.props(styles.body)}>
               Tsubasa~ Cloud runs locally on your computer. The developer operates no backend
-              servers, collects no telemetry or analytics, and never sees your Google account, OAuth
-              credentials, or files.
+              servers, collects no telemetry or analytics, and never sees your Google account data,
+              OAuth credentials, or files.
             </p>
           </section>
 
@@ -152,9 +152,8 @@ export function DataPolicyPage() {
             <h2 {...stylex.props(styles.heading)}>Google API Limited Use and revocation</h2>
             <p {...stylex.props(styles.body)}>
               Google Drive data is used strictly to operate the local file manager on your device.
-              Revoke access at any time from your Google Account permissions page or by deleting{' '}
-              <code {...stylex.props(styles.code)}>.oauths/</code> and{' '}
-              <code {...stylex.props(styles.code)}>data/</code>.
+              Disconnect at any time by revoking access in your Google Account permissions, removing
+              the account in the app, or deleting your local credentials and data.
             </p>
           </section>
 
@@ -163,8 +162,7 @@ export function DataPolicyPage() {
             <p {...stylex.props(styles.body)}>
               Static site with no tracking cookies or analytics. The interactive demo stores only
               dummy text and metadata records locally in your browser via IndexedDB, never real file
-              contents, and saves your light or dark theme choice in{' '}
-              <code {...stylex.props(styles.code)}>localStorage</code>.
+              contents.
             </p>
           </section>
 
