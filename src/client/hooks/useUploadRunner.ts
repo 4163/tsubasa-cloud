@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { client } from '../api.js';
+import { runDemoUpload } from '../demo/index.js';
 import { CEILING_14_25_GB, type NormalizedUploadItem } from '../utils/uploadQueueModel.js';
 import { extractErrorMessage } from '../utils/workspaceHelpers.js';
 import type {
@@ -42,6 +43,7 @@ export function useUploadRunner({
   const rafIdRef = useRef<number | null>(null);
   const lastFlushRef = useRef<number>(0);
   const xhrMapRef = useRef<Map<string, XMLHttpRequest>>(new Map());
+  const demoAbortMapRef = useRef<Map<string, AbortController>>(new Map());
   const abortedRef = useRef(false);
 
   const flushProgressImmediate = useCallback(() => {
@@ -72,6 +74,10 @@ export function useUploadRunner({
       xhr.abort();
     }
     xhrMapRef.current.clear();
+    for (const controller of demoAbortMapRef.current.values()) {
+      controller.abort();
+    }
+    demoAbortMapRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -234,6 +240,77 @@ export function useUploadRunner({
               };
               flushProgressImmediate();
 
+              if (__DEMO_MODE__) {
+                if (abortedRef.current) {
+                  progressRef.current[item.key] = {
+                    loaded: 0,
+                    total: item.file.size,
+                    status: 'error',
+                    error: 'Cancelled',
+                  };
+                  flushProgressImmediate();
+                  return Promise.resolve();
+                }
+
+                const controller = new AbortController();
+                demoAbortMapRef.current.set(item.key, controller);
+
+                return runDemoUpload({
+                  virtualPath: item.virtualPath,
+                  sizeBytes: item.file.size,
+                  mimeType: item.file.type || 'application/octet-stream',
+                  lastModified: item.file.lastModified,
+                  poolId,
+                  accountId: chosenAccountId,
+                  conflictMode,
+                  signal: controller.signal,
+                  onProgress: (loaded, total) => {
+                    progressRef.current[item.key] = {
+                      loaded,
+                      total,
+                      status: 'uploading',
+                    };
+                    scheduleProgressFlush();
+                  },
+                })
+                  .then((result) => {
+                    demoAbortMapRef.current.delete(item.key);
+                    if (result.ok) {
+                      progressRef.current[item.key] = {
+                        loaded: item.file.size,
+                        total: item.file.size,
+                        status: 'complete',
+                      };
+                      succeededCount += 1;
+                    } else if (result.aborted) {
+                      progressRef.current[item.key] = {
+                        loaded: 0,
+                        total: item.file.size,
+                        status: 'error',
+                        error: 'Cancelled',
+                      };
+                    } else {
+                      progressRef.current[item.key] = {
+                        loaded: 0,
+                        total: item.file.size,
+                        status: 'error',
+                        error: result.error || 'Upload failed',
+                      };
+                    }
+                    flushProgressImmediate();
+                  })
+                  .catch((err) => {
+                    demoAbortMapRef.current.delete(item.key);
+                    progressRef.current[item.key] = {
+                      loaded: 0,
+                      total: item.file.size,
+                      status: 'error',
+                      error: err instanceof Error ? err.message : 'Upload failed',
+                    };
+                    flushProgressImmediate();
+                  });
+              }
+
               return new Promise<void>((resolve) => {
                 if (abortedRef.current) {
                   progressRef.current[item.key] = {
@@ -349,6 +426,7 @@ export function useUploadRunner({
         }
       } finally {
         xhrMapRef.current.clear();
+        demoAbortMapRef.current.clear();
         setIsUploading(false);
       }
 

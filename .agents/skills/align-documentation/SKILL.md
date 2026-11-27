@@ -1,6 +1,6 @@
 ---
 name: align-documentation
-description: "Use when the user asks to align README.md, src/cli/README.md, extensions/README.md, or .agents/AGENTS.md with how the codebase currently works."
+description: "Use when the user asks to align README.md, src/cli/README.md, extensions/README.md, site/README.md, or .agents/AGENTS.md with how the codebase currently works."
 argument-hint: "<scope, diff, or subsystem>"
 ---
 
@@ -13,6 +13,7 @@ Apply `.agents/skills/unslop/SKILL.md` to all edits. Keep everything concise, di
 - `README.md`: product overview, setup, runtime paths, dev/build scripts, stack, project layout, links to sub-READMEs.
 - `src/cli/README.md`: CLI build, commands, flags, transfers, imports, transport routing, locking, automation output, exit codes.
 - `extensions/README.md`: running extensions, runtime setup, manifest schema, child env vars, SQLite isolation boundary.
+- `site/README.md`: static site dev/build/preview scripts, `VITE_SITE_ORIGIN`, `sync:demo` workflow, host/demo contracts, layout.
 - `.agents/AGENTS.md`: layering, module ownership, and core storage, streaming, SQLite, or sync invariants.
 - Git: working tree, recent commits, current branch, or a user-specified range.
 
@@ -20,7 +21,7 @@ Apply `.agents/skills/unslop/SKILL.md` to all edits. Keep everything concise, di
 
 - **Current state only.** Write direct facts. Never log change history, migrations, slice notes, or "we now..." commentary.
 - **Keep docs lean.** Replace stale lines instead of appending clarifications. Trim, split, merge, or reshape sections when text grows dense.
-- **Respect file ownership.** Keep `README.md` high-level and link to `src/cli/README.md` and `extensions/README.md` rather than duplicating CLI or extension details.
+- **Respect file ownership.** Keep `README.md` high-level and link to `src/cli/README.md`, `extensions/README.md`, and `site/README.md` rather than duplicating CLI, extension, or site details.
 - **Edit `.agents/AGENTS.md` sparingly.** Update architecture rules only when ownership, layering, or an invariant actually shifts.
 - **Formatting.** Prefer short bullets, compact tables, and runnable examples aligned with `package.json` and code. Wrap commands, flags, paths, env vars, and routes in backticks.
 

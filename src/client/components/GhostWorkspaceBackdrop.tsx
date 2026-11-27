@@ -3,6 +3,9 @@ import { colors, layout, spacing, radius, typography } from '../tokens.stylex.js
 import type { EffectiveTheme } from '../utils/theme.js';
 import {
   IconChevronDown,
+  IconChevronRight,
+  IconChevronUp,
+  IconClock,
   IconDownload,
   IconEdit,
   IconFile,
@@ -10,11 +13,13 @@ import {
   IconFolderFilled,
   IconFolderPlus,
   IconGitHub,
+  IconMenu,
   IconMonitor,
   IconMoon,
   IconPlus,
   IconRefreshCw,
   IconSearch,
+  IconShare,
   IconSun,
   IconTrash,
   IconUpload,
@@ -25,20 +30,20 @@ import brandLogo from '../assets/svg-r44.svg';
 const PLACEHOLDER_ROWS = [
   { nameWidth: '42%', isFolder: true, sizeWidth: '44px', dateWidth: '88px' },
   { nameWidth: '34%', isFolder: true, sizeWidth: '36px', dateWidth: '82px' },
-  { nameWidth: '58%', isFolder: false, sizeWidth: '56px', dateWidth: '92px' },
-  { nameWidth: '49%', isFolder: false, sizeWidth: '48px', dateWidth: '84px' },
-  { nameWidth: '64%', isFolder: false, sizeWidth: '62px', dateWidth: '90px' },
-  { nameWidth: '38%', isFolder: false, sizeWidth: '52px', dateWidth: '86px' },
-  { nameWidth: '53%', isFolder: false, sizeWidth: '46px', dateWidth: '94px' },
-  { nameWidth: '45%', isFolder: false, sizeWidth: '58px', dateWidth: '80px' },
-  { nameWidth: '61%', isFolder: false, sizeWidth: '50px', dateWidth: '88px' },
-  { nameWidth: '36%', isFolder: false, sizeWidth: '42px', dateWidth: '84px' },
+  { nameWidth: '58%', isFolder: false, accountWidth: '72px', sizeWidth: '56px', dateWidth: '92px' },
+  { nameWidth: '49%', isFolder: false, accountWidth: '60px', sizeWidth: '48px', dateWidth: '84px' },
+  { nameWidth: '64%', isFolder: false, accountWidth: '84px', sizeWidth: '62px', dateWidth: '90px' },
+  { nameWidth: '38%', isFolder: false, accountWidth: '56px', sizeWidth: '52px', dateWidth: '86px' },
+  { nameWidth: '53%', isFolder: false, accountWidth: '76px', sizeWidth: '46px', dateWidth: '94px' },
+  { nameWidth: '45%', isFolder: false, accountWidth: '64px', sizeWidth: '58px', dateWidth: '80px' },
+  { nameWidth: '61%', isFolder: false, accountWidth: '80px', sizeWidth: '50px', dateWidth: '88px' },
+  { nameWidth: '36%', isFolder: false, accountWidth: '68px', sizeWidth: '42px', dateWidth: '84px' },
 ] as const;
 
 const PLACEHOLDER_ACCOUNTS = [
-  { nameWidth: '84px', emailWidth: '124px', quotaWidth: '68px', fillWidth: '54%' },
-  { nameWidth: '96px', emailWidth: '132px', quotaWidth: '72px', fillWidth: '72%' },
-  { nameWidth: '76px', emailWidth: '116px', quotaWidth: '64px', fillWidth: '31%' },
+  { nameWidth: '84px', emailWidth: '124px', quotaWidth: '68px', fillWidth: '54%', hasTransfer: true, transferFill: '14%' },
+  { nameWidth: '96px', emailWidth: '132px', quotaWidth: '72px', fillWidth: '72%', hasTransfer: false, transferFill: '0%' },
+  { nameWidth: '76px', emailWidth: '116px', quotaWidth: '64px', fillWidth: '31%', hasTransfer: false, transferFill: '0%' },
 ] as const;
 
 const styles = stylex.create({
@@ -107,6 +112,12 @@ const styles = stylex.create({
     gap: spacing.space1,
     minWidth: 0,
   },
+  brandTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.space2,
+    minWidth: 0,
+  },
   brandWordmark: {
     fontFamily: typography.fontFamilyBrand,
     fontSize: typography.fontSizeBrand,
@@ -115,6 +126,25 @@ const styles = stylex.create({
     letterSpacing: '0.02em',
     margin: 0,
     lineHeight: typography.lineHeightBrand,
+  },
+  brandVersionBadge: {
+    fontFamily: typography.fontFamilyBrand,
+    fontSize: typography.fontSizeMeta,
+    fontWeight: typography.fontWeightBrand,
+    lineHeight: typography.lineHeightBadge,
+    letterSpacing: '0.02em',
+    color: colors.secondaryText,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.compact,
+    paddingTop: spacing.space1,
+    paddingBottom: spacing.space1,
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
   brandSubtitle: {
     fontSize: typography.fontSizeMeta,
@@ -464,6 +494,15 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontVariantNumeric: 'tabular-nums',
   },
+  footerTransfer: {
+    fontSize: typography.fontSizeBadge,
+    color: colors.dimText,
+    fontVariantNumeric: 'tabular-nums',
+    paddingTop: spacing.space2,
+    borderTopWidth: '1px',
+    borderTopStyle: 'solid',
+    borderTopColor: colors.borderSubtle,
+  },
   footerInlineBarSm: {
     display: 'inline-block',
     height: '8px',
@@ -524,6 +563,17 @@ const styles = stylex.create({
     maxWidth: layout.searchMaxWidth,
     minWidth: 0,
   },
+  mobileMenuMock: {
+    display: 'none',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.space2,
+    color: colors.primaryText,
+    flexShrink: 0,
+    '@media (max-width: 768px)': {
+      display: 'inline-flex',
+    },
+  },
   searchBar: {
     display: 'flex',
     alignItems: 'center',
@@ -536,6 +586,7 @@ const styles = stylex.create({
     paddingRight: spacing.space3,
     height: layout.searchHeight,
     width: '100%',
+    minWidth: 0,
     boxSizing: 'border-box',
     color: colors.dimText,
     fontSize: typography.fontSizeBody,
@@ -554,7 +605,9 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: spacing.space4,
     flexShrink: 0,
-    '@media (max-width: 768px)': {
+  },
+  compactHideText: {
+    '@media (max-width: 600px)': {
       display: 'none',
     },
   },
@@ -690,7 +743,7 @@ const styles = stylex.create({
     borderLeftColor: 'transparent',
     backgroundColor: colors.surfaceAlt,
     display: 'grid',
-    gridTemplateColumns: '16px 40px minmax(240px, 3fr) 140px 110px 140px 90px',
+    gridTemplateColumns: '16px 40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'stretch',
     paddingRight: spacing.space4,
     fontSize: typography.fontSizeTableHeader,
@@ -709,22 +762,16 @@ const styles = stylex.create({
     minWidth: 0,
     boxSizing: 'border-box',
   },
-  tableHeaderCellRight: {
-    justifyContent: 'flex-end',
-  },
   tableHeaderInnerLeft: {
     display: 'inline-flex',
     alignItems: 'center',
-    paddingLeft: spacing.space2,
+    gap: spacing.space1,
+    paddingLeft: spacing.space1,
     paddingRight: spacing.space2,
     marginLeft: '-4px',
   },
-  tableHeaderInnerRight: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    paddingLeft: spacing.space2,
-    paddingRight: spacing.space2,
-    marginRight: '-4px',
+  tableHeaderInnerActive: {
+    color: colors.primaryText,
   },
   tableCellCenter: {
     display: 'flex',
@@ -774,7 +821,7 @@ const styles = stylex.create({
     minWidth: 0,
     height: '100%',
     display: 'grid',
-    gridTemplateColumns: '40px minmax(240px, 3fr) 140px 110px 140px 90px',
+    gridTemplateColumns: '40px minmax(240px, 3fr) 160px 110px 156px 96px',
     alignItems: 'center',
     paddingRight: spacing.space4,
     boxSizing: 'border-box',
@@ -808,28 +855,77 @@ const styles = stylex.create({
     alignItems: 'center',
     minWidth: 0,
     height: '100%',
-    paddingLeft: spacing.space1,
-    paddingRight: spacing.space1,
+    paddingLeft: '2px',
+    paddingRight: spacing.space6,
     overflow: 'hidden',
     '@media (max-width: 768px)': {
       display: 'none',
     },
   },
-  rowAccountBadge: {
+  rowFolderPill: {
+    fontSize: typography.fontSizeBadge,
+    fontFamily: typography.fontFamilyMono,
+    display: 'inline-block',
+    maxWidth: '100%',
     height: '22px',
-    width: '112px',
-    maxWidth: '130px',
+    lineHeight: '18px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    paddingLeft: spacing.space2,
+    paddingRight: spacing.space2,
     borderRadius: radius.compact,
     backgroundColor: colors.brandAccentSurface,
     borderWidth: '1px',
     borderStyle: 'solid',
     borderColor: colors.borderSubtle,
+    color: colors.brandAccent,
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    verticalAlign: 'middle',
+  },
+  rowAccountSelectMock: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    minWidth: 0,
+    maxWidth: '136px',
+    height: '22px',
+    lineHeight: '18px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    paddingLeft: spacing.space2,
+    paddingRight: '22px',
+    borderRadius: radius.compact,
+    backgroundColor: colors.brandAccentSurface,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    color: colors.brandAccent,
     boxSizing: 'border-box',
   },
-  rowDesktopCellRight: {
+  rowAccountSelectBar: {
+    height: '8px',
+    borderRadius: radius.compact,
+    backgroundColor: colors.borderSubtle,
+  },
+  rowAccountSelectChevron: {
+    position: 'absolute',
+    right: '7px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    color: colors.brandAccent,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+  },
+  barWidth: (width: string) => ({ width }),
+  rowDesktopCellLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingRight: spacing.space2,
     '@media (max-width: 768px)': {
       display: 'none',
     },
@@ -837,29 +933,36 @@ const styles = stylex.create({
   rowActionIcons: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: spacing.space2,
+    justifyContent: 'flex-start',
+    gap: spacing.space1,
     '@media (max-width: 768px)': {
-      display: 'none',
+      justifyContent: 'flex-end',
     },
   },
   rowBtnMock: {
+    minWidth: '26px',
+    minHeight: '26px',
     padding: spacing.space1,
     color: colors.secondaryText,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    boxSizing: 'border-box',
   },
 });
 
 export interface GhostWorkspaceBackdropProps {
   effectiveTheme: EffectiveTheme;
+  isDemoMode?: boolean;
 }
 
 /**
- * Blurred, non-interactive workspace shell rendered behind the tab-blocked modal.
+ * Blurred, non-interactive workspace shell rendered behind the tab-blocked modal and demo hydration.
  */
-export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdropProps) {
+export function GhostWorkspaceBackdrop({
+  effectiveTheme,
+  isDemoMode = false,
+}: GhostWorkspaceBackdropProps) {
   return (
     <div {...stylex.props(styles.placeholderShell)} aria-hidden="true">
       <aside {...stylex.props(styles.placeholderSidebar)}>
@@ -869,7 +972,10 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
               <img src={brandLogo} alt="" {...stylex.props(styles.brandLogoImage)} />
             </div>
             <div {...stylex.props(styles.brandTitleGroup)}>
-              <div {...stylex.props(styles.brandWordmark)}>Tsubasa~</div>
+              <div {...stylex.props(styles.brandTitleRow)}>
+                <div {...stylex.props(styles.brandWordmark)}>Tsubasa~</div>
+                <span {...stylex.props(styles.brandVersionBadge)}>v{__APP_VERSION__}</span>
+              </div>
               <div {...stylex.props(styles.brandSubtitle)}>Pooled Google Drive Cluster</div>
             </div>
           </div>
@@ -917,7 +1023,9 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
               </div>
               <div {...stylex.props(styles.addAccountTextCol)}>
                 <span {...stylex.props(styles.addAccountLabel)}>Add account</span>
-                <span {...stylex.props(styles.addAccountSub)}>Import OAuth credentials</span>
+                <span {...stylex.props(styles.addAccountSub)}>
+                  {isDemoMode ? 'Click or drop any .json file' : 'Import OAuth credentials'}
+                </span>
               </div>
             </div>
           </div>
@@ -928,8 +1036,8 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
                   <div {...stylex.props(styles.accountNameGroup)}>
                     <div {...stylex.props(styles.accountAvatar)} />
                     <div {...stylex.props(styles.accountTextGroup)}>
-                      <div {...stylex.props(styles.accountNameBar)} style={{ width: acc.nameWidth }} />
-                      <div {...stylex.props(styles.accountEmailBar)} style={{ width: acc.emailWidth }} />
+                      <div {...stylex.props(styles.accountNameBar, styles.barWidth(acc.nameWidth))} />
+                      <div {...stylex.props(styles.accountEmailBar, styles.barWidth(acc.emailWidth))} />
                     </div>
                   </div>
                   <span {...stylex.props(styles.authPill)}>Active</span>
@@ -940,13 +1048,28 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
                       <IconFolder size={11} />
                       <span>Storage</span>
                     </span>
-                    <div {...stylex.props(styles.storageValueBar)} style={{ width: acc.quotaWidth }} />
+                    <div {...stylex.props(styles.storageValueBar, styles.barWidth(acc.quotaWidth))} />
                   </div>
                   <div {...stylex.props(styles.progressTrack)}>
-                    <div {...stylex.props(styles.progressFill)} style={{ width: acc.fillWidth }} />
+                    <div {...stylex.props(styles.progressFill, styles.barWidth(acc.fillWidth))} />
                   </div>
                 </div>
+                {acc.hasTransfer && (
+                  <div {...stylex.props(styles.storageSection)}>
+                    <div {...stylex.props(styles.storageHeaderRow)}>
+                      <span {...stylex.props(styles.storageLabel)}>
+                        <IconClock size={11} />
+                        <span>24h quota</span>
+                      </span>
+                      <div {...stylex.props(styles.storageValueBar, styles.barWidth('58px'))} />
+                    </div>
+                    <div {...stylex.props(styles.progressTrack)}>
+                      <div {...stylex.props(styles.progressFill, styles.barWidth(acc.transferFill))} />
+                    </div>
+                  </div>
+                )}
                 <div {...stylex.props(styles.accountActionsRow)}>
+                  <span {...stylex.props(styles.accountMiniChip)}>Move pool</span>
                   <span {...stylex.props(styles.accountMiniChip)}>Disable</span>
                   <span {...stylex.props(styles.accountMiniChip, styles.accountMiniDangerChip)}>Remove</span>
                 </div>
@@ -958,7 +1081,7 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
         <div {...stylex.props(styles.sidebarQuotaFooter)}>
           <div {...stylex.props(styles.footerTitle)}>Pooled storage</div>
           <div {...stylex.props(styles.progressTrack)}>
-            <div {...stylex.props(styles.poolProgressFill)} style={{ width: '48%' }} />
+            <div {...stylex.props(styles.poolProgressFill, styles.barWidth('48%'))} />
           </div>
           <div {...stylex.props(styles.footerStats)}>
             <span {...stylex.props(styles.footerInlineBarSm)} /> GB used of{' '}
@@ -969,6 +1092,11 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
             <span {...stylex.props(styles.footerInlineBarSm)} /> GB free across{' '}
             <span {...stylex.props(styles.footerInlineBarXs)} /> accounts (each account has a safety buffer of 750 MB)
           </div>
+          <div {...stylex.props(styles.footerTransfer)}>
+            24h cluster transfers: <span {...stylex.props(styles.footerInlineBarSm)} /> /{' '}
+            <span {...stylex.props(styles.footerInlineBarMd)} /> GB (
+            <span {...stylex.props(styles.footerInlineBarXs)} />%)
+          </div>
         </div>
       </aside>
 
@@ -977,6 +1105,9 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
 
         <header {...stylex.props(styles.placeholderHeader)}>
           <div {...stylex.props(styles.headerLeftGroup)}>
+            <span {...stylex.props(styles.mobileMenuMock)}>
+              <IconMenu size={13} />
+            </span>
             <div {...stylex.props(styles.searchBar)}>
               <IconSearch size={14} {...stylex.props(styles.searchIcon)} />
               <span>Search pooled files and directories...</span>
@@ -999,8 +1130,14 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
             </div>
             <span {...stylex.props(styles.githubChip)}>
               <IconGitHub size={14} />
-              <span>GitHub</span>
+              <span {...stylex.props(styles.compactHideText)}>GitHub</span>
             </span>
+            {isDemoMode && (
+              <span {...stylex.props(styles.githubChip)}>
+                <IconRefreshCw size={13} />
+                <span {...stylex.props(styles.compactHideText)}>Reset demo</span>
+              </span>
+            )}
           </div>
         </header>
 
@@ -1033,18 +1170,21 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
               <div {...stylex.props(styles.checkboxMock)} />
             </div>
             <div {...stylex.props(styles.tableHeaderCell)}>
-              <span {...stylex.props(styles.tableHeaderInnerLeft)}>Name</span>
+              <span {...stylex.props(styles.tableHeaderInnerLeft, styles.tableHeaderInnerActive)}>
+                <span>Name</span>
+                <IconChevronUp size={12} strokeWidth={2.5} />
+              </span>
             </div>
             <div {...stylex.props(styles.tableHeaderCell)}>
               <span {...stylex.props(styles.tableHeaderInnerLeft)}>Account</span>
             </div>
-            <div {...stylex.props(styles.tableHeaderCell, styles.tableHeaderCellRight)}>
-              <span {...stylex.props(styles.tableHeaderInnerRight)}>Size</span>
+            <div {...stylex.props(styles.tableHeaderCell)}>
+              <span {...stylex.props(styles.tableHeaderInnerLeft)}>Size</span>
             </div>
-            <div {...stylex.props(styles.tableHeaderCell, styles.tableHeaderCellRight)}>
-              <span {...stylex.props(styles.tableHeaderInnerRight)}>Modified</span>
+            <div {...stylex.props(styles.tableHeaderCell)}>
+              <span {...stylex.props(styles.tableHeaderInnerLeft)}>Modified</span>
             </div>
-            <div {...stylex.props(styles.tableHeaderCell, styles.tableHeaderCellRight)}>Actions</div>
+            <div {...stylex.props(styles.tableHeaderCell)}>Actions</div>
           </div>
 
           {PLACEHOLDER_ROWS.map((row, idx) => (
@@ -1060,24 +1200,49 @@ export function GhostWorkspaceBackdrop({ effectiveTheme }: GhostWorkspaceBackdro
                   ) : (
                     <IconFile size={16} {...stylex.props(styles.rowFileIcon)} />
                   )}
-                  <div {...stylex.props(styles.rowBar)} style={{ width: row.nameWidth }} />
+                  <div {...stylex.props(styles.rowBar, styles.barWidth(row.nameWidth))} />
                 </div>
                 <div {...stylex.props(styles.rowAccountCell)}>
-                  <div {...stylex.props(styles.rowAccountBadge)} />
+                  {row.isFolder ? (
+                    <span {...stylex.props(styles.rowFolderPill)}>Cluster folder</span>
+                  ) : (
+                    <div {...stylex.props(styles.rowAccountSelectMock)}>
+                      <div {...stylex.props(styles.rowAccountSelectBar, styles.barWidth(row.accountWidth))} />
+                      <span {...stylex.props(styles.rowAccountSelectChevron)}>
+                        <IconChevronDown size={10} strokeWidth={2.5} />
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div {...stylex.props(styles.rowDesktopCellRight)}>
-                  <div {...stylex.props(styles.rowBar)} style={{ width: row.sizeWidth }} />
+                <div {...stylex.props(styles.rowDesktopCellLeft)}>
+                  <div {...stylex.props(styles.rowBar, styles.barWidth(row.sizeWidth))} />
                 </div>
-                <div {...stylex.props(styles.rowDesktopCellRight)}>
-                  <div {...stylex.props(styles.rowBar)} style={{ width: row.dateWidth }} />
+                <div {...stylex.props(styles.rowDesktopCellLeft)}>
+                  <div {...stylex.props(styles.rowBar, styles.barWidth(row.dateWidth))} />
                 </div>
                 <div {...stylex.props(styles.rowActionIcons)}>
                   <span {...stylex.props(styles.rowBtnMock)}>
-                    <IconDownload size={14} />
+                    <IconShare size={14} />
                   </span>
-                  <span {...stylex.props(styles.rowBtnMock)}>
-                    <IconTrash size={14} />
-                  </span>
+                  {row.isFolder ? (
+                    <>
+                      <span {...stylex.props(styles.rowBtnMock)}>
+                        <IconTrash size={14} />
+                      </span>
+                      <span {...stylex.props(styles.rowBtnMock)}>
+                        <IconChevronRight size={14} />
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span {...stylex.props(styles.rowBtnMock)}>
+                        <IconDownload size={14} />
+                      </span>
+                      <span {...stylex.props(styles.rowBtnMock)}>
+                        <IconTrash size={14} />
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

@@ -1,7 +1,7 @@
 export type EffectiveTheme = 'light' | 'dark';
 export type ThemeChoice = 'auto' | 'light' | 'dark';
 
-export const THEME_STORAGE_KEY = 'tsubasa-theme-choice';
+export const THEME_STORAGE_KEY = __DEMO_MODE__ ? 'tsubasa-demo-theme-choice' : 'tsubasa-theme-choice';
 
 export function readThemeChoice(): ThemeChoice {
   if (typeof window === 'undefined') return 'auto';

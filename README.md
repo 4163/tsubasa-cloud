@@ -60,9 +60,10 @@ npm run build        # Typecheck, build frontend, and compile server into dist/
 npm start            # Serve compiled dist/ on :28300 in browser mode (no Vite/Electron)
 npm run typecheck    # TypeScript check without emitting files
 npm run package:win  # Build all targets (incl. CLI) and package NSIS + portable zip in release/
+npm run sync:demo    # Build static demo bundle and mirror it into site/public/demo/
 ```
 
-Architecture and styling docs: [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md).
+Architecture and styling docs: [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md). Static site and live demo bundle: [site/README.md](https://github.com/4163/tsubasa-cloud/blob/site/README.md).
 
 ## Data and OAuth locations
 
@@ -105,7 +106,7 @@ tsubasa-cloud/
 │  │  ├─ routes/          # Hono API route modules
 │  │  └─ storage/         # Headroom math, folder-cohesion placement, catalog export
 │  └─ cli/                # tsubasa CLI commands, transport routing, extension runner
-├─ site/ (orphan branch)  # Static homepage and data policy
+├─ site/ (orphan branch)  # Static homepage, data policy, and live demo (see site/README.md)
 ├─ scripts/               # Dev runner, static start wrapper, Windows packaging script
 ├─ build/                 # Desktop icons and NSIS installer include
 ├─ extensions/            # Extension contract docs and local subprocess extensions

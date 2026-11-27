@@ -1,7 +1,7 @@
 import React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub } from './Icons';
+import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub, IconRefreshCw } from './Icons';
 import type { ThemeChoice } from '../utils/theme.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
 
@@ -13,6 +13,8 @@ interface HeaderProps {
   onToggleMobileMenu?: () => void;
   isMobileMenuOpen?: boolean;
   mobileMenuControlsId?: string;
+  onResetDemo?: () => void;
+  isResettingDemo?: boolean;
 }
 
 const styles = stylex.create({
@@ -250,6 +252,50 @@ const styles = stylex.create({
       display: 'none',
     },
   },
+  resetDemoBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    height: '28px',
+    paddingLeft: spacing.space3,
+    paddingRight: spacing.space3,
+    borderRadius: radius.button,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    color: colors.secondaryText,
+    fontFamily: typography.fontFamilyBody,
+    fontSize: typography.fontSizeBadge,
+    fontWeight: '500',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
+    outline: 'none',
+    transition: motion.transitionFast,
+    ':hover': {
+      backgroundColor: colors.surface,
+      color: colors.primaryText,
+      borderColor: colors.border,
+    },
+    ':active': {
+      backgroundColor: colors.selectionBg,
+      transition: motion.transitionTap,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: colors.focusRing,
+      outlineOffset: '2px',
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '36px',
+    },
+  },
 });
 
 export function Header({
@@ -260,6 +306,8 @@ export function Header({
   onToggleMobileMenu,
   isMobileMenuOpen = false,
   mobileMenuControlsId = 'mobile-sidebar-dialog',
+  onResetDemo,
+  isResettingDemo = false,
 }: HeaderProps) {
   const isGitHubIconOnly = useMediaQuery('(max-width: 600px)');
 
@@ -351,6 +399,22 @@ export function Header({
           <IconGitHub size={14} />
           <span {...stylex.props(styles.githubText)}>GitHub</span>
         </a>
+
+        {__DEMO_MODE__ && onResetDemo && (
+          <button
+            type="button"
+            {...stylex.props(styles.resetDemoBtn)}
+            onClick={onResetDemo}
+            disabled={isResettingDemo}
+            aria-label={isResettingDemo ? 'Resetting demo' : 'Reset demo'}
+            title={isGitHubIconOnly ? (isResettingDemo ? 'Resetting...' : 'Reset demo') : undefined}
+          >
+            <IconRefreshCw size={13} />
+            <span {...stylex.props(styles.githubText)}>
+              {isResettingDemo ? 'Resetting...' : 'Reset demo'}
+            </span>
+          </button>
+        )}
       </div>
     </header>
   );

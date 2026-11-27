@@ -17,6 +17,8 @@ export interface SidebarAccountCardProps {
   hasAuthUrlError?: boolean;
   isAuthUrlCopied: boolean;
   onCopyAuthUrl?: (accountId: string) => void;
+  isAuthorizing?: boolean;
+  onAuthorizeDemoAccount?: (accountId: string) => void;
   onToggleAccountFilter?: (accountId: string) => void;
   onRefreshStorage?: () => void;
   onOpenExternalChanges?: (accountId: string) => void;
@@ -201,6 +203,10 @@ const styles = stylex.create({
       outlineStyle: 'solid',
       outlineColor: colors.focusRing,
       outlineOffset: '1px',
+    },
+    ':disabled': {
+      opacity: 0.6,
+      cursor: 'not-allowed',
     },
   },
   authLinkBoxCopied: {
@@ -467,6 +473,8 @@ export function SidebarAccountCard({
   hasAuthUrlError,
   isAuthUrlCopied,
   onCopyAuthUrl,
+  isAuthorizing = false,
+  onAuthorizeDemoAccount,
   onToggleAccountFilter,
   onRefreshStorage,
   onOpenExternalChanges,
@@ -560,29 +568,51 @@ export function SidebarAccountCard({
           <div {...stylex.props(styles.authLinkContainer)}>
             <div {...stylex.props(styles.authLinkLabelRow)}>
               <span {...stylex.props(styles.authLinkLabel)}>Authorize link</span>
-              <span {...stylex.props(styles.authLinkHelp)}>Click to copy</span>
+              <span {...stylex.props(styles.authLinkHelp)}>
+                {__DEMO_MODE__ ? 'Click to authorize' : 'Click to copy'}
+              </span>
             </div>
-            <button
-              type="button"
-              {...stylex.props(styles.authLinkBox, isAuthUrlCopied && styles.authLinkBoxCopied)}
-              onClick={() => onCopyAuthUrl?.(acc.id)}
-              aria-label="Copy authorize link"
-            >
-              <span {...stylex.props(styles.authLinkText)}>
-                {authUrl ||
-                  (hasAuthUrlError
-                    ? 'Authorize link unavailable (click to retry)'
-                    : 'Generating authorize link...')}
-              </span>
-              <span
-                {...stylex.props(
-                  styles.authLinkCopyTag,
-                  isAuthUrlCopied && styles.authLinkCopyTagSuccess
-                )}
+            {__DEMO_MODE__ ? (
+              <button
+                type="button"
+                {...stylex.props(styles.authLinkBox)}
+                disabled={isAuthorizing}
+                onClick={() => onAuthorizeDemoAccount?.(acc.id)}
+                aria-label="Authorize account"
               >
-                {isAuthUrlCopied ? 'Copied' : 'Copy'}
-              </span>
-            </button>
+                <span {...stylex.props(styles.authLinkText)}>
+                  {authUrl ||
+                    (hasAuthUrlError
+                      ? 'Authorize link unavailable'
+                      : 'Generating authorize link...')}
+                </span>
+                <span {...stylex.props(styles.authLinkCopyTag)}>
+                  {isAuthorizing ? 'Authorizing...' : 'Authorize'}
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                {...stylex.props(styles.authLinkBox, isAuthUrlCopied && styles.authLinkBoxCopied)}
+                onClick={() => onCopyAuthUrl?.(acc.id)}
+                aria-label="Copy authorize link"
+              >
+                <span {...stylex.props(styles.authLinkText)}>
+                  {authUrl ||
+                    (hasAuthUrlError
+                      ? 'Authorize link unavailable (click to retry)'
+                      : 'Generating authorize link...')}
+                </span>
+                <span
+                  {...stylex.props(
+                    styles.authLinkCopyTag,
+                    isAuthUrlCopied && styles.authLinkCopyTagSuccess
+                  )}
+                >
+                  {isAuthUrlCopied ? 'Copied' : 'Copy'}
+                </span>
+              </button>
+            )}
           </div>
 
           {(onRemoveAccount || (canMovePool && acc.canSwitchPool !== false)) && (

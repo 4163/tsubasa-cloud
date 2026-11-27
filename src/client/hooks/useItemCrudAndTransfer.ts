@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { client } from '../api.js';
+import { recordDemoDownload } from '../demo/index.js';
 import type {
   ActionPortalClipboard,
   ClientFileRecord,
@@ -227,6 +228,30 @@ export function useItemCrudAndTransfer({
   );
 
   const handleDownload = useCallback((file: ClientFileRecord) => {
+    if (__DEMO_MODE__) {
+      const placeholderLines = [
+        'Tsubasa~ Cloud live demo placeholder file',
+        `Name: ${file.name}`,
+        `Path: ${file.virtualPath}`,
+        `Recorded size: ${file.sizeBytes} bytes`,
+        'No real file bytes are stored in this browser demo.',
+      ];
+      const blob = new Blob([placeholderLines.join('\n') + '\n'], {
+        type: 'text/plain;charset=utf-8',
+      });
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = file.name || 'demo-file.txt';
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+      void recordDemoDownload(file.id);
+      return;
+    }
+
     const url = `/api/files/${encodeURIComponent(file.id)}/download`;
     const win = window.open(url, '_blank');
     if (!win) {
