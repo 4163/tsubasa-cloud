@@ -6,7 +6,7 @@
 
 <p>
   <img src="docs/svg-r44-readme.svg" alt="Tsubasa~ Cloud mark" align="left" width="67" />
-  Tsubasa~ Cloud is a local file manager that combines personal Google Drive accounts into storage pools backed by a local index. Each pool syncs its folder structure with Google Drive so your files stay intact and browsable on drive.google.com.
+  Tsubasa~ Cloud is a local file manager that combines personal Google Drive accounts into storage pools backed by a local index. Each pool syncs its folder structure with Google Drive so your files stay intact and browsable on drive.google.com. <em>See the static page and live demo at <a href="https://tsubasa.moe.page">tsubasa.moe.page</a>.</em>
 </p>
 
 ## Features
