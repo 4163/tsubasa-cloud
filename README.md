@@ -1,167 +1,101 @@
-# Tsubasa~ Cloud website specification
+# Tsubasa~ Cloud live demo specification
 
-Static two-page site on the orphan `site` branch. Satisfies Google Cloud OAuth external production branding requirements (homepage URL and privacy/data policy URL) and gives visitors an overview of the app, followed by a gated Phase 2 interactive demo.
+Replace the static `DummyWindow` placeholder on `/` with a self-contained interactive demo built directly from the main app's frontend on `main`. Building from the main app avoids UI duplication and backs the demo with a client-only, metadata-only IndexedDB mock layer.
 
-> **Interactive demo gate:** Do **not** start implementing the interactive IndexedDB dummy app (Section 7, Phase 2) until the user explicitly confirms that both static pages (`/` and `/data-policy`) are complete. In Phase 1, render a centered, fixed-size styled dummy window placeholder on `/` as the minimum.
+Promote the built demo bundle into `site/` through a local sync command so the orphan `site` branch stays self-contained and deployable on static hosts. Mount the synced demo bundle on `/` inside the existing centered fixed-size window frame using an `<iframe>`.
 
-## 1. Stack and build
+Keep all existing static pages and assets intact: the `/` hero, `/data-policy`, shared header and footer, dither canvas, grain overlay, fonts, SEO metadata, and brand assets.
 
-Matches the main application frontend stack with no server runtime:
+## 1. Boundaries, host behavior, and visual parity
 
-- **Framework:** React 19 + TypeScript
-- **Styling:** Compile-time StyleX (`@stylexjs/stylex` + `unplugin-stylex`), sharing the token definitions from `docs/styling-guide.md`
-- **Virtualization:** TanStack Virtual (`@tanstack/react-virtual`) for the interactive app demo table and drawers
-- **Bundler:** Vite 6 configured as a two-entry static multi-page build (MPA)
-- **Hosting:** Provider-agnostic static hosting deployed from the `site` branch (publishing `dist/`)
+- **Fixed container.** Keep the centered, fixed-size window frame at `1120px` by `640px` on desktop and `100%` by `540px` on mobile. Never make the demo frame user-resizable or expandable.
+- **Grain overlay.** Keep the demo app's own grain overlay intact and exclude the demo frame on `site/` using the site's existing grain-masking mechanism so grain does not double-stack.
+- **Hybrid theme sync.** The demo keeps its own independent 3-way theme toggle and separate `localStorage` persistence so reloads avoid visual jank. Switching theme on the `site/` frontend pushes the resolved theme to the demo regardless of the demo's current theme, doing nothing if the theme already matches, while still allowing independent theme switches inside the demo afterward.
+- **`Reset demo` button.** Append a `Reset demo` button after the GitHub button in the demo header. Clicking it wipes the demo IndexedDB state and restores the initial seeded dataset.
+- **No multi-tab lock.** Skip multi-tab and instance lock blocking in demo mode.
+- **Visual and interaction parity.** Match `docs/styling-guide.md` and `src/client/`: flat 1px structural borders, no drop shadows, 3px gold selection bars, WCAG AAA 7:1+ contrast, no gold text on light surfaces, native Top-Layer `<dialog>` modals and drawers, no right-click or overflow context menus, no toast notifications, no `Ctrl+Z` undo stack, and responsive layouts for desktop `> 768px` and mobile `<= 768px`.
+- **Metadata-only persistence and zero network calls.** Store only dummy metadata and text records in IndexedDB. Never read or write real file bytes or binary blobs, and make zero outbound network calls.
+- **Copy.** Follow `.agents/skills/unslop/SKILL.md` for all visible labels, empty states, and helper text.
 
-### Routes
+## 2. Live demo scope
 
-| Route | Static output | Purpose |
-|---|---|---|
-| `/` | `dist/index.html` | Homepage with project overview and interactive dummy app |
-| `/data-policy` | `dist/data-policy/index.html` | Centered plain-English data policy for Google OAuth Branding and end users |
+Match `src/client/` 1:1 while dropping CLI-only and non-UI actions.
 
-Each route is a real HTML file with its own `<head>` metadata, canonical link, and inline zero-flash theme boot script.
+- **Pools.** Create, rename, and delete standard pools. Share Pool is protected. Drop CLI-only pool reordering.
+- **Modified OAuth import and dummy account pool.** Sidebar OAuth import accepts any `.json` file and creates an unauthorized account card with a dummy OAuth link, replacing the copy-link control with an `Authorize` button. Clicking `Authorize` picks an unused account at random from the locked 14-account roster below, excluding picked accounts until every account in the roster has been used, then refilling the pool.
+- **Accounts and quotas.** Support `RedactedEmail` masking, 750 MB reserve headroom math with `14.25 GB` usable on `15 GB` accounts, `14.25 GB` single-file ceiling checks, 24-hour rolling transfer gauges with a `750 GB` daily cap, buffer-breach indicators, enable and disable toggles, moving accounts between pools, and removing accounts. Drop CLI-only account evacuation.
+- **Virtualized file table and CRUD.** Use TanStack Virtual rows with sorting, search, interactive breadcrumbs, multi-select, folder navigation, new folder, rename, internal drag-and-drop and cut/paste move with conflict handling, copy, on-the-fly dummy placeholder file downloads, soft-delete to Trash, restore, and permanent purge or empty trash. Reclaim quota only on permanent purge.
+- **OS drag-and-drop and simulated uploads.** Read only file metadata (`name`, `size`, `type`, relative path, timestamp), show Folder-Cohesion Best-Fit placement previews and conflict checks, and run simulated upload progress with abort and cancel controls in `UploadDrawer`.
+- **Rebalancing.** Support single-file account switching, batch moving files between accounts, and Auto-rebalance for buffer-breached accounts.
+- **Sync and external changes.** Provide working Sync All and `ExternalChangesDrawer` backed by the pre-seeded `Main Pool` discrepancies below.
+- **Public sharing and Share Pool.** Support the first-time `ShareModal` flow: inspect selection, validate empty-drive expansion, copy into the newly created Share Pool, and produce copyable dummy share links. Include the read-only Share Pool view and `Clear Share Pool`. Drop per-link revoke inside `ShareModal`.
 
-## 2. Writing and voice
+### Initial pool seeding
 
-- End-user facing, not developer facing. Avoid internal architecture jargon (SQLite WAL, Drizzle, Hono RPC, `appProperties`) on the site pages unless a concrete user-facing fact needs a plain name (for example, "stored locally on your computer").
-- Concise and direct. No subtitles under headings, no marketing fluff, no narration prose.
+Do not pre-generate the Share Pool so visitors experience the first-time sharing flow. Do not pre-seed an unauthorized account.
 
-## 3. Visual direction
+- **`Main Pool`, default pool on first load.** Start with 5 pre-seeded accounts from the locked 14-account roster. Prefill a light, generic personal-cloud tree with a few folders and files so `/` stays clean and approachable. Include 2 pre-seeded Trash items for testing Restore and permanent-purge quota reclaim, plus light non-zero 24-hour transfer activity on 1 to 2 accounts. Pre-seed uncluttered external changes across 2 accounts: one buffer-breached account with Auto-rebalance and 1 `overCeiling` file for `Move to root`, and a second account with 1 `unindexed`, 1 `modified`, and 1 `missingRemote` item. Skip seeding path conflicts and keep all other accounts clean.
+- **`Hocchan Union`, secondary pool.** Do not present this pool on initial load. Seed it from a static trimmed snapshot of `https://hocchan.netlify.app/archive/drive/g` via `directories_g.json`, never fetched at runtime, preserving accurate real file sizes from the archive. Include at least one `0 B` empty eligible account in `Hocchan Union` so visitors can test first-time Share Pool expansion immediately while leaving enough personas from the 14-account roster for the random `Authorize` pool.
+- **`directories_g.json` folder rules.**
+  - **Keep and reduce.** `Albums`, `PVs`, `Singles`.
+  - **Keep with targeted reduction.** `Anime OP-ED-INs` keeping `Uta Monogatari` and reducing `(AMQ, AnisongDB) Compilation`; `DVDs／BDs` dropping `Others/` and reducing heavily to roughly 1 to 3 entries because of large file sizes; `Lives` reducing heavily to roughly 1 to 3 entries because of large file sizes; and `Pictures` dropping everything except `[Photobook]` subfolders and reducing further if still too large.
+  - **Drop.** `Anime`, `Contributions`, `Gamerips`, `SNS`, `TV-Variety`, `Tracks`.
+- **Reduction heuristic.** Implementation agents choose which entries to keep during consensus based on popular or well-known albums, singles, and titles so accurate real file sizes fit cleanly within the pool's assigned accounts, accounting for the 14-persona cap across `Main Pool`, `Hocchan Union`, and the random `Authorize` pool.
 
-Grounded in `docs/styling-guide.md`, the built app (`src/client/`), and the visual language of `docs/teardowns/hanekawa.md` (pixel-crisp dithering and gold accents, without copying Hanekawa's fixed-viewport integer-scaled layout).
+### Locked 14-account roster
 
-### Tokens and typography
-- Reuse the app's light and dark color tokens (`#eef2ec` / `#f7faf5` light, `#0b1412` / `#12211d` dark, `#135349` / `#35c4a8` brand accent, `#deb76c` / `#d4a13c` gold accent, flat 1px structural borders, no drop shadows).
-- Maintain WCAG AAA contrast (7:1+) for primary, secondary, and status text. Never render gold as text on light surfaces.
-- Fonts: `Pixelify Sans` for brand wordmark and display headings; `Montserrat` for body copy and UI controls.
-- Scrollbars: 6px pill scrollbars matching the app.
+The user supplies profile pictures during or after implementation. Use these exact display names and email addresses:
 
-### Grain overlay
-Match `src/client/global.css` exactly:
-- **Light mode:** 128x128 pre-attenuated PNG data URI at `opacity: 0.8`.
-- **Dark mode:** 256x256 SVG `feTurbulence` (`baseFrequency="0.9"`, `numOctaves="4"`, rect `opacity="0.2"`) at `opacity: 0.35`.
-- Fixed `pointer-events: none` layer (`z-index: 9999`) applied to `.grain-overlay` and `dialog:modal::after`.
+| # | Display name | Email |
+| --- | --- | --- |
+| 1 | Hitagi Senjougahara | `hitagi.senjougahara@gmail.com` |
+| 2 | Mayoi Hachikuji | `mayoi.hachikuji@gmail.com` |
+| 3 | Suruga Kanbaru | `suruga.kanbaru@gmail.com` |
+| 4 | Nadeko Sengoku | `nadeko.sengoku@gmail.com` |
+| 5 | Tsubasa Hanekawa | `tsubasa.hanekawa@gmail.com` |
+| 6 | Kiss-Shot | `shinobu.oshino@gmail.com` |
+| 7 | Karen Araragi | `karen.araragi@gmail.com` |
+| 8 | Tsukihi Araragi | `araragi.tsukihi@gmail.com` |
+| 9 | Yotsugi Ononoki | `ononoki.rulebook@gmail.com` |
+| 10 | Ougi Oshino | `ougi.oshino0@gmail.com` |
+| 11 | Sodachi Oikura | `sodachi.oikura@gmail.com` |
+| 12 | Izuko Gaen | `izuko.gaen@gmail.com` |
+| 13 | Yozuru Kagenui | `yozuru.kagenui@gmail.com` |
+| 14 | Suicide-Master | `deathtopia.vsm@gmail.com` |
 
-### Dither canvas
-- Uses a 4-tone Bayer 4x4 dither canvas quantized to Tsubasa's sage-mint light and dark palette.
-- Phase 1 renders the dither canvas without separate `DitherDivider` strips.
-- Hovering dithered background transition pixels on desktop intentionally switches the cursor to `text` as texture emulation, excluding the header, footer, interactive controls, and the preview window.
+## 3. Swarm execution and consensus workflow
 
-## 4. Shared layout chrome
+Run the build as a coordinated `/swarm` session with live multi-agent consensus. Do not pre-decide file splits, internal code structure, or fixed model-to-role assignments. Implementation agents decide architecture details, module and file boundaries, seed allocation across the 14 accounts, disjoint ownership splits, and worker tiers live through unanimous consensus.
 
-Present on both `/` and `/data-policy`.
+### Branching and worktree guardrail
 
-### Header
-- Omits a header brand link because branding assets already appear on the page.
-- Direct navigation links for both pages (`Home` and `Data Policy`).
-- Single circular light/dark theme toggle button:
-  - Auto-detects `prefers-color-scheme` on first visit and stores user overrides in `localStorage` (avoids a 3-button Auto/Light/Dark control).
-  - Animates theme switches using the View Transitions API radial `clip-path: circle(...)` expansion from the button's click coordinates (or button center for keyboard activation).
-  - Falls back to an instant switch when `document.startViewTransition` is unavailable or `prefers-reduced-motion: reduce` is active.
+Before starting any implementation edits, create paired feature branches inside the two existing worktrees instead of editing `main` or `site` directly:
 
-### Revealing footer
-Sticky reveal-from-behind footer at the bottom of the page containing:
-- Primary signature: `Tsubasa~ Cloud ◦ x4163`, with `Tsubasa~ Cloud` linking to GitHub.
-- Omits `#8170` here because the full Discord handle already appears on `/data-policy`.
+- Cut one feature branch off `main` in the root worktree for the demo build, transport seams, and sync command.
+- Cut one feature branch off `site` in `site/`, preserving the orphan `site` lineage, for the `<iframe>` mount, grain masking, theme sync, and synced bundle.
+- Keep all swarm workers on `workspace: "inherit"` with disjoint file ownership so both worktrees stay in their existing paths for local syncing and live verification.
 
-## 5. Brand and social assets
+### Model pool and tier baseline
 
-Source assets live in `docs/` on `main` and will be copied (and web-optimized where needed) into `site/public/` or `site/src/assets/`:
+Verify exact model identifiers via `swarm{action:"models", all:true}` before spawning workers. Restrict all spawned workers strictly to the Neon family (`High`, `Medium`, `Low`). Never spawn Hydrogen agents. Guide allocation with this tier baseline:
 
-| Asset | Source file | Notes |
-|---|---|---|
-| App mark | `docs/svg-r44-app.svg` (884x884, transparent) | Adapts cleanly to both light and dark surfaces |
-| Readme mark | `docs/svg-r44-readme.svg` (822x884, baked cream gradient `#f0eeca` to `#ffffdd`) | Keep both SVG options open; implementing agent decides which fits each slot |
-| Hero banner | `docs/banner-mono.png` (4.5 MB raw) | Must be used on the site (web-optimized WebP/PNG export recommended for fast page load) |
-| Social preview | `docs/social-preview-1280x640.jpg` (308 KB, 1280x640) | Preferred for Open Graph (`og:image`) and Twitter Card (`twitter:image`); implementing agent decides final wiring |
+- **`Medium` as default workhorse.** Use `Medium` for planning, standard implementation tracks, contract checks, and standard verification.
+- **`High` for targeted precision.** Reserve `High` for high-risk or ambiguous invariants such as IndexedDB state and quota math, cross-frame theme sync, or complex cross-layer seams, with explicit justification naming the touched invariants.
+- **`Low` for bounded mechanical work.** Use `Low` only for deterministic, low-ambiguity tasks with a clear agreed spec.
+- **Minimum `Medium` floor.** Keep at least a `Medium` or `High` reviewer on every critical review and blocking fix sign-off.
 
-## 6. SEO and static metadata
+### Unanimous consensus protocol
 
-Keep what search engines and link previews use while omitting deprecated or redundant tags (`pragma`, `expires`, `X-UA-Compatible`, `meta keywords`, and JS-injected JSON-LD):
-
-- Per-page `<title>`, `<meta name="description">`, and `<link rel="canonical">`.
-- Open Graph tags (`og:type`, `og:url`, `og:title`, `og:site_name`, `og:description`, `og:image`, `og:image:width`, `og:image:height`, `og:image:alt`).
-- Twitter Card tags (`twitter:card="summary_large_image"`, `twitter:title`, `twitter:description`, `twitter:image`).
-- Static inline `<script type="application/ld+json">` embedded directly in each HTML file (`WebSite` + `SoftwareApplication` on `/`; `WebPage` on `/data-policy`).
-- `robots.txt` and `sitemap.xml` (listing `/` and `/data-policy`), with canonical and sitemap URLs driven by a configurable site origin.
-
-## 7. Homepage (`/`)
-
-1. **Hero section.** `Tsubasa~ Cloud` title, brand visual, concise end-user explanation of what Tsubasa does (combines personal Google Drive accounts into one virtual drive, keeps files whole, mirrors folders so they stay browsable on Google Drive, runs locally on Windows or in a browser), and the primary `Download` link. GitHub is linked from the footer and `/data-policy`.
-2. **App preview window.** A simple, centered, fixed-size dummy window (not dynamically resizable or expandable) styled to match the Tsubasa workspace.
-   - **Phase 1 minimum:** Static styled dummy window placeholder framed to the exact final dimensions and visual tokens so the page layout is complete without building interactive app logic yet.
-   - **Phase 2 (gated):** Replaced by the interactive dummy app below only after the user confirms both `/` and `/data-policy` are complete.
-
-### Interactive demo requirements (Phase 2, gated, never start without approval)
-
-> **STOP:** Never start this section during the initial site build. Wait for explicit user confirmation that both static pages (`/` and `/data-policy`) are complete first.
-
-When approved, replace the styled dummy window placeholder with a full client-side replica (including a `Reset demo` button to restore initial sample data). All state persists in the browser via **IndexedDB using dummy metadata and text records only**. Never store real file bytes or binary blobs in IndexedDB. No network calls.
-
-- **Pools and sidebar.** Multiple pre-seeded standard pools plus the read-only `Share Pool`. Create, rename, delete, and reorder pools.
-- **Accounts and quotas.** Pre-seeded dummy accounts with masked emails (`RedactedEmail`), 750 MB reserve headroom math, 14.25 GB single-file limit checks, 24-hour rolling transfer gauges, and buffer-breach indicators. Add dummy accounts, toggle enable/disable, move between pools, evacuate, or remove.
-- **Virtualized file table.** TanStack Virtual rows with sorting, search, breadcrumbs, multi-select, and folder navigation.
-- **Drag-and-drop and uploads.** Drop files or folders from the OS (or pick via upload button) to read only file metadata (`name`, `size`, `type`, relative path, timestamp) and store dummy metadata records in IndexedDB with simulated upload progress in `UploadDrawer`, folder-cohesion best-fit placement, and internal drag-and-drop onto folders and breadcrumbs.
-- **File and folder actions.** New folder, rename, move across folders/accounts/pools (including conflict handling), copy, download (generates a small dummy placeholder file on the fly rather than storing real blobs), soft-delete to Trash, restore, and permanent purge / empty trash.
-- **Public sharing.** Share selected files or folders into the Share Pool, generate copyable dummy share links, and manage or revoke active links in `ShareModal`.
-- **External changes drawer.** Pre-seeded or triggerable dummy discrepancies (`unindexed`, `modified`, `missingRemote`, `conflicts`, `overCeiling`) with working Accept, Resolve, Move to root, and Rebalance actions.
-- **Responsive layout.** Adapts cleanly on desktop (`> 768px`) and mobile (`<= 768px`, 64px rows, slide-in drawers) while keeping the demo container fixed rather than user-resizable.
-
-## 8. Data policy page (`/data-policy`)
-
-Simple centered single-column page with the title `Data Policy` and direct, plain-English sections. Text and links intentionally render directly over the open dither backdrop with no visible card or container wrapper. The brand mark circle stays `#deb76c` across both themes, and in dark mode the medallion adds a uniform silhouette outline in `colors.primaryText` matching the heading stroke weight.
-
-1. **Self-hosted, zero developer access.** Tsubasa~ Cloud runs locally on your own computer. The developer operates no backend servers, collects no telemetry or analytics, and never sees your Google account, OAuth credentials, or files.
-2. **How Google Drive access works.** You create and supply your own Google Cloud OAuth client. Tsubasa connects directly from your machine to Google Drive APIs to list, upload, download, organize, and share files inside your own `_Tsubasa~ Pool` folders.
-3. **What stays on your device.** OAuth tokens stay in your local `.oauths/` directory; your file index stays in your local `data/tsubasa.db` file.
-4. **Google API Limited Use and revocation.** Use of Google Drive data is strictly limited to operating the local file manager on your device. You can revoke access at any time from your Google Account permissions page or by deleting `.oauths/` and `data/`.
-5. **This website.** Static site with no tracking cookies or analytics. The interactive demo stores only dummy text/metadata records locally in your browser's IndexedDB (never real file contents) and saves your light/dark theme choice in `localStorage`.
-6. **Contact.** Lists email (`x4163x@gmail.com`), Discord (`x4163#8170`), and a link to GitHub Issues.
-
-## 9. Work distribution and swarm execution
-
-When implementation is approved, execute the build as a coordinated `/swarm` run with live multi-agent discussion at design, seam, and verification gates.
-
-### Model pool
-Restrict all spawned workers strictly to these two models (verify exact model identifiers via `swarm{action:"models", all:true}` before spawning):
-
-- `Gemini 4 Neon Medium`
-- `Gemini 4 Neon Low`
-
-Concentrate `Neon Medium` on Stage 1 design and contract consensus, the interactive IndexedDB app demo, cross-track integration, and final verification. Assign `Neon Low` to bounded static tracks (copy, SEO metadata, asset preparation, and scoped checks) as ratified in Stage 1.
-
-### Consensus protocol
 Every discussion gate requires unanimous agreement among the assigned agents:
 
-1. **No empty agreement.** Each agent casts `[Agree]`, `[Amend]`, or `[Block]` with concrete evidence (inspected files, contrast checks, build/typecheck output, or rendered browser checks).
-2. **Hard block on facts and invariants.** A substantiated `[Block]` (such as real file bytes written to IndexedDB, grain intensity mismatch, WCAG AAA contrast failure, broken static route, missing demo action, or `unslop/SKILL.md` violation) stops promotion until fixed.
-3. **Two-round escalation valve on pure design ties.** For "agent's call" choices where competing options both satisfy the spec, allow up to 2 debate rounds weighing concrete trade-offs. If still tied after round 2, escalate a short brief to the coordinator to pick one and proceed.
+1. **No empty agreement.** Each participant casts `[Agree]`, `[Amend]`, or `[Block]` with concrete proof such as inspected files, contrast checks, command output, or rendered browser checks. Bare agreement is invalid.
+2. **Symmetric hard block on facts, safety, and invariants.** A substantiated `[Block]` stops an item from becoming `[Agreed]` when it proves a factual error, broken invariant, or safety violation. The group must fix, re-classify, or drop the item.
+3. **Two-round escalation valve on judgment ties.** When agents agree on facts and rules and only judgment differs, run at most 2 debate rounds. If still tied after round 2, send a concise Escalation Brief with both positions to the coordinator to select and ratify.
+4. **Outcome tags.** Every candidate resolves to `[Agreed]`, `[Dropped]`, or `[Escalated]`.
 
-### Four-stage execution workflow (Phase 1: static site + styled dummy window)
+### Consensus-driven stages
 
-Phase 1 delivers both static pages (`/` and `/data-policy`), shared chrome, assets, SEO, and the centered fixed-size styled dummy window placeholder on `/`. **Do not spawn a Phase 2 interactive-demo track during Phase 1.**
-
-1. **Stage 1: Design-call, contract, and split consensus.**
-   Spawn a planning group (`Neon Medium` + `Neon Low`) to inspect this spec, `docs/styling-guide.md`, `docs/teardowns/hanekawa.md`, `src/client/` (`global.css`, `tokens.stylex.ts`, components), and `docs/` assets. Reach unanimous consensus on:
-   - All "agent's call" design choices (dither canvas placement, SVG mark selection, banner/social-preview wiring, secondary revealing footer items, and optional GitHub Issues contact link on `/data-policy`).
-   - Shared contracts (tokens, header/footer chrome, theme boot script, fixed dummy window dimensions and placeholder layout).
-   - Disjoint file ownership and model allocation across Stage 2 tracks.
-
-2. **Stage 2: Parallel implementation with seam sync.**
-   Run parallel build tracks with zero overlapping file ownership (exact file lists ratified in Stage 1):
-   - **Track A (Scaffold, tokens, and shared chrome):** Vite 6 MPA config (`index.html`, `data-policy/index.html`), StyleX setup, fonts, exact light/dark grain overlay, shared header with circular View Transitions radial theme toggle, revealing footer, and Bayer 4x4 dither canvas.
-   - **Track B (Static pages, copy, assets, SEO, and styled dummy window):** Homepage hero (`/`), centered fixed-size styled dummy window placeholder, centered `/data-policy` page, concise end-user copy compliant with `unslop/SKILL.md`, web-optimized brand/social assets, inline JSON-LD, Open Graph/Twitter metadata, `robots.txt`, and `sitemap.xml`.
-   - **Cross-track seam check:** Before final wiring, tracks post their exported contracts (theme state, token imports, dummy window bounds, asset paths) on the board and unanimously confirm zero conflicts.
-
-3. **Stage 3: Cross-track review and live verification.**
-   Keep Stage 2 builders waiting on the board and bring in a fresh `Neon Medium` Final Reviewer. Verify against `tsc --noEmit`, `vite build`, and live rendered checks across light/dark themes and desktop/mobile viewports:
-   - Grain opacity matches `src/client/global.css` (light `0.8`, dark `0.35`), contrast meets WCAG AAA, radial theme toggle respects `prefers-reduced-motion`, both static HTML outputs build cleanly, SEO metadata is valid, the dummy window is centered, fixed-size, and styled to match the app, and copy passes `unslop/SKILL.md`.
-   - Any substantiated `[Block]` returns to the owning track for an in-place fix until all tracks and the Final Reviewer sign off unanimously.
-
-4. **Stage 4: Handoff and Phase 2 gate.**
-   Confirm `site/` and the main repo have no leftover temporary files, do not run `git commit` or `git push`, and report the settled Stage 1 design calls, build output, and Stage 3 sign-off status. Stop here and wait for the user to confirm both pages are complete before starting Phase 2.
-
-### Phase 2 (Interactive demo, gated follow-up)
-Start only after explicit user approval of Phase 1. Run a dedicated `Neon Medium` implementation + verification pass to replace the styled dummy window placeholder with the full metadata-only IndexedDB interactive demo (TanStack Virtual table, drag-and-drop metadata capture, `UploadDrawer`, `ShareModal`, `ExternalChangesDrawer`, Trash/restore/purge, pool/account actions, and `Reset demo`), verified with zero binary file blobs stored in IndexedDB.
+1. **Design, architecture, and split consensus.** Planning workers inspect this spec, `docs/styling-guide.md`, `src/client/`, and `site/` to reach unanimous consensus on architecture details, module and file boundaries, seed allocation across the 14 accounts, disjoint ownership splits, and worker tiers.
+2. **Parallel disjoint implementation with seam consensus.** Implementation workers build in parallel across non-overlapping files. Before final integration, adjacent workers post their shared contracts on the board and reach unanimous seam consensus with zero conflicts.
+3. **Independent author and auditor verification consensus.** Keep implementation workers separate from auditors. Auditors verify typecheck, build, live light/dark and desktop/mobile rendering, zero-blob IndexedDB and zero-network invariants, `.agents/AGENTS.md` compliance, and `.agents/skills/unslop/SKILL.md` compliance. Any substantiated `[Block]` returns to the owning worker for an in-place fix and another verification pass until unanimous sign-off.
+4. **Handoff.** Leave all completed workers `waiting` rather than killing them, confirm no leftover temporary files remain, and do not run `git commit` or `git push`.
