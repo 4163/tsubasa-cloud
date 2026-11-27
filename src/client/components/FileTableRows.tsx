@@ -307,7 +307,7 @@ export const rowStyles = stylex.create({
     whiteSpace: 'nowrap',
     verticalAlign: 'middle',
     cursor: 'default',
-    userSelect: 'text',
+    userSelect: 'none',
   },
   tabularCell: {
     fontVariantNumeric: 'tabular-nums',
