@@ -1,7 +1,7 @@
 import React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors } from '../tokens.stylex.js';
-import { ThemeProvider, useSiteTheme } from '../theme.js';
+import { ThemeProvider, useSiteTheme, type SiteCanvasBackdrop } from '../theme.js';
 import { SiteHeader } from './SiteHeader.js';
 import { RevealingFooter } from './RevealingFooter.js';
 import { DitherCanvas, type DitherCanvasVariant } from './DitherCanvas.js';
@@ -16,7 +16,6 @@ export interface SiteLayoutProps {
 const styles = stylex.create({
   root: {
     minHeight: '100dvh',
-    backgroundColor: colors.canvas,
     color: colors.primaryText,
     position: 'relative',
     isolation: 'isolate',
@@ -26,11 +25,16 @@ const styles = stylex.create({
     minHeight: '100dvh',
     display: 'flex',
     flexDirection: 'column',
-    backgroundColor: colors.canvas,
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: colors.border,
     overflow: 'clip',
+  },
+  backdropHome: {
+    backgroundColor: colors.canvasHome,
+  },
+  backdropPolicy: {
+    backgroundColor: colors.canvasPolicy,
   },
   main: {
     position: 'relative',
@@ -51,11 +55,12 @@ function SiteLayoutInner({
 }: SiteLayoutProps) {
   const { isDark } = useSiteTheme();
   const isHomeCanvas = !ditherVariant && activeRoute === 'home';
+  const backdropStyle = isHomeCanvas ? styles.backdropHome : styles.backdropPolicy;
 
   return (
-    <div {...stylex.props(styles.root, isDark && darkColors)}>
+    <div {...stylex.props(styles.root, backdropStyle, isDark && darkColors)}>
       <div className="grain-overlay" aria-hidden="true" />
-      <div {...stylex.props(styles.foreground)}>
+      <div {...stylex.props(styles.foreground, backdropStyle)}>
         {isHomeCanvas ? (
           <>
             <DitherCanvas isDark={isDark} variant="home-top" />
@@ -75,8 +80,11 @@ function SiteLayoutInner({
 }
 
 export function SiteLayout(props: SiteLayoutProps) {
+  const isHomeCanvas = !props.ditherVariant && props.activeRoute === 'home';
+  const backdrop: SiteCanvasBackdrop = isHomeCanvas ? 'home' : 'policy';
+
   return (
-    <ThemeProvider>
+    <ThemeProvider backdrop={backdrop}>
       <SiteLayoutInner {...props} />
     </ThemeProvider>
   );

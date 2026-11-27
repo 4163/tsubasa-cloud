@@ -5,6 +5,12 @@ export const SITE_THEME_STORAGE_KEY = 'tsubasa-site-theme';
 export const SITE_THEME_SYNC_MESSAGE_TYPE = 'tsubasa:site-theme-sync';
 
 export type SiteTheme = 'light' | 'dark';
+export type SiteCanvasBackdrop = 'home' | 'policy';
+
+const CANVAS_BACKDROP_COLORS: Record<SiteCanvasBackdrop, Record<SiteTheme, string>> = {
+  home: { light: '#cedcd3', dark: '#294138' },
+  policy: { light: '#f2f6f2', dark: '#142520' },
+};
 
 type SiteThemeToggleListener = (theme: SiteTheme) => void;
 
@@ -60,13 +66,13 @@ export function readInitialSiteTheme(): SiteTheme {
   return 'light';
 }
 
-export function applySiteTheme(theme: SiteTheme): void {
+export function applySiteTheme(theme: SiteTheme, backdrop: SiteCanvasBackdrop = 'home'): void {
   if (typeof document === 'undefined') return;
   const isDark = theme === 'dark';
   const root = document.documentElement;
   root.setAttribute('data-theme', theme);
   root.style.colorScheme = theme;
-  root.style.backgroundColor = isDark ? '#0b1412' : '#eef2ec';
+  root.style.backgroundColor = CANVAS_BACKDROP_COLORS[backdrop][theme];
   root.style.color = isDark ? '#e5f2eb' : '#111d18';
   root.classList.toggle('dark', isDark);
 }
@@ -89,13 +95,19 @@ function getTransitionOrigin(event?: React.MouseEvent<HTMLButtonElement>): { x: 
   };
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
+export function ThemeProvider({
+  backdrop = 'home',
+  children,
+}: {
+  backdrop?: SiteCanvasBackdrop;
+  children: React.ReactNode;
+}) {
   const [theme, setTheme] = useState<SiteTheme>(() => readInitialSiteTheme());
   const activeTransitionsRef = useRef(0);
 
   useLayoutEffect(() => {
-    applySiteTheme(theme);
-  }, [theme]);
+    applySiteTheme(theme, backdrop);
+  }, [theme, backdrop]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
@@ -103,12 +115,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const onSystemChange = (event: MediaQueryListEvent) => {
       if (readStoredTheme() !== null) return;
       const next: SiteTheme = event.matches ? 'dark' : 'light';
-      applySiteTheme(next);
+      applySiteTheme(next, backdrop);
       setTheme(next);
     };
     mql.addEventListener('change', onSystemChange);
     return () => mql.removeEventListener('change', onSystemChange);
-  }, []);
+  }, [backdrop]);
 
   const toggleTheme = useCallback((event?: React.MouseEvent<HTMLButtonElement>) => {
     const next: SiteTheme = theme === 'dark' ? 'light' : 'dark';
@@ -132,7 +144,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     };
 
     if (prefersReducedMotion || typeof doc.startViewTransition !== 'function') {
-      applySiteTheme(next);
+      applySiteTheme(next, backdrop);
       setTheme(next);
       return;
     }
@@ -150,7 +162,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     try {
       transition = doc.startViewTransition(() => {
         flushSync(() => {
-          applySiteTheme(next);
+          applySiteTheme(next, backdrop);
           setTheme(next);
         });
       });
@@ -159,7 +171,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (activeTransitionsRef.current === 0) {
         document.documentElement.classList.remove('theme-transitioning');
       }
-      applySiteTheme(next);
+      applySiteTheme(next, backdrop);
       setTheme(next);
       return;
     }
@@ -194,7 +206,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           document.documentElement.classList.remove('theme-transitioning');
         }
       });
-  }, [theme]);
+  }, [theme, backdrop]);
 
   return React.createElement(
     ThemeContext.Provider,
