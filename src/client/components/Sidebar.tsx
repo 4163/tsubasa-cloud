@@ -51,6 +51,8 @@ export interface SidebarProps {
   authUrlErrors?: Record<string, boolean>;
   copiedAuthUrlId?: string | null;
   onCopyAuthUrl?: (accountId: string) => void;
+  authorizingAccountId?: string | null;
+  onAuthorizeDemoAccount?: (accountId: string) => void;
   sidebarError?: string | null;
   onDismissSidebarError?: () => void;
 }
@@ -603,6 +605,8 @@ export function Sidebar({
   authUrlErrors,
   copiedAuthUrlId,
   onCopyAuthUrl,
+  authorizingAccountId,
+  onAuthorizeDemoAccount,
   sidebarError,
   onDismissSidebarError,
 }: SidebarProps) {
@@ -694,7 +698,12 @@ export function Sidebar({
   };
 
   const handleImportClick = () => {
+    if (isImporting) return;
     onDismissSidebarError?.();
+    if (__DEMO_MODE__ && onImportOAuth) {
+      onImportOAuth(new File([], 'demo-oauth.json', { type: 'application/json' }));
+      return;
+    }
     fileInputRef.current?.click();
   };
 
@@ -854,7 +863,7 @@ export function Sidebar({
                 isDragOverOAuth && styles.addAccountButtonDragOver
               )}
               onClick={handleImportClick}
-              disabled={isImporting}
+              disabled={!__DEMO_MODE__ && isImporting}
               aria-label="Add account"
             >
               <div
@@ -867,10 +876,14 @@ export function Sidebar({
               </div>
               <div {...stylex.props(styles.addAccountTextCol)}>
                 <span {...stylex.props(styles.addAccountLabel)}>
-                  {isImporting ? 'Inspecting credential...' : 'Add account'}
+                  {!__DEMO_MODE__ && isImporting ? 'Inspecting credential...' : 'Add account'}
                 </span>
                 <span {...stylex.props(styles.addAccountSub)}>
-                  {isDragOverOAuth ? 'Drop OAuth credentials to import' : 'Import OAuth credentials'}
+                  {isDragOverOAuth
+                    ? 'Drop OAuth credentials to import'
+                    : __DEMO_MODE__
+                      ? 'Click or drop any .json file'
+                      : 'Import OAuth credentials'}
                 </span>
               </div>
             </button>
@@ -927,6 +940,8 @@ export function Sidebar({
               hasAuthUrlError={authUrlErrors?.[acc.id]}
               isAuthUrlCopied={copiedAuthUrlId === acc.id}
               onCopyAuthUrl={onCopyAuthUrl}
+              isAuthorizing={authorizingAccountId === acc.id}
+              onAuthorizeDemoAccount={onAuthorizeDemoAccount}
               onToggleAccountFilter={onToggleAccountFilter}
               onRefreshStorage={onRefreshStorage}
               onOpenExternalChanges={onOpenExternalChanges}

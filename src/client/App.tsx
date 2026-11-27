@@ -13,6 +13,7 @@ import { Sidebar } from './components/Sidebar.js';
 import { ActionPortal } from './components/ActionPortal.js';
 import { FileTable } from './components/FileTable.js';
 import { DitherDivider } from './components/DitherDivider.js';
+import { DemoWorkspaceBackdrop } from './demo/backdrop.js';
 import { IconAlertTriangle, IconClose } from './components/Icons.js';
 import { WorkspaceOverlays } from './components/WorkspaceOverlays.js';
 import type {
@@ -29,7 +30,9 @@ import {
   extractErrorMessage,
   isModalActive,
   reportDevError,
+  safeStorageSet,
 } from './utils/workspaceHelpers.js';
+import { resetDemoState } from './demo/index.js';
 import { useThemeChoice } from './hooks/useResolvedTheme.js';
 import { useWorkspaceData } from './hooks/useWorkspaceData.js';
 import { useWorkspaceNavigation } from './hooks/useWorkspaceNavigation.js';
@@ -41,7 +44,11 @@ import { useSyncAndRebalance } from './hooks/useSyncAndRebalance.js';
 import { useAccountLifecycle } from './hooks/useAccountLifecycle.js';
 import { usePoolManagement } from './hooks/usePoolManagement.js';
 import { useShareActions } from './hooks/useShareActions.js';
-import { invalidateShareInspectCache } from './utils/queryCache.js';
+import {
+  clearPoolCache,
+  invalidateDiscrepancyReportCache,
+  invalidateShareInspectCache,
+} from './utils/queryCache.js';
 import { useBeforeUnload, useMediaQuery } from './utils/useBeforeUnload.js';
 import { applyWindowTitle, formatWorkspaceTitle } from './utils/windowTitle.js';
 
@@ -181,6 +188,12 @@ const styles = stylex.create({
       default: 'flex',
       '@supports not (content-visibility: hidden)': 'none',
     },
+  },
+  demoBackdropOverlay: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 50,
+    overflow: 'hidden',
   },
 });
 
@@ -539,6 +552,8 @@ export function App() {
     authUrlErrors,
     copiedAuthUrlId,
     handleCopyAuthUrl,
+    authorizingAccountId,
+    handleAuthorizeDemoAccount,
   } = useAccountLifecycle({
     activePoolIdRef,
     accountItems,
@@ -948,6 +963,70 @@ export function App() {
     }
   }, []);
 
+  const [isResettingDemo, setIsResettingDemo] = useState(false);
+  const isResettingDemoRef = useRef(false);
+  const [hasDemoHydrated, setHasDemoHydrated] = useState(!__DEMO_MODE__);
+
+  useEffect(() => {
+    if (!__DEMO_MODE__ || hasDemoHydrated) return;
+    if ((storage !== null && loadedFilesPoolId === activePoolId) || workspaceError !== null) {
+      setHasDemoHydrated(true);
+    }
+  }, [storage, loadedFilesPoolId, activePoolId, hasDemoHydrated, workspaceError]);
+
+  const handleResetDemo = useCallback(async () => {
+    if (!__DEMO_MODE__ || isResettingDemoRef.current) return;
+    isResettingDemoRef.current = true;
+    setIsResettingDemo(true);
+    try {
+      await resetDemoState();
+      clearPoolCache();
+      invalidateDiscrepancyReportCache();
+      invalidateShareInspectCache();
+      if (typeof window !== 'undefined') {
+        safeStorageSet(window.sessionStorage, 'tsubasa-active-pool-id', '1');
+      }
+      clearWorkspaceState();
+      setSearchQuery('');
+      setCurrentNav('files');
+      setCurrentPath('/');
+      setIsMobileOpen(false);
+      setExternalChangesAccountId(undefined);
+      setStagedFiles([]);
+      setStagedEmptyFolders([]);
+      setUploadTargetPath(undefined);
+      uiCallbacksRef.current.onPoolSwitched();
+      if (activePoolIdRef.current !== 1) {
+        skipNextPoolEffectRef.current = 1;
+      }
+      activePoolIdRef.current = 1;
+      setActivePoolId(1);
+      const [freshAccounts] = await Promise.all([
+        loadClusterData(1),
+        loadFiles('/', 1),
+      ]);
+      if (freshAccounts) {
+        await checkAccountDiscrepancies(freshAccounts, true, 1);
+      }
+    } catch (err) {
+      surfaceWorkspaceError('resetDemo', err, 'Failed to reset demo');
+    } finally {
+      isResettingDemoRef.current = false;
+      setIsResettingDemo(false);
+    }
+  }, [
+    activePoolIdRef,
+    checkAccountDiscrepancies,
+    clearWorkspaceState,
+    loadClusterData,
+    loadFiles,
+    setActivePoolId,
+    setCurrentNav,
+    setCurrentPath,
+    skipNextPoolEffectRef,
+    surfaceWorkspaceError,
+  ]);
+
   return (
     <div
       {...stylex.props(
@@ -957,6 +1036,16 @@ export function App() {
       data-theme={effectiveTheme}
     >
       <div className="grain-overlay" />
+
+      {__DEMO_MODE__ && (!hasDemoHydrated || isResettingDemo) && (
+        <div
+          aria-busy="true"
+          aria-label="Loading workspace"
+          {...stylex.props(styles.demoBackdropOverlay)}
+        >
+          <DemoWorkspaceBackdrop effectiveTheme={effectiveTheme} isDemoMode={true} />
+        </div>
+      )}
 
       <Sidebar
         accounts={accountItems}
@@ -984,6 +1073,8 @@ export function App() {
         authUrlErrors={authUrlErrors}
         copiedAuthUrlId={copiedAuthUrlId}
         onCopyAuthUrl={handleCopyAuthUrl}
+        authorizingAccountId={authorizingAccountId}
+        onAuthorizeDemoAccount={__DEMO_MODE__ ? handleAuthorizeDemoAccount : undefined}
         isImporting={isImporting}
         sidebarError={sidebarError}
         onDismissSidebarError={clearSidebarError}
@@ -1006,6 +1097,8 @@ export function App() {
             onThemeChange={handleThemeChange}
             onToggleMobileMenu={handleToggleMobileMenu}
             isMobileMenuOpen={isMobileOpen}
+            onResetDemo={__DEMO_MODE__ ? handleResetDemo : undefined}
+            isResettingDemo={isResettingDemo}
           />
 
           <ActionPortal

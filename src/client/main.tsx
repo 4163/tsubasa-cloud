@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors } from './tokens.stylex.js';
 import { useResolvedTheme } from './hooks/useResolvedTheme.js';
+import { DemoWorkspaceBackdrop } from './demo/backdrop.js';
 import { useTabLock } from './utils/useTabLock.js';
 import { applyWindowTitle, BASE_WINDOW_TITLE } from './utils/windowTitle.js';
 import './global.css';
@@ -31,7 +32,9 @@ function CheckingShell() {
     <div
       {...stylex.props(gateStyles.checkingShell, effectiveTheme === 'dark' && darkColors)}
       data-theme={effectiveTheme}
-    />
+    >
+      {__DEMO_MODE__ && <DemoWorkspaceBackdrop effectiveTheme={effectiveTheme} isDemoMode={true} />}
+    </div>
   );
 }
 
@@ -57,7 +60,13 @@ const rootEl = document.getElementById('root');
 if (rootEl) {
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
-      <TabLockGate />
+      {__DEMO_MODE__ ? (
+        <React.Suspense fallback={<CheckingShell />}>
+          <App />
+        </React.Suspense>
+      ) : (
+        <TabLockGate />
+      )}
     </React.StrictMode>
   );
 }
