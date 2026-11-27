@@ -34,7 +34,7 @@ export const colors = stylex.defineVars({
   primary: '#111d18',
   primaryHover: '#2a4339',
   brandAccent: '#135349',
-  brandAccentDeep: '#0a2e29',
+  brandAccentDeep: '#0c433a',
   brandAccentHover: '#0d7362',
   brandAccentText: '#ffffff',
   brandAccentSurface: '#e1efe9',

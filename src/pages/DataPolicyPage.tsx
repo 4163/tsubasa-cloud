@@ -132,6 +132,11 @@ const styles = stylex.create({
     },
   },
   linkLight: {
+    // inline-block lets background-clip: text paint the link underline with the link gradient.
+    display: {
+      default: null,
+      '@media (max-width: 768px)': 'inline-block',
+    },
     backgroundImage: {
       default: null,
       '@media (max-width: 768px)': `linear-gradient(to left, ${colors.brandAccent} ${spacing.space6}, ${colors.brandAccentDeep} calc(100% - ${spacing.space6}))`,
@@ -139,12 +144,16 @@ const styles = stylex.create({
   },
 });
 
-function InlineCode({ isDark, children }: { isDark: boolean; children: string }) {
+function InlineCode({
+  gradientProps,
+  children,
+}: {
+  gradientProps: ReturnType<typeof stylex.props>;
+  children: string;
+}) {
   return (
     <code {...stylex.props(styles.code)}>
-      <span {...stylex.props(!isDark && styles.mobileGradientText, !isDark && styles.bodyLight)}>
-        {children}
-      </span>
+      <span {...gradientProps}>{children}</span>
     </code>
   );
 }
@@ -156,6 +165,10 @@ export function DataPolicyPage() {
     styles.heading,
     !isDark && styles.mobileGradientText,
     !isDark && styles.headingLight,
+  );
+  const bodyGradientProps = stylex.props(
+    !isDark && styles.mobileGradientText,
+    !isDark && styles.bodyLight,
   );
   const bodyProps = stylex.props(
     styles.body,
@@ -200,16 +213,16 @@ export function DataPolicyPage() {
             <p {...bodyProps}>
               You create and supply your own Google Cloud OAuth client. Tsubasa connects directly
               from your machine to Google Drive APIs to list, upload, download, organize, and share
-              files inside your <InlineCode isDark={isDark}>_Tsubasa~ Pool</InlineCode> folders.
+              files inside your <InlineCode gradientProps={bodyGradientProps}>_Tsubasa~ Pool</InlineCode> folders.
             </p>
           </section>
 
           <section {...stylex.props(styles.item)}>
             <h2 {...headingProps}>What stays on your device</h2>
             <p {...bodyProps}>
-              OAuth tokens stay in your local <InlineCode isDark={isDark}>.oauths/</InlineCode>{' '}
+              OAuth tokens stay in your local <InlineCode gradientProps={bodyGradientProps}>.oauths/</InlineCode>{' '}
               directory. Your file index stays in your local{' '}
-              <InlineCode isDark={isDark}>data/tsubasa.db</InlineCode> file.
+              <InlineCode gradientProps={bodyGradientProps}>data/tsubasa.db</InlineCode> file.
             </p>
           </section>
 
@@ -233,12 +246,15 @@ export function DataPolicyPage() {
 
           <section {...stylex.props(styles.item)}>
             <h2 {...headingProps}>Contact</h2>
-            <p {...bodyProps}>
-              Email{' '}
+            {/* Keep bodyLight on spans so parent background-clip: text does not paint link underlines black. */}
+            <p {...stylex.props(styles.body)}>
+              <span {...bodyGradientProps}>Email </span>
               <a href="mailto:x4163x@gmail.com" {...linkProps}>
                 x4163x@gmail.com
               </a>
-              , Discord <InlineCode isDark={isDark}>x4163#8170</InlineCode>, or open a{' '}
+              <span {...bodyGradientProps}>, Discord </span>
+              <InlineCode gradientProps={bodyGradientProps}>x4163#8170</InlineCode>
+              <span {...bodyGradientProps}>, or open a </span>
               <a
                 href="https://github.com/4163/tsubasa-cloud/issues"
                 target="_blank"
@@ -247,7 +263,7 @@ export function DataPolicyPage() {
               >
                 GitHub issue
               </a>
-              .
+              <span {...bodyGradientProps}>.</span>
             </p>
           </section>
         </div>
