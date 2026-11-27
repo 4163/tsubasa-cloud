@@ -63,7 +63,7 @@ npm run package:win  # Build all targets (incl. CLI) and package NSIS + portable
 npm run sync:demo    # Build static demo bundle and mirror it into site/public/demo/
 ```
 
-Architecture and styling docs: [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md). Static site and live demo bundle: [site/README.md](https://github.com/4163/tsubasa-cloud/blob/site/README.md).
+Architecture and styling docs: [docs/roadmap.md](docs/roadmap.md), [docs/styling-guide.md](docs/styling-guide.md), and [.agents/AGENTS.md](.agents/AGENTS.md). Static site and live demo: [tsubasa.moe.page](https://tsubasa.moe.page) ([site/README.md](https://github.com/4163/tsubasa-cloud/blob/site/README.md)).
 
 ## Data and OAuth locations
 
@@ -121,6 +121,7 @@ tsubasa-cloud/
 - Brand filter: [Vayce Comic Book Effect (Manga Ink)](https://vayce.app/tools/comic-book-effect/?profile=manga-ink&finish=0&str=0)
 - Icons: [Lucide](https://lucide.dev) and [Material Icons](https://fonts.google.com/icons)
 - Fonts: [Montserrat](https://fonts.google.com/specimen/Montserrat) and [Pixelify Sans](https://fonts.google.com/specimen/Pixelify+Sans)
+- Subdomain: [moe.page](https://moe.page) ([moepage/subdomain](https://github.com/moepage/subdomain))
 
 ## License
 
