@@ -2,8 +2,26 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { flushSync } from 'react-dom';
 
 export const SITE_THEME_STORAGE_KEY = 'tsubasa-site-theme';
+export const SITE_THEME_SYNC_MESSAGE_TYPE = 'tsubasa:site-theme-sync';
 
 export type SiteTheme = 'light' | 'dark';
+
+type SiteThemeToggleListener = (theme: SiteTheme) => void;
+
+const themeToggleListeners = new Set<SiteThemeToggleListener>();
+
+export function subscribeSiteThemeToggle(listener: SiteThemeToggleListener): () => void {
+  themeToggleListeners.add(listener);
+  return () => {
+    themeToggleListeners.delete(listener);
+  };
+}
+
+function notifySiteThemeToggle(theme: SiteTheme): void {
+  for (const listener of themeToggleListeners) {
+    listener(theme);
+  }
+}
 
 interface SiteThemeContextValue {
   theme: SiteTheme;
@@ -98,6 +116,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // Best-effort persistence.
     }
+    notifySiteThemeToggle(next);
 
     const prefersReducedMotion =
       typeof window !== 'undefined' &&

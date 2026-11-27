@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 import { colors, motion, radius, spacing, typography } from '../tokens.stylex';
-import { DummyWindow } from '../components/DummyWindow';
+import { DemoWindow } from '../components/DemoWindow';
 import { siteUrl } from '../url';
 
 const styles = stylex.create({
@@ -166,7 +166,7 @@ export function HomePage() {
         <h2 id="workspace-preview-heading" {...stylex.props(styles.previewTitle)}>
           Workspace Preview
         </h2>
-        <DummyWindow />
+        <DemoWindow />
       </section>
     </div>
   );

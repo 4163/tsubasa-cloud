@@ -157,6 +157,12 @@ dialog:modal::after {
   --grain-mask-image: url('/assets/svg-r44.svg'), radial-gradient(closest-side circle at 50% 53.5068%, #000 99.5%, transparent 100%);
 }
 
+/* Exclude self-grained iframes from site grain while staying above .grain-overlay (9999) and below SiteHeader (10010) */
+.grain-masked-none::after {
+  content: none;
+  display: none;
+}
+
 /* View Transitions radial clip-path theme reveal */
 ::view-transition,
 ::view-transition-group(root),
