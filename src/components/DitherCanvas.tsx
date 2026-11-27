@@ -151,7 +151,7 @@ function handlePointerMove(e: PointerEvent): void {
   }
 
   const target = e.target instanceof Element ? e.target : null;
-  if (target?.closest('header, footer, a, button, [data-dummy-window]')) {
+  if (target?.closest('header, footer, a, button, [data-demo-window]')) {
     setTextureCursor(false);
     return;
   }
@@ -318,7 +318,7 @@ function renderDither(
         let value: number;
         if (variant === 'home-bottom') {
           // Starts 100% solid palette[0] across ny <= 0.04 to join home-top seamlessly,
-          // then cascades cleanly down around DummyWindow to the footer horizon.
+          // then cascades cleanly down around DemoWindow to the footer horizon.
           const dx = nx - 0.5;
           const radial = Math.abs(dx) * 0.42;
           const vertical = Math.max(0, (ny - 0.04) / 0.96);
