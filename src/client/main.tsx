@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import * as stylex from '@stylexjs/stylex';
 import { colors, darkColors } from './tokens.stylex.js';
 import { useResolvedTheme } from './hooks/useResolvedTheme.js';
+import { readThemeChoice } from './utils/theme.js';
 import { DemoWorkspaceBackdrop } from './demo/backdrop.js';
 import { useTabLock } from './utils/useTabLock.js';
 import { applyWindowTitle, BASE_WINDOW_TITLE } from './utils/windowTitle.js';
@@ -23,6 +24,7 @@ const gateStyles = stylex.create({
 
 function CheckingShell() {
   const effectiveTheme = useResolvedTheme();
+  const themeChoice = readThemeChoice();
 
   React.useEffect(() => {
     applyWindowTitle(BASE_WINDOW_TITLE);
@@ -33,7 +35,14 @@ function CheckingShell() {
       {...stylex.props(gateStyles.checkingShell, effectiveTheme === 'dark' && darkColors)}
       data-theme={effectiveTheme}
     >
-      {__DEMO_MODE__ && <DemoWorkspaceBackdrop effectiveTheme={effectiveTheme} isDemoMode={true} />}
+      <div className="grain-overlay" />
+      {__DEMO_MODE__ && (
+        <DemoWorkspaceBackdrop
+          effectiveTheme={effectiveTheme}
+          themeChoice={themeChoice}
+          isDemoMode={true}
+        />
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { colors, darkColors, spacing, radius, typography } from '../tokens.style
 import { IconAlertTriangle, IconCheck } from './Icons.js';
 import type { AuthCompletedPayload, TabOwnerKind } from '../utils/useTabLock.js';
 import { useResolvedTheme } from '../hooks/useResolvedTheme.js';
+import { readThemeChoice } from '../utils/theme.js';
 import { applyWindowTitle, BASE_WINDOW_TITLE } from '../utils/windowTitle.js';
 import { GhostWorkspaceBackdrop } from './GhostWorkspaceBackdrop.js';
 import { ModalDialog } from './ModalDialog.js';
@@ -122,7 +123,7 @@ export function TabBlockedModal({ ownerKind, authCompleted }: TabBlockedModalPro
     >
       <div className="grain-overlay" />
 
-      <GhostWorkspaceBackdrop effectiveTheme={effectiveTheme} />
+      <GhostWorkspaceBackdrop effectiveTheme={effectiveTheme} themeChoice={readThemeChoice()} />
 
       <ModalDialog
         isOpen={true}

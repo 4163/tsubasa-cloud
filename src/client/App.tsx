@@ -1070,7 +1070,11 @@ export function App() {
           aria-label="Loading workspace"
           {...stylex.props(styles.demoBackdropOverlay)}
         >
-          <DemoWorkspaceBackdrop effectiveTheme={effectiveTheme} isDemoMode={true} />
+          <DemoWorkspaceBackdrop
+            effectiveTheme={effectiveTheme}
+            themeChoice={themeChoice}
+            isDemoMode={true}
+          />
         </div>
       )}
 

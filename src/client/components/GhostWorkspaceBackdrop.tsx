@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 import { colors, layout, spacing, radius, typography } from '../tokens.stylex.js';
-import type { EffectiveTheme } from '../utils/theme.js';
+import type { EffectiveTheme, ThemeChoice } from '../utils/theme.js';
 import {
   IconChevronDown,
   IconChevronRight,
@@ -953,6 +953,7 @@ const styles = stylex.create({
 
 export interface GhostWorkspaceBackdropProps {
   effectiveTheme: EffectiveTheme;
+  themeChoice?: ThemeChoice;
   isDemoMode?: boolean;
 }
 
@@ -961,8 +962,10 @@ export interface GhostWorkspaceBackdropProps {
  */
 export function GhostWorkspaceBackdrop({
   effectiveTheme,
+  themeChoice,
   isDemoMode = false,
 }: GhostWorkspaceBackdropProps) {
+  const activeThemeChoice: ThemeChoice = themeChoice ?? effectiveTheme;
   return (
     <div {...stylex.props(styles.placeholderShell)} aria-hidden="true">
       <aside {...stylex.props(styles.placeholderSidebar)}>
@@ -1115,15 +1118,15 @@ export function GhostWorkspaceBackdrop({
           </div>
           <div {...stylex.props(styles.headerRightGroup)}>
             <div {...stylex.props(styles.themeSelector)}>
-              <span {...stylex.props(styles.themeBtn)}>
+              <span {...stylex.props(styles.themeBtn, activeThemeChoice === 'auto' && styles.themeBtnActive)}>
                 <IconMonitor size={12} />
                 <span>Auto</span>
               </span>
-              <span {...stylex.props(styles.themeBtn, effectiveTheme === 'light' && styles.themeBtnActive)}>
+              <span {...stylex.props(styles.themeBtn, activeThemeChoice === 'light' && styles.themeBtnActive)}>
                 <IconSun size={12} />
                 <span>Light</span>
               </span>
-              <span {...stylex.props(styles.themeBtn, effectiveTheme === 'dark' && styles.themeBtnActive)}>
+              <span {...stylex.props(styles.themeBtn, activeThemeChoice === 'dark' && styles.themeBtnActive)}>
                 <IconMoon size={12} />
                 <span>Dark</span>
               </span>
