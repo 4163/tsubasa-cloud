@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Tsubasa~ Cloud</title>    <!-- Inline boot script and styles prevent a theme flash before React mounts.
+         localStorage access is best-effort for restricted origins, and any CSP
+         header must allow this inline block with a hash or nonce. -->
+    <script>
+      (function () {
+        try {
+          var choice = null;
+          try {
+            if (window.tsubasaDesktop && typeof window.tsubasaDesktop.getThemeChoice === 'function') {
+              var desktopChoice = window.tsubasaDesktop.getThemeChoice();
+              if (desktopChoice === 'light' || desktopChoice === 'dark' || desktopChoice === 'auto') {
+                choice = desktopChoice;
+              }
+            }
+          } catch (e) {}
+          if (!choice) {
+            choice = localStorage.getItem('tsubasa-demo-theme-choice') || 'auto';
+          }
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var isDark = choice === 'dark' || (choice === 'auto' && prefersDark);
+          var theme = isDark ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.style.backgroundColor = isDark ? '#0b1412' : '#eef2ec';
+          document.documentElement.style.color = isDark ? '#e5f2eb' : '#111d18';
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        background-color: #0b1412;
+        color: #e5f2eb;
+      }
+      :root[data-theme='light'] {
+        color-scheme: light;
+        background-color: #eef2ec;
+        color: #111d18;
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        background-color: #0b1412;
+        color: #e5f2eb;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-CNAwA1tl.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/react-vendor-Dw1SOEuV.js">
+    <link rel="modulepreload" crossorigin href="./assets/hono-d5_Esb2A.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-DvGW_Qq5.css">
+    <link rel="stylesheet" href="assets/stylex.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+
