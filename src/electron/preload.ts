@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('tsubasaDesktop', {
       ipcRenderer.send('tsubasa:set-theme-choice', choice);
     }
   },
+  isElevated(): Promise<boolean> {
+    return ipcRenderer.invoke('tsubasa:is-elevated');
+  },
   onAuthCompleted(callback: (payload: DesktopAuthCompletedPayload) => void): () => void {
     const listener = (_event: IpcRendererEvent, payload: DesktopAuthCompletedPayload) => {
       callback(payload ?? {});

@@ -81,6 +81,9 @@ const styles = stylex.create({
     },
   },
   workspaceErrorRegion: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing.space2,
     paddingTop: spacing.space2,
     paddingBottom: spacing.space2,
     paddingLeft: spacing.space6,
@@ -110,6 +113,11 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBody,
     lineHeight: typography.lineHeightBody,
     boxSizing: 'border-box',
+  },
+  workspaceWarningBanner: {
+    backgroundColor: colors.warningSurface,
+    borderColor: colors.warningBorder,
+    color: colors.warning,
   },
   workspaceErrorContent: {
     display: 'flex',
@@ -164,6 +172,9 @@ const styles = stylex.create({
       minWidth: '44px',
     },
   },
+  workspaceWarningDismissBtn: {
+    borderColor: colors.warningBorder,
+  },
   fileTableStage: {
     display: 'flex',
     flexDirection: 'column',
@@ -205,6 +216,22 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [showElevatedWarning, setShowElevatedWarning] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.tsubasaDesktop
+      ?.isElevated?.()
+      .then((elevated) => {
+        if (!cancelled && elevated) {
+          setShowElevatedWarning(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const surfaceWorkspaceError = useCallback((context: string, err: unknown, fallback: string) => {
     const message = extractErrorMessage(err, fallback);
     setWorkspaceError(message);
@@ -1138,23 +1165,52 @@ export function App() {
             onCopyShareBatchLinks={handleCopyBatchLinks}
           />
 
-          {workspaceError && (
+          {(showElevatedWarning || workspaceError) && (
             <div {...stylex.props(styles.workspaceErrorRegion)}>
-              <div {...stylex.props(styles.workspaceErrorBanner)} role="alert">
-                <div {...stylex.props(styles.workspaceErrorContent)}>
-                  <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
-                  <span {...stylex.props(styles.workspaceErrorText)}>{workspaceError}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setWorkspaceError(null)}
-                  aria-label="Dismiss error"
-                  {...stylex.props(styles.workspaceErrorDismissBtn)}
+              {showElevatedWarning && (
+                <div
+                  {...stylex.props(styles.workspaceErrorBanner, styles.workspaceWarningBanner)}
+                  role="status"
                 >
-                  <IconClose size={14} />
-                  <span>Dismiss</span>
-                </button>
-              </div>
+                  <div {...stylex.props(styles.workspaceErrorContent)}>
+                    <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
+                    <span {...stylex.props(styles.workspaceErrorText)}>
+                      Running as Administrator. Windows blocks file drag-and-drop from File Explorer
+                      into elevated apps; restart without elevation to drop files.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowElevatedWarning(false)}
+                    aria-label="Dismiss warning"
+                    {...stylex.props(
+                      styles.workspaceErrorDismissBtn,
+                      styles.workspaceWarningDismissBtn
+                    )}
+                  >
+                    <IconClose size={14} />
+                    <span>Dismiss</span>
+                  </button>
+                </div>
+              )}
+
+              {workspaceError && (
+                <div {...stylex.props(styles.workspaceErrorBanner)} role="alert">
+                  <div {...stylex.props(styles.workspaceErrorContent)}>
+                    <IconAlertTriangle size={16} {...stylex.props(styles.workspaceErrorIcon)} />
+                    <span {...stylex.props(styles.workspaceErrorText)}>{workspaceError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceError(null)}
+                    aria-label="Dismiss error"
+                    {...stylex.props(styles.workspaceErrorDismissBtn)}
+                  >
+                    <IconClose size={14} />
+                    <span>Dismiss</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

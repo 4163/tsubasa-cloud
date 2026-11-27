@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,7 @@ let currentThemeChoice: DesktopThemeChoice = 'auto';
 let isQuitting = false;
 let teardownComplete = false;
 let teardownPromise: Promise<void> | null = null;
+let isElevatedPromise: Promise<boolean> = Promise.resolve(false);
 
 function restoreMainWindow(): void {
   if (!mainWindow || mainWindow.win.isDestroyed()) {
@@ -246,10 +248,33 @@ function registerIpcHandlers(): void {
     trayMenu?.syncState();
   });
 
+  ipcMain.handle('tsubasa:is-elevated', () => isElevatedPromise);
+
   nativeTheme.on('updated', () => {
     if (currentThemeChoice !== 'auto') return;
     mainWindow?.refresh();
     trayMenu?.syncState();
+  });
+}
+
+function checkIsElevatedOnWindows(): Promise<boolean> {
+  if (process.platform !== 'win32') {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    execFile('whoami', ['/groups'], { windowsHide: true }, (err, stdout) => {
+      if (err) {
+        resolve(false);
+        return;
+      }
+      const elevated = /\bS-1-16-(?:12288|16384)\b/.test(stdout);
+      if (elevated && !app.isPackaged) {
+        console.warn(
+          '[tsubasa] Running elevated (Administrator). Windows UIPI blocks drag-and-drop from File Explorer; launch from a non-elevated terminal to test external file drops.'
+        );
+      }
+      resolve(elevated);
+    });
   });
 }
 
@@ -412,6 +437,7 @@ if (!gotSingleInstanceLock) {
       nativeTheme.themeSource = mapThemeChoiceToNativeSource(currentThemeChoice);
 
       registerIpcHandlers();
+      isElevatedPromise = checkIsElevatedOnWindows();
 
       serverHost = await startServerHost({
         isPackaged: app.isPackaged,

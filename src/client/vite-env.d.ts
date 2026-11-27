@@ -15,6 +15,7 @@ export interface TsubasaDesktopBridge {
   setTitle(title: string): void;
   getThemeChoice(): DesktopThemeChoice;
   setThemeChoice(choice: DesktopThemeChoice): void;
+  isElevated?(): Promise<boolean>;
   onAuthCompleted(callback: (payload: DesktopAuthCompletedPayload) => void): () => void;
 }
 
