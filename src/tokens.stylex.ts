@@ -24,6 +24,7 @@ export const colors = stylex.defineVars({
   // Text hierarchy (7:1+ on surface/canvas; disabledText reserved for disabled controls)
   primaryText: '#111d18',
   headingText: '#111d18',
+  textBlack: '#000000',
   secondaryText: '#2d453b',
   mutedText: '#2d453b',
   dimText: '#3b5249',
@@ -33,6 +34,7 @@ export const colors = stylex.defineVars({
   primary: '#111d18',
   primaryHover: '#2a4339',
   brandAccent: '#135349',
+  brandAccentDeep: '#0a2e29',
   brandAccentHover: '#0d7362',
   brandAccentText: '#ffffff',
   brandAccentSurface: '#e1efe9',
@@ -84,6 +86,7 @@ export const darkColors = stylex.createTheme(colors, {
 
   primaryText: '#e5f2eb',
   headingText: '#e5f2eb',
+  textBlack: '#000000',
   secondaryText: '#a6c2b5',
   mutedText: '#a6c2b5',
   dimText: '#a6c2b5',
@@ -92,6 +95,7 @@ export const darkColors = stylex.createTheme(colors, {
   primary: '#e5f2eb',
   primaryHover: '#ffffff',
   brandAccent: '#35c4a8',
+  brandAccentDeep: '#35c4a8',
   brandAccentHover: '#55dcc0',
   brandAccentText: '#111d18',
   brandAccentSurface: '#0d2721',

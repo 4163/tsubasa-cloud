@@ -1,6 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { colors, motion, radius, spacing, typography } from '../tokens.stylex';
 import { DemoWindow } from '../components/DemoWindow';
+import { useSiteTheme } from '../theme';
 import { siteUrl } from '../url';
 
 const styles = stylex.create({
@@ -64,6 +65,12 @@ const styles = stylex.create({
     lineHeight: '1.65',
     color: colors.primaryText,
   },
+  heroCopyLight: {
+    backgroundImage: `linear-gradient(to bottom, ${colors.primaryText}, ${colors.textBlack})`,
+    backgroundClip: 'text',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+  },
   ctaRow: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -116,9 +123,13 @@ const styles = stylex.create({
       fontSize: '22px',
     },
   },
+  previewTitleLight: {
+    color: colors.textBlack,
+  },
 });
 
 export function HomePage() {
+  const { isDark } = useSiteTheme();
   const bannerFrameProps = stylex.props(styles.bannerFrame);
 
   return (
@@ -143,7 +154,7 @@ export function HomePage() {
 
         <h1 {...stylex.props(styles.heroTitle)}>Tsubasa~ Cloud</h1>
 
-        <p {...stylex.props(styles.heroCopy)}>
+        <p {...stylex.props(styles.heroCopy, !isDark && styles.heroCopyLight)}>
           Tsubasa~ Cloud is a local file manager that combines personal Google Drive accounts into
           storage pools on your computer. Each pool syncs its folder structure with Google Drive so
           your files stay intact and browsable on drive.google.com. Run the Windows desktop app,
@@ -163,7 +174,10 @@ export function HomePage() {
       </section>
 
       <section {...stylex.props(styles.previewSection)} aria-labelledby="workspace-preview-heading">
-        <h2 id="workspace-preview-heading" {...stylex.props(styles.previewTitle)}>
+        <h2
+          id="workspace-preview-heading"
+          {...stylex.props(styles.previewTitle, !isDark && styles.previewTitleLight)}
+        >
           Workspace Preview
         </h2>
         <DemoWindow />
