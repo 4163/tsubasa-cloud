@@ -8,7 +8,8 @@ Keep all existing static pages and assets intact: the `/` hero, `/data-policy`, 
 
 ## 1. Boundaries, host behavior, and visual parity
 
-- **Fixed container.** Keep the centered, fixed-size window frame at `1120px` by `640px` on desktop and `100%` by `540px` on mobile. Never make the demo frame user-resizable or expandable.
+- **Fixed container.** Keep the centered, fixed-size window frame at `1280px` by `720px` on desktop and `100%` by `540px` on mobile. Never make the demo frame user-resizable or expandable.
+- **Loading backdrop.** Reuse the main app's blurred `GhostWorkspaceBackdrop` inside the demo iframe during initial IndexedDB hydration and `Reset demo` instead of maintaining a duplicate skeleton in `site/`. Match the host iframe container's initial canvas background to the demo's own resolved theme (`tsubasa-demo-theme-choice` or `prefers-color-scheme`) before first paint.
 - **Grain overlay.** Keep the demo app's own grain overlay intact and exclude the demo frame on `site/` using the site's existing grain-masking mechanism so grain does not double-stack.
 - **Hybrid theme sync.** The demo keeps its own independent 3-way theme toggle and separate `localStorage` persistence so reloads avoid visual jank. Switching theme on the `site/` frontend pushes the resolved theme to the demo regardless of the demo's current theme, doing nothing if the theme already matches, while still allowing independent theme switches inside the demo afterward.
 - **`Reset demo` button.** Append a `Reset demo` button after the GitHub button in the demo header. Clicking it wipes the demo IndexedDB state and restores the initial seeded dataset.
@@ -22,7 +23,7 @@ Keep all existing static pages and assets intact: the `/` hero, `/data-policy`, 
 Match `src/client/` 1:1 while dropping CLI-only and non-UI actions.
 
 - **Pools.** Create, rename, and delete standard pools. Share Pool is protected. Drop CLI-only pool reordering.
-- **Modified OAuth import and dummy account pool.** Sidebar OAuth import accepts any `.json` file and creates an unauthorized account card with a dummy OAuth link, replacing the copy-link control with an `Authorize` button. Clicking `Authorize` picks an unused account at random from the locked 14-account roster below, excluding picked accounts until every account in the roster has been used, then refilling the pool.
+- **Modified OAuth import and dummy account pool.** Clicking Add account in the sidebar creates an unauthorized account card with a dummy OAuth link directly without opening a file picker, and dragging any `.json` file onto the control also creates one. The card replaces `Copy` with an `Authorize` button matching its styling. Clicking `Authorize` picks an unused account at random from the locked 14-account roster below, excluding picked accounts until every account in the roster has been used, then refilling the pool.
 - **Accounts and quotas.** Support `RedactedEmail` masking, 750 MB reserve headroom math with `14.25 GB` usable on `15 GB` accounts, `14.25 GB` single-file ceiling checks, 24-hour rolling transfer gauges with a `750 GB` daily cap, buffer-breach indicators, enable and disable toggles, moving accounts between pools, and removing accounts. Drop CLI-only account evacuation.
 - **Virtualized file table and CRUD.** Use TanStack Virtual rows with sorting, search, interactive breadcrumbs, multi-select, folder navigation, new folder, rename, internal drag-and-drop and cut/paste move with conflict handling, copy, on-the-fly dummy placeholder file downloads, soft-delete to Trash, restore, and permanent purge or empty trash. Reclaim quota only on permanent purge.
 - **OS drag-and-drop and simulated uploads.** Read only file metadata (`name`, `size`, `type`, relative path, timestamp), show Folder-Cohesion Best-Fit placement previews and conflict checks, and run simulated upload progress with abort and cancel controls in `UploadDrawer`.
@@ -55,7 +56,7 @@ The user supplies profile pictures during or after implementation. Use these exa
 | 5 | Tsubasa Hanekawa | `tsubasa.hanekawa@gmail.com` |
 | 6 | Kiss-Shot | `shinobu.oshino@gmail.com` |
 | 7 | Karen Araragi | `karen.araragi@gmail.com` |
-| 8 | Tsukihi Araragi | `araragi.tsukihi@gmail.com` |
+| 8 | Tsukihi Araragi | `tsukihi.chan@gmail.com` |
 | 9 | Yotsugi Ononoki | `ononoki.rulebook@gmail.com` |
 | 10 | Ougi Oshino | `ougi.oshino0@gmail.com` |
 | 11 | Sodachi Oikura | `sodachi.oikura@gmail.com` |
