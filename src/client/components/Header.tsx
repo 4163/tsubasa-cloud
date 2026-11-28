@@ -1,9 +1,10 @@
 import React from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { colors, spacing, radius, layout, typography, motion } from '../tokens.stylex.js';
-import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub, IconRefreshCw } from './Icons';
+import { IconMenu, IconSearch, IconClose, IconMonitor, IconSun, IconMoon, IconGitHub, IconExternalLink, IconRefreshCw } from './Icons';
 import type { ThemeChoice } from '../utils/theme.js';
 import { useMediaQuery } from '../utils/useBeforeUnload.js';
+import { DEMO_EXTERNAL_LABEL, GITHUB_REPO_URL, getDemoExternalUrl, isEmbeddedDemo } from '../utils/demoLink.js';
 
 interface HeaderProps {
   searchQuery: string;
@@ -225,6 +226,7 @@ const styles = stylex.create({
     fontSize: typography.fontSizeBadge,
     fontWeight: '500',
     textDecoration: 'none',
+    whiteSpace: 'nowrap',
     boxSizing: 'border-box',
     outline: 'none',
     transition: motion.transitionFast,
@@ -310,6 +312,7 @@ export function Header({
   isResettingDemo = false,
 }: HeaderProps) {
   const isGitHubIconOnly = useMediaQuery('(max-width: 600px)');
+  const showExternalDemoLink = isEmbeddedDemo();
 
   return (
     <header {...stylex.props(styles.header)}>
@@ -388,17 +391,31 @@ export function Header({
           </button>
         </div>
 
-        <a
-          href="https://github.com/4163/tsubasa-cloud"
-          target="_blank"
-          rel="noopener noreferrer"
-          {...stylex.props(styles.githubLink)}
-          aria-label="GitHub repository"
-          title={isGitHubIconOnly ? 'GitHub' : undefined}
-        >
-          <IconGitHub size={14} />
-          <span {...stylex.props(styles.githubText)}>GitHub</span>
-        </a>
+        {showExternalDemoLink ? (
+          <a
+            href={getDemoExternalUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            {...stylex.props(styles.githubLink)}
+            aria-label="Open full demo in new tab"
+            title={isGitHubIconOnly ? DEMO_EXTERNAL_LABEL : undefined}
+          >
+            <IconExternalLink size={13} />
+            <span {...stylex.props(styles.githubText)}>{DEMO_EXTERNAL_LABEL}</span>
+          </a>
+        ) : (
+          <a
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            {...stylex.props(styles.githubLink)}
+            aria-label="GitHub repository"
+            title={isGitHubIconOnly ? 'GitHub' : undefined}
+          >
+            <IconGitHub size={14} />
+            <span {...stylex.props(styles.githubText)}>GitHub</span>
+          </a>
+        )}
 
         {__DEMO_MODE__ && onResetDemo && (
           <button

@@ -1,6 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { colors, layout, spacing, radius, typography } from '../tokens.stylex.js';
 import type { EffectiveTheme, ThemeChoice } from '../utils/theme.js';
+import { DEMO_EXTERNAL_LABEL, isEmbeddedDemo } from '../utils/demoLink.js';
 import {
   IconChevronDown,
   IconChevronRight,
@@ -8,6 +9,7 @@ import {
   IconClock,
   IconDownload,
   IconEdit,
+  IconExternalLink,
   IconFile,
   IconFolder,
   IconFolderFilled,
@@ -656,6 +658,7 @@ const styles = stylex.create({
     color: colors.secondaryText,
     fontSize: typography.fontSizeBadge,
     fontWeight: '500',
+    whiteSpace: 'nowrap',
     boxSizing: 'border-box',
   },
   placeholderPortal: {
@@ -966,6 +969,7 @@ export function GhostWorkspaceBackdrop({
   isDemoMode = false,
 }: GhostWorkspaceBackdropProps) {
   const activeThemeChoice: ThemeChoice = themeChoice ?? effectiveTheme;
+  const showExternalDemoLink = isDemoMode && isEmbeddedDemo();
   return (
     <div {...stylex.props(styles.placeholderShell)} aria-hidden="true">
       <aside {...stylex.props(styles.placeholderSidebar)}>
@@ -1132,8 +1136,17 @@ export function GhostWorkspaceBackdrop({
               </span>
             </div>
             <span {...stylex.props(styles.githubChip)}>
-              <IconGitHub size={14} />
-              <span {...stylex.props(styles.compactHideText)}>GitHub</span>
+              {showExternalDemoLink ? (
+                <>
+                  <IconExternalLink size={13} />
+                  <span {...stylex.props(styles.compactHideText)}>{DEMO_EXTERNAL_LABEL}</span>
+                </>
+              ) : (
+                <>
+                  <IconGitHub size={14} />
+                  <span {...stylex.props(styles.compactHideText)}>GitHub</span>
+                </>
+              )}
             </span>
             {isDemoMode && (
               <span {...stylex.props(styles.githubChip)}>
