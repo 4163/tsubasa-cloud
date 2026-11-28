@@ -173,12 +173,12 @@ export function HomePage() {
         </div>
       </section>
 
-      <section {...stylex.props(styles.previewSection)} aria-labelledby="workspace-preview-heading">
+      <section {...stylex.props(styles.previewSection)} aria-labelledby="workspace-playground-heading">
         <h2
-          id="workspace-preview-heading"
+          id="workspace-playground-heading"
           {...stylex.props(styles.previewTitle, !isDark && styles.previewTitleLight)}
         >
-          Workspace Preview
+          Workspace Playground
         </h2>
         <DemoWindow />
       </section>
