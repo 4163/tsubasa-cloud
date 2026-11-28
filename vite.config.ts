@@ -59,6 +59,7 @@ function stripDemoModulePlugin(): Plugin {
         'export const authorizeDemoAccount = async () => ({ ok: false, error: "Demo mode disabled" });',
         'export const recordDemoDownload = async () => {};',
         'export const resetDemoState = async () => {};',
+        'export const subscribeDemoSync = () => () => {};',
       ].join('\n');
     },
   };

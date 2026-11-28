@@ -5,6 +5,15 @@ import { buildInitialDemoDataset } from './seed.js';
 export const DEMO_DB_NAME = 'tsubasa-demo-v1';
 export const DEMO_DB_VERSION = 1;
 export const DEMO_SEED_VERSION = 2;
+const DEMO_SYNC_CHANNEL_NAME = 'tsubasa-demo-sync';
+
+export type DemoSyncEventType = 'mutated' | 'reset';
+
+export interface DemoSyncEvent {
+  type: DemoSyncEventType;
+  senderId: string;
+  ts: number;
+}
 
 export interface DemoMetaRecord {
   key: 'state';
@@ -180,6 +189,58 @@ function transactionToPromise(tx: IDBTransaction): Promise<void> {
 
 let openDbPromise: Promise<IDBDatabase> | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
+const DEMO_TAB_ID = generateDemoId('tab');
+let syncSenderChannel: BroadcastChannel | null = null;
+
+function notifyDemoSync(type: DemoSyncEventType): void {
+  if (typeof BroadcastChannel === 'undefined') return;
+  try {
+    if (!syncSenderChannel) {
+      syncSenderChannel = new BroadcastChannel(DEMO_SYNC_CHANNEL_NAME);
+    }
+    const payload: DemoSyncEvent = {
+      type,
+      senderId: DEMO_TAB_ID,
+      ts: Date.now(),
+    };
+    syncSenderChannel.postMessage(payload);
+  } catch {
+    // Ignore BroadcastChannel errors in restricted iframe or privacy contexts.
+  }
+}
+
+export function subscribeDemoSync(listener: (event: DemoSyncEvent) => void): () => void {
+  if (typeof BroadcastChannel === 'undefined') {
+    return () => {};
+  }
+  let channel: BroadcastChannel;
+  try {
+    channel = new BroadcastChannel(DEMO_SYNC_CHANNEL_NAME);
+  } catch {
+    return () => {};
+  }
+
+  channel.onmessage = (msg: MessageEvent<unknown>) => {
+    const data = msg.data as Partial<DemoSyncEvent> | null;
+    if (!data || typeof data !== 'object') return;
+    if (data.type !== 'mutated' && data.type !== 'reset') return;
+    if (typeof data.senderId !== 'string' || data.senderId === DEMO_TAB_ID) return;
+    listener({
+      type: data.type,
+      senderId: data.senderId,
+      ts: typeof data.ts === 'number' ? data.ts : Date.now(),
+    });
+  };
+
+  return () => {
+    try {
+      channel.onmessage = null;
+      channel.close();
+    } catch {
+      // Ignore close errors if channel was already closed.
+    }
+  };
+}
 
 function createObjectStores(db: IDBDatabase): void {
   if (!db.objectStoreNames.contains('meta')) {
@@ -382,6 +443,7 @@ export async function runStoreMutation(
   const tx = db.transaction(stores, 'readwrite');
   mutate(tx);
   await transactionToPromise(tx);
+  notifyDemoSync('mutated');
 }
 
 export async function resetDemoDatabase(): Promise<void> {
@@ -405,6 +467,7 @@ export async function resetDemoDatabase(): Promise<void> {
 
     if (deleted) {
       await getDemoDb();
+      notifyDemoSync('reset');
       return;
     }
 
@@ -412,5 +475,6 @@ export async function resetDemoDatabase(): Promise<void> {
     const db = await getDemoDb();
     const dataset = buildInitialDemoDataset(Date.now());
     await writeDatasetToDb(db, dataset);
+    notifyDemoSync('reset');
   });
 }

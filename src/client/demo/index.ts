@@ -1,5 +1,10 @@
 export { createDemoFetch } from './transport.js';
 export {
+  subscribeDemoSync,
+  type DemoSyncEvent,
+  type DemoSyncEventType,
+} from './db.js';
+export {
   authorizeDemoAccount,
   recordDemoDownload,
   resetDemoState,

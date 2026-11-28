@@ -32,7 +32,7 @@ import {
   reportDevError,
   safeStorageSet,
 } from './utils/workspaceHelpers.js';
-import { resetDemoState } from './demo/index.js';
+import { resetDemoState, subscribeDemoSync, type DemoSyncEventType } from './demo/index.js';
 import { useThemeChoice } from './hooks/useResolvedTheme.js';
 import { useWorkspaceData } from './hooks/useWorkspaceData.js';
 import { useWorkspaceNavigation } from './hooks/useWorkspaceNavigation.js';
@@ -992,6 +992,9 @@ export function App() {
 
   const [isResettingDemo, setIsResettingDemo] = useState(false);
   const isResettingDemoRef = useRef(false);
+  const pendingDemoSyncRef = useRef<DemoSyncEventType | null>(null);
+  const demoSyncInFlightRef = useRef(false);
+  const demoSyncTimerRef = useRef<number | null>(null);
   const [hasDemoHydrated, setHasDemoHydrated] = useState(!__DEMO_MODE__);
 
   useEffect(() => {
@@ -1001,45 +1004,34 @@ export function App() {
     }
   }, [storage, loadedFilesPoolId, activePoolId, hasDemoHydrated, workspaceError]);
 
-  const handleResetDemo = useCallback(async () => {
-    if (!__DEMO_MODE__ || isResettingDemoRef.current) return;
-    isResettingDemoRef.current = true;
-    setIsResettingDemo(true);
-    try {
-      await resetDemoState();
-      clearPoolCache();
-      invalidateDiscrepancyReportCache();
-      invalidateShareInspectCache();
-      if (typeof window !== 'undefined') {
-        safeStorageSet(window.sessionStorage, 'tsubasa-active-pool-id', '1');
-      }
-      clearWorkspaceState();
-      setSearchQuery('');
-      setCurrentNav('files');
-      setCurrentPath('/');
-      setIsMobileOpen(false);
-      setExternalChangesAccountId(undefined);
-      setStagedFiles([]);
-      setStagedEmptyFolders([]);
-      setUploadTargetPath(undefined);
-      uiCallbacksRef.current.onPoolSwitched();
-      if (activePoolIdRef.current !== 1) {
-        skipNextPoolEffectRef.current = 1;
-      }
-      activePoolIdRef.current = 1;
-      setActivePoolId(1);
-      const [freshAccounts] = await Promise.all([
-        loadClusterData(1),
-        loadFiles('/', 1),
-      ]);
-      if (freshAccounts) {
-        await checkAccountDiscrepancies(freshAccounts, true, 1);
-      }
-    } catch (err) {
-      surfaceWorkspaceError('resetDemo', err, 'Failed to reset demo');
-    } finally {
-      isResettingDemoRef.current = false;
-      setIsResettingDemo(false);
+  const applyDemoResetUi = useCallback(async () => {
+    clearPoolCache();
+    invalidateDiscrepancyReportCache();
+    invalidateShareInspectCache();
+    if (typeof window !== 'undefined') {
+      safeStorageSet(window.sessionStorage, 'tsubasa-active-pool-id', '1');
+    }
+    clearWorkspaceState();
+    setSearchQuery('');
+    setCurrentNav('files');
+    setCurrentPath('/');
+    setIsMobileOpen(false);
+    setExternalChangesAccountId(undefined);
+    setStagedFiles([]);
+    setStagedEmptyFolders([]);
+    setUploadTargetPath(undefined);
+    uiCallbacksRef.current.onPoolSwitched();
+    if (activePoolIdRef.current !== 1) {
+      skipNextPoolEffectRef.current = 1;
+    }
+    activePoolIdRef.current = 1;
+    setActivePoolId(1);
+    const [freshAccounts] = await Promise.all([
+      loadClusterData(1),
+      loadFiles('/', 1),
+    ]);
+    if (freshAccounts) {
+      await checkAccountDiscrepancies(freshAccounts, true, 1);
     }
   }, [
     activePoolIdRef,
@@ -1051,8 +1043,175 @@ export function App() {
     setCurrentNav,
     setCurrentPath,
     skipNextPoolEffectRef,
+  ]);
+
+  const handleResetDemo = useCallback(async () => {
+    if (!__DEMO_MODE__ || isResettingDemoRef.current) return;
+    pendingDemoSyncRef.current = null;
+    if (demoSyncTimerRef.current !== null) {
+      window.clearTimeout(demoSyncTimerRef.current);
+      demoSyncTimerRef.current = null;
+    }
+    isResettingDemoRef.current = true;
+    setIsResettingDemo(true);
+    try {
+      await resetDemoState();
+      await applyDemoResetUi();
+    } catch (err) {
+      surfaceWorkspaceError('resetDemo', err, 'Failed to reset demo');
+    } finally {
+      isResettingDemoRef.current = false;
+      setIsResettingDemo(false);
+    }
+  }, [applyDemoResetUi, surfaceWorkspaceError]);
+
+  const flushPendingDemoSync = useCallback(async () => {
+    if (!__DEMO_MODE__ || demoSyncInFlightRef.current) return;
+
+    demoSyncInFlightRef.current = true;
+    try {
+      while (pendingDemoSyncRef.current !== null) {
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') break;
+        if (
+          isResettingDemoRef.current ||
+          pendingOpsCountRefForData.current > 0 ||
+          isSyncingRef.current
+        ) {
+          break;
+        }
+
+        const nextEvent = pendingDemoSyncRef.current;
+        pendingDemoSyncRef.current = null;
+
+        if (demoSyncTimerRef.current !== null) {
+          window.clearTimeout(demoSyncTimerRef.current);
+          demoSyncTimerRef.current = null;
+        }
+
+        if (nextEvent === 'reset') {
+          isResettingDemoRef.current = true;
+          setIsResettingDemo(true);
+          try {
+            await applyDemoResetUi();
+          } catch (err) {
+            surfaceWorkspaceError('demoSyncReset', err, 'Failed to sync demo reset');
+          } finally {
+            isResettingDemoRef.current = false;
+            setIsResettingDemo(false);
+          }
+          continue;
+        }
+
+        try {
+          clearPoolCache();
+          invalidateDiscrepancyReportCache();
+          invalidateShareInspectCache();
+          markTrashStale();
+
+          const targetPoolId = activePoolIdRef.current;
+          const targetPath = currentPathRef.current;
+          const [freshAccounts] = await Promise.all([
+            loadClusterData(targetPoolId),
+            loadFiles(targetPath, targetPoolId),
+            currentNavRef.current === 'trash' ? loadTrashFiles(targetPoolId) : Promise.resolve(),
+          ]);
+          if (freshAccounts && !isPoolSharePool(targetPoolId)) {
+            void checkAccountDiscrepancies(freshAccounts, true, targetPoolId);
+          }
+        } catch (err) {
+          surfaceWorkspaceError('demoSyncRefresh', err, 'Failed to refresh demo workspace');
+        }
+      }
+    } finally {
+      demoSyncInFlightRef.current = false;
+    }
+  }, [
+    activePoolIdRef,
+    applyDemoResetUi,
+    checkAccountDiscrepancies,
+    currentNavRef,
+    currentPathRef,
+    isPoolSharePool,
+    loadClusterData,
+    loadFiles,
+    loadTrashFiles,
+    markTrashStale,
     surfaceWorkspaceError,
   ]);
+
+  useEffect(() => {
+    if (!__DEMO_MODE__) return;
+
+    const scheduleDemoSync = (incoming: DemoSyncEventType) => {
+      pendingDemoSyncRef.current =
+        pendingDemoSyncRef.current === 'reset' || incoming === 'reset' ? 'reset' : 'mutated';
+
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+
+      if (pendingDemoSyncRef.current === 'reset') {
+        if (demoSyncTimerRef.current !== null) {
+          window.clearTimeout(demoSyncTimerRef.current);
+          demoSyncTimerRef.current = null;
+        }
+        void flushPendingDemoSync();
+        return;
+      }
+
+      if (demoSyncTimerRef.current !== null) {
+        window.clearTimeout(demoSyncTimerRef.current);
+      }
+      demoSyncTimerRef.current = window.setTimeout(() => {
+        demoSyncTimerRef.current = null;
+        void flushPendingDemoSync();
+      }, 80);
+    };
+
+    const handleVisibleOrFocus = () => {
+      if (document.visibilityState !== 'visible' || pendingDemoSyncRef.current === null) return;
+      if (demoSyncTimerRef.current !== null) {
+        window.clearTimeout(demoSyncTimerRef.current);
+        demoSyncTimerRef.current = null;
+      }
+      void flushPendingDemoSync();
+    };
+
+    const unsubscribe = subscribeDemoSync((event) => {
+      scheduleDemoSync(event.type);
+    });
+    document.addEventListener('visibilitychange', handleVisibleOrFocus);
+    window.addEventListener('focus', handleVisibleOrFocus);
+
+    return () => {
+      unsubscribe();
+      document.removeEventListener('visibilitychange', handleVisibleOrFocus);
+      window.removeEventListener('focus', handleVisibleOrFocus);
+      if (demoSyncTimerRef.current !== null) {
+        window.clearTimeout(demoSyncTimerRef.current);
+        demoSyncTimerRef.current = null;
+      }
+    };
+  }, [flushPendingDemoSync]);
+
+  useEffect(() => {
+    if (!__DEMO_MODE__) return;
+    if (pendingOpsCount === 0 && !isSyncing && pendingDemoSyncRef.current !== null) {
+      void flushPendingDemoSync();
+    }
+  }, [pendingOpsCount, isSyncing, flushPendingDemoSync]);
+
+  useEffect(() => {
+    if (!__DEMO_MODE__) return;
+    if (
+      loadedFilesPoolId === activePoolId &&
+      failedFilesLoadPoolRef.current !== activePoolId &&
+      currentPath !== '/' &&
+      folders.length === 0
+    ) {
+      setCurrentPath('/');
+    }
+  }, [activePoolId, currentPath, failedFilesLoadPoolRef, folders.length, loadedFilesPoolId, setCurrentPath]);
 
   return (
     <div
