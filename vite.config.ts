@@ -19,14 +19,24 @@ function resolveSiteBase(origin: string): string {
 function siteOriginPlugin(origin: string, base: string): Plugin {
   const placeholder = /%VITE_SITE_ORIGIN%/g;
   const policyPath = `${base}data-policy`;
+  const demoPath = `${base}demo`;
 
   const rewriteCleanRoutes = (
     req: { url?: string },
-    _res: unknown,
+    res: { statusCode: number; setHeader: (name: string, value: string) => void; end: () => void },
     next: () => void,
   ) => {
     if (req.url === policyPath || req.url?.startsWith(`${policyPath}?`)) {
       req.url = `${policyPath}/index.html${req.url.slice(policyPath.length)}`;
+    } else if (req.url === demoPath || req.url?.startsWith(`${demoPath}?`)) {
+      const query = req.url.slice(demoPath.length);
+      res.statusCode = 302;
+      res.setHeader('Location', `${demoPath}/${query}`);
+      res.end();
+      return;
+    } else if (req.url === `${demoPath}/` || req.url?.startsWith(`${demoPath}/?`)) {
+      const query = req.url.slice(`${demoPath}/`.length);
+      req.url = `${demoPath}/index.html${query}`;
     }
     next();
   };
